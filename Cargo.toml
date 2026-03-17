@@ -1,0 +1,54 @@
+[package]
+name = "chitty-workspace"
+version = "0.1.0"
+edition = "2021"
+description = "Chitty Workspace - Local AI assistant with skills, tools, and BYOK providers"
+authors = ["DataVisions"]
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web/HTTP
+reqwest = { version = "0.12", features = ["json", "stream"] }
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Database (local SQLite)
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# UI
+tray-icon = "0.14"
+tao = "0.28"
+wry = "0.41"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5"
+keyring = "2"
+base64 = "0.22"
+async-trait = "0.1"
+
+# SSE parsing (for streaming LLM responses)
+eventsource-stream = "0.2"
+futures = "0.3"
+tokio-stream = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
