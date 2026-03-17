@@ -36,7 +36,9 @@ ChittyWorkspace/
 ├── src/
 │   ├── main.rs              # CLI entry point (clap)
 │   ├── chat/
-│   │   └── mod.rs           # Chat engine, conversation management, tool call loop
+│   │   ├── mod.rs           # Chat engine, conversation types, context assembly
+│   │   ├── memory.rs        # Persistent memory system (save/recall/search)
+│   │   └── context.rs       # Project context loader (chitty.md)
 │   ├── config/
 │   │   └── mod.rs           # App config (~/.chitty-workspace/config.toml)
 │   ├── providers/
@@ -50,7 +52,8 @@ ChittyWorkspace/
 │   ├── integrations/
 │   │   └── mod.rs           # API key-based integrations
 │   ├── storage/
-│   │   └── mod.rs           # SQLite persistence
+│   │   ├── mod.rs           # Database manager, connection, data directory
+│   │   └── schema.rs        # SQLite schema, migrations, table definitions
 │   └── ui/
 │       └── mod.rs           # System tray + WebView2 chat UI
 ├── assets/                   # Icons, static resources
@@ -122,19 +125,131 @@ BYOK — the user provides their own API keys. Stored securely in OS keyring.
 ### Chat
 Single-agent chat with tool calling loop:
 1. User sends message
-2. Message + skill instructions + tool definitions sent to LLM
-3. LLM responds with text or tool calls
-4. Tool calls executed locally, results sent back
-5. LLM generates final response
-6. Everything persisted to SQLite
+2. Context assembled: skill instructions + chitty.md + memories + tools + history
+3. Sent to LLM (any provider)
+4. LLM responds with text or tool calls
+5. Tool calls executed locally, results sent back
+6. LLM generates final response
+7. Everything persisted to SQLite
+
+---
+
+## Memory System
+
+Persistent knowledge the agent retains across sessions. Unlike simple chat logs, memories are **semantic** — the agent actively decides what to remember and recalls relevant memories in future conversations.
+
+### Memory Types
+
+| Type | Purpose | Example |
+|------|---------|---------|
+| `user` | User's role, preferences, expertise | "Senior Rust developer, prefers minimal dependencies" |
+| `feedback` | Corrections and guidance | "Don't use unwrap() — always handle errors properly" |
+| `project` | Project-specific context | "Migrating from REST to gRPC by end of Q2" |
+| `reference` | Pointers to external resources | "CI docs are in Confluence at /team/ci-setup" |
+
+### Memory Scoping
+
+| Scope | When loaded | Example |
+|-------|-------------|---------|
+| `global` | Every conversation | User preferences, general feedback |
+| `project` | When chatting in that project directory | Project-specific decisions, conventions |
+| `skill` | When that skill is active | Skill-specific corrections |
+
+### How Memories Work
+
+1. **Auto-load:** At conversation start, relevant memories are loaded (global + project + skill)
+2. **Injected:** Memories are formatted and injected into the system prompt
+3. **Agent saves:** When the agent learns something important, it uses `save_memory` tool
+4. **Agent recalls:** Agent can search memories with `search_memory` tool
+5. **User manages:** User can list, edit, delete memories
+
+### Agent Memory Tools
+
+| Tool | Purpose |
+|------|---------|
+| `save_memory` | Save a new memory (type, scope, content) |
+| `search_memory` | Search memories by keyword |
+| `delete_memory` | Remove a memory by ID |
+| `list_memories` | List all active memories for current context |
+
+---
+
+## Project Context (chitty.md)
+
+Automatically discovered project-specific instructions. When a user chats within a project directory, Chitty loads the `chitty.md` file and injects it into the system prompt.
+
+### Discovery Order
+
+1. `<project>/.chitty/chitty.md` (hidden directory)
+2. `<project>/chitty.md` (root level)
+
+### What Goes in chitty.md
+
+- Project overview and tech stack
+- Coding conventions and patterns
+- Important files and their purposes
+- Build/run/test commands
+- Special instructions for the AI
+
+### Generation
+
+The Skills Builder can auto-generate a `chitty.md` by scanning the project directory (file structure, package files, READMEs) using the user's BYOK key.
+
+---
+
+## Context Assembly
+
+Every LLM call assembles context in this order:
+
+```
+┌─────────────────────────────────────────┐
+│ 1. System Prompt (from skill or default)│
+├─────────────────────────────────────────┤
+│ 2. Project Context (chitty.md)          │
+├─────────────────────────────────────────┤
+│ 3. Active Memories (global + scoped)    │
+├─────────────────────────────────────────┤
+│ 4. Tool Definitions                     │
+├─────────────────────────────────────────┤
+│ 5. Conversation History (trimmed)       │
+├─────────────────────────────────────────┤
+│ 6. User Message                         │
+└─────────────────────────────────────────┘
+```
+
+Context window management: when history exceeds the model's context window, older messages are summarized or trimmed while preserving tool call/result pairs.
+
+---
 
 ## Data Storage
 
 All data is local:
-- **Config:** `~/.chitty-workspace/config.toml`
-- **Database:** `~/.chitty-workspace/workspace.db` (SQLite)
-- **API Keys:** OS keyring (Windows Credential Manager)
-- **Models:** `~/.chitty-workspace/models/` (GGUF files)
+
+```
+~/.chitty-workspace/
+├── config.toml              # App settings (TOML)
+├── workspace.db             # SQLite database
+│   ├── conversations        # Chat sessions (title, skill, project, provider, model)
+│   ├── messages             # Full message history (with tool calls, parent linking)
+│   ├── memories             # Persistent memories (typed, scoped, searchable)
+│   ├── skills               # Saved skill definitions
+│   ├── custom_tools         # User/AI-generated tools
+│   └── provider_configs     # Provider settings (keys in OS keyring)
+└── models/                  # GGUF model files (for HuggingFace sidecar)
+```
+
+### SQLite Tables
+
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
+| `conversations` | Chat sessions | id, title, skill_id, project_path, provider, model |
+| `messages` | Message history | id, conversation_id, parent_message_id, role, content, tool_calls |
+| `memories` | Persistent memory | id, memory_type, name, content, scope, scope_ref |
+| `skills` | Skill definitions | id, name, instructions, tools, project_path |
+| `custom_tools` | Custom tools | id, name, description, instructions, parameters, script_body |
+| `provider_configs` | Provider settings | id, provider_id, display_name, base_url, enabled |
+
+API keys are stored in the **OS keyring** (Windows Credential Manager), not in SQLite.
 
 ## Code Style
 
