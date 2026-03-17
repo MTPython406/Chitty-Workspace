@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+
+# Temporary
+temp_scripts/
