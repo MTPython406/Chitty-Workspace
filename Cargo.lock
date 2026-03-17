@@ -523,6 +523,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "keyring",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",
@@ -537,6 +538,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "uuid",
+ "walkdir",
  "wry",
 ]
 
@@ -3974,6 +3976,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

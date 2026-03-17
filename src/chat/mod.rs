@@ -7,14 +7,20 @@
 //! 1. Base system prompt (from skill or default)
 //! 2. Project context (from chitty.md if in a project directory)
 //! 3. Relevant memories (global + project-scoped + skill-scoped)
-//! 4. Tool definitions (from skill + native + custom)
-//! 5. Conversation history (messages, trimmed to fit context window)
-//! 6. User message
+//! 4. Tool agent instructions (auto-injected from tools)
+//! 5. Tool definitions (OpenAI function calling format)
+//! 6. Conversation history (messages, trimmed to fit context window)
 
 pub mod context;
 pub mod memory;
 
+use anyhow::{Context as _, Result};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+
+use crate::providers::ChatMessage;
+use crate::skills::SkillsManager;
+use crate::tools::ToolRegistry;
 
 /// A chat conversation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,12 +52,31 @@ pub struct Message {
 /// Assembled context for an LLM call
 #[derive(Debug)]
 pub struct AssembledContext {
-    /// System prompt (skill instructions + project context + memories)
+    /// System prompt (skill instructions + project context + memories + tool instructions)
     pub system_prompt: String,
     /// Conversation messages (trimmed to fit)
-    pub messages: Vec<Message>,
-    /// Tool definitions available for this call
+    pub messages: Vec<ChatMessage>,
+    /// Tool definitions in OpenAI function calling format
     pub tools: Vec<serde_json::Value>,
+}
+
+/// Execution configuration (from skill or defaults)
+/// Mirrors DataVisions agent node properties (slim version)
+#[derive(Debug, Clone)]
+pub struct ExecutionConfig {
+    pub max_iterations: u32,
+    pub temperature: Option<f64>,
+    pub max_tokens: Option<u32>,
+}
+
+impl Default for ExecutionConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 10,
+            temperature: None,
+            max_tokens: None,
+        }
+    }
 }
 
 /// Default system prompt when no skill is active
@@ -64,3 +89,253 @@ When you learn something important about the user or their preferences, use the 
 to remember it for future conversations.
 
 When you encounter a project with a chitty.md file, follow its instructions."#;
+
+/// Chat engine — stateless functions that operate on a database connection.
+pub struct ChatEngine;
+
+impl ChatEngine {
+    /// Create a new conversation.
+    pub fn create_conversation(
+        conn: &Connection,
+        provider: &str,
+        model: &str,
+        title: Option<&str>,
+    ) -> Result<Conversation> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+        conn.execute(
+            "INSERT INTO conversations (id, title, provider, model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, title, provider, model, now, now],
+        ).context("Failed to create conversation")?;
+
+        Ok(Conversation {
+            id,
+            title: title.map(|s| s.to_string()),
+            skill_id: None,
+            project_path: None,
+            provider: provider.to_string(),
+            model: model.to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
+    /// Save a message to the database.
+    pub fn save_message(
+        conn: &Connection,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        tool_calls: Option<&serde_json::Value>,
+        tool_call_id: Option<&str>,
+    ) -> Result<Message> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let tool_calls_json = tool_calls.map(|tc| serde_json::to_string(tc).unwrap_or_default());
+
+        conn.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![id, conversation_id, role, content, tool_calls_json, tool_call_id, now],
+        ).context("Failed to save message")?;
+
+        // Update conversation timestamp
+        conn.execute(
+            "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, conversation_id],
+        )?;
+
+        Ok(Message {
+            id,
+            conversation_id: conversation_id.to_string(),
+            parent_message_id: None,
+            role: role.to_string(),
+            content: content.to_string(),
+            tool_calls: tool_calls.cloned(),
+            tool_call_id: tool_call_id.map(|s| s.to_string()),
+            token_count: None,
+            created_at: now,
+        })
+    }
+
+    /// Update conversation title.
+    pub fn update_title(conn: &Connection, conversation_id: &str, title: &str) -> Result<()> {
+        conn.execute(
+            "UPDATE conversations SET title = ?1 WHERE id = ?2",
+            rusqlite::params![title, conversation_id],
+        )?;
+        Ok(())
+    }
+
+    /// List all conversations, newest first.
+    pub fn list_conversations(conn: &Connection) -> Result<Vec<Conversation>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, skill_id, project_path, provider, model, created_at, updated_at FROM conversations ORDER BY updated_at DESC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(Conversation {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                skill_id: row.get(2)?,
+                project_path: row.get(3)?,
+                provider: row.get(4)?,
+                model: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })?;
+
+        let mut conversations = Vec::new();
+        for row in rows {
+            conversations.push(row?);
+        }
+        Ok(conversations)
+    }
+
+    /// Get all messages in a conversation.
+    pub fn get_messages(conn: &Connection, conversation_id: &str) -> Result<Vec<Message>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, parent_message_id, role, content, tool_calls, tool_call_id, token_count, created_at FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC",
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![conversation_id], |row| {
+            let tool_calls_str: Option<String> = row.get(5)?;
+            let tool_calls = tool_calls_str.and_then(|s| serde_json::from_str(&s).ok());
+
+            Ok(Message {
+                id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                parent_message_id: row.get(2)?,
+                role: row.get(3)?,
+                content: row.get(4)?,
+                tool_calls,
+                tool_call_id: row.get(6)?,
+                token_count: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+        Ok(messages)
+    }
+
+    /// Delete a conversation and all its messages (CASCADE).
+    pub fn delete_conversation(conn: &Connection, conversation_id: &str) -> Result<()> {
+        conn.execute(
+            "DELETE FROM conversations WHERE id = ?1",
+            rusqlite::params![conversation_id],
+        )?;
+        Ok(())
+    }
+
+    /// Assemble context for an LLM call.
+    ///
+    /// Builds system prompt with:
+    /// 1. Base prompt (from skill or default)
+    /// 2. Project context (chitty.md)
+    /// 3. Relevant memories
+    /// 4. Tool agent instructions (auto-injected from tools — DataVisions pattern)
+    ///
+    /// Returns the assembled context AND execution config from the skill.
+    pub fn assemble_context(
+        conn: &Connection,
+        conversation_id: &str,
+        skill_id: Option<&str>,
+        project_path: Option<&str>,
+        tool_registry: &ToolRegistry,
+    ) -> Result<(AssembledContext, ExecutionConfig)> {
+        // 1. Load skill → get base prompt, tool names, execution config
+        let (base_prompt, tool_names, exec_config) = if let Some(sid) = skill_id {
+            match SkillsManager::load(conn, sid) {
+                Ok(Some(skill)) => {
+                    let tool_list: Option<Vec<String>> = if skill.tools.is_empty() {
+                        None // empty = all tools
+                    } else {
+                        Some(skill.tools)
+                    };
+                    (
+                        skill.instructions,
+                        tool_list,
+                        ExecutionConfig {
+                            max_iterations: skill.max_iterations.unwrap_or(10),
+                            temperature: skill.temperature,
+                            max_tokens: skill.max_tokens,
+                        },
+                    )
+                }
+                _ => (
+                    DEFAULT_SYSTEM_PROMPT.to_string(),
+                    None,
+                    ExecutionConfig::default(),
+                ),
+            }
+        } else {
+            (
+                DEFAULT_SYSTEM_PROMPT.to_string(),
+                None,
+                ExecutionConfig::default(),
+            )
+        };
+
+        let mut system_parts: Vec<String> = vec![base_prompt];
+
+        // 2. Project context (chitty.md)
+        if let Some(path) = project_path {
+            if let Ok(Some(ctx)) = context::load_project_context(std::path::Path::new(path)) {
+                system_parts.push(format!("\n\n## Project Context\n{}", ctx.content));
+            }
+        }
+
+        // 3. Memories
+        if let Ok(memories) = memory::MemoryManager::load_relevant(conn, project_path, skill_id) {
+            if !memories.is_empty() {
+                let mem_text = memory::MemoryManager::format_as_context(&memories);
+                system_parts.push(format!("\n\n{}", mem_text));
+            }
+        }
+
+        // 4. Tool Agent Instructions (auto-injected from tools themselves)
+        // This is the DataVisions pattern — tools self-describe their usage
+        let tool_names_slice = tool_names.as_deref();
+        let agent_instructions = tool_registry.build_agent_instructions(tool_names_slice);
+        if !agent_instructions.is_empty() {
+            system_parts.push(agent_instructions);
+        }
+
+        let system_prompt = system_parts.join("");
+
+        // 5. Tool definitions in OpenAI function calling format
+        let tools = tool_registry.to_openai_format(tool_names_slice);
+
+        // 6. Load conversation messages and convert to ChatMessage format
+        let db_messages = Self::get_messages(conn, conversation_id)?;
+        let messages: Vec<ChatMessage> = db_messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .map(|m| {
+                let tool_calls = m.tool_calls.as_ref().and_then(|tc| {
+                    serde_json::from_value::<Vec<crate::providers::ToolCall>>(tc.clone()).ok()
+                });
+                ChatMessage {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                    tool_calls,
+                    tool_call_id: m.tool_call_id.clone(),
+                }
+            })
+            .collect();
+
+        Ok((
+            AssembledContext {
+                system_prompt,
+                messages,
+                tools,
+            },
+            exec_config,
+        ))
+    }
+}

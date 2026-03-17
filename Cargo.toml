@@ -43,10 +43,14 @@ keyring = "2"
 base64 = "0.22"
 async-trait = "0.1"
 
+# Tools (code search)
+walkdir = "2"
+regex = "1"
+
 # SSE parsing (for streaming LLM responses)
 eventsource-stream = "0.2"
 futures = "0.3"
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 [profile.release]
 opt-level = "z"
