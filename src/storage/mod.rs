@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 
 /// Database manager
+#[derive(Clone)]
 pub struct Database {
     path: PathBuf,
 }
@@ -35,6 +36,23 @@ impl Database {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
 
         Ok(conn)
+    }
+
+    /// Run a closure with a database connection on a blocking thread.
+    /// Each call gets its own connection — safe for concurrent async use.
+    pub async fn with_conn<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = Connection::open(&path).context("Failed to open database")?;
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+            f(&conn)
+        })
+        .await
+        .context("Database task panicked")?
     }
 
     /// Run all pending migrations

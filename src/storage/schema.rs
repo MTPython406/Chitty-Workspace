@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 3;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -23,6 +23,12 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
 
     if current < 1 {
         migrate_v1(conn)?;
+    }
+    if current < 2 {
+        migrate_v2(conn)?;
+    }
+    if current < 3 {
+        migrate_v3(conn)?;
     }
 
     conn.execute(
@@ -169,5 +175,76 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("Database migrated to v1");
+    Ok(())
+}
+
+/// V2: User-selected models + token tracking
+fn migrate_v2(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- ============================================================
+        -- USER-SELECTED MODELS
+        -- Models the user has chosen to add to their system.
+        -- Fetched from provider API, user picks which ones to keep.
+        -- ============================================================
+        CREATE TABLE IF NOT EXISTS user_models (
+            id              TEXT PRIMARY KEY,
+            provider_id     TEXT NOT NULL,       -- openai, anthropic, xai, etc.
+            model_id        TEXT NOT NULL,        -- e.g. grok-3-latest
+            display_name    TEXT NOT NULL,
+            context_window  INTEGER,
+            supports_tools  INTEGER NOT NULL DEFAULT 0,
+            supports_streaming INTEGER NOT NULL DEFAULT 0,
+            supports_vision INTEGER NOT NULL DEFAULT 0,
+            is_default      INTEGER NOT NULL DEFAULT 0,  -- default model for this provider
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            added_at        TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(provider_id, model_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_models_provider
+            ON user_models(provider_id);
+
+        -- ============================================================
+        -- TOKEN USAGE TRACKING
+        -- Per-message token counts for cost tracking & analytics
+        -- ============================================================
+        CREATE TABLE IF NOT EXISTS token_usage (
+            id                  TEXT PRIMARY KEY,
+            conversation_id     TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            message_id          TEXT REFERENCES messages(id) ON DELETE SET NULL,
+            provider_id         TEXT NOT NULL,
+            model_id            TEXT NOT NULL,
+            prompt_tokens       INTEGER NOT NULL DEFAULT 0,
+            completion_tokens   INTEGER NOT NULL DEFAULT 0,
+            total_tokens        INTEGER NOT NULL DEFAULT 0,
+            cached_tokens       INTEGER DEFAULT 0,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_token_usage_conversation
+            ON token_usage(conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_token_usage_provider_model
+            ON token_usage(provider_id, model_id);
+        CREATE INDEX IF NOT EXISTS idx_token_usage_created
+            ON token_usage(created_at);
+        ",
+    )?;
+
+    tracing::info!("Database migrated to v2 (user models + token tracking)");
+    Ok(())
+}
+
+/// V3: Execution config columns on skills table
+fn migrate_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        ALTER TABLE skills ADD COLUMN max_iterations INTEGER;
+        ALTER TABLE skills ADD COLUMN temperature REAL;
+        ALTER TABLE skills ADD COLUMN max_tokens INTEGER;
+        ",
+    )?;
+
+    tracing::info!("Database migrated to v3 (skill execution config)");
     Ok(())
 }
