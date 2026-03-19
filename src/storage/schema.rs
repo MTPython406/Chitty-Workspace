@@ -1,12 +1,12 @@
 //! Database schema and migrations
 //!
-//! All tables for conversations, messages, memories, skills, tools, and providers.
+//! All tables for conversations, messages, memories, agents, tools, and providers.
 
 use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -29,6 +29,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if current < 3 {
         migrate_v3(conn)?;
+    }
+    if current < 4 {
+        migrate_v4(conn)?;
     }
 
     conn.execute(
@@ -87,7 +90,7 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
         -- ============================================================
         -- MEMORIES
         -- Persistent knowledge the agent retains across sessions.
-        -- Scoped: global, per-project, or per-skill.
+        -- Scoped: global, per-project, or per-agent.
         -- ============================================================
         CREATE TABLE IF NOT EXISTS memories (
             id              TEXT PRIMARY KEY,
@@ -96,7 +99,7 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
             description     TEXT NOT NULL,      -- one-line summary for relevance matching
             content         TEXT NOT NULL,      -- full memory content
             scope           TEXT NOT NULL DEFAULT 'global',  -- global, project, skill
-            scope_ref       TEXT,               -- project path or skill ID (NULL for global)
+            scope_ref       TEXT,               -- project path or agent ID (NULL for global)
             tags            TEXT,               -- JSON array of tags
             created_at      TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -108,8 +111,7 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
             ON memories(scope, scope_ref);
 
         -- ============================================================
-        -- SKILLS
-        -- Skill = Instructions + Tool Set
+        -- SKILLS (legacy — renamed to agents in v4)
         -- ============================================================
         CREATE TABLE IF NOT EXISTS skills (
             id                  TEXT PRIMARY KEY,
@@ -117,7 +119,7 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
             description         TEXT NOT NULL DEFAULT '',
             instructions        TEXT NOT NULL DEFAULT '',
             tools               TEXT NOT NULL DEFAULT '[]',    -- JSON array of tool names
-            project_path        TEXT,                          -- NULL = global skill
+            project_path        TEXT,                          -- NULL = global
             preferred_provider  TEXT,
             preferred_model     TEXT,
             tags                TEXT NOT NULL DEFAULT '[]',    -- JSON array
@@ -235,7 +237,7 @@ fn migrate_v2(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// V3: Execution config columns on skills table
+/// V3: Execution config columns on skills table (legacy)
 fn migrate_v3(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
@@ -245,6 +247,53 @@ fn migrate_v3(conn: &Connection) -> Result<()> {
         ",
     )?;
 
-    tracing::info!("Database migrated to v3 (skill execution config)");
+    tracing::info!("Database migrated to v3 (execution config)");
+    Ok(())
+}
+
+/// V4: Rename skills → agents (clean slate)
+fn migrate_v4(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- Drop legacy skills table
+        DROP TABLE IF EXISTS skills;
+
+        -- Create agents table
+        CREATE TABLE IF NOT EXISTS agents (
+            id                  TEXT PRIMARY KEY,
+            name                TEXT NOT NULL,
+            description         TEXT NOT NULL DEFAULT '',
+            instructions        TEXT NOT NULL DEFAULT '',
+            tools               TEXT NOT NULL DEFAULT '[]',    -- JSON array of tool names
+            project_path        TEXT,                          -- NULL = global agent
+            preferred_provider  TEXT,
+            preferred_model     TEXT,
+            tags                TEXT NOT NULL DEFAULT '[]',    -- JSON array
+            version             TEXT NOT NULL DEFAULT '1.0',
+            ai_generated        INTEGER NOT NULL DEFAULT 0,
+            max_iterations      INTEGER,
+            temperature         REAL,
+            max_tokens          INTEGER,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agents_project
+            ON agents(project_path);
+
+        -- Rename conversation column: add agent_id, drop skill_id
+        -- SQLite doesn't support DROP COLUMN in older versions, so we add the new one
+        -- and leave skill_id as legacy (unused)
+        ALTER TABLE conversations ADD COLUMN agent_id TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_conversations_agent
+            ON conversations(agent_id);
+
+        -- Update memory scope values
+        UPDATE memories SET scope = 'agent' WHERE scope = 'skill';
+        ",
+    )?;
+
+    tracing::info!("Database migrated to v4 (skills → agents rename)");
     Ok(())
 }

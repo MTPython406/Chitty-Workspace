@@ -21,7 +21,10 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             api_key,
             base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
         }
@@ -269,6 +272,10 @@ impl Provider for AnthropicProvider {
 
         let mut stream = response.bytes_stream().eventsource();
 
+        // Track index → real tool call ID (Anthropic streams tool calls by index)
+        let mut tool_call_ids: std::collections::HashMap<u32, String> =
+            std::collections::HashMap::new();
+
         while let Some(event) = stream.next().await {
             let event = match event {
                 Ok(e) => e,
@@ -305,6 +312,9 @@ impl Provider for AnthropicProvider {
                                 .and_then(|n| n.as_str())
                                 .unwrap_or("")
                                 .to_string();
+                            // Map event index to real tool call ID
+                            let index = data.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+                            tool_call_ids.insert(index, id.clone());
                             let _ = tx.send(StreamChunk::ToolCallStart { id, name }).await;
                         }
                     }
@@ -321,12 +331,10 @@ impl Provider for AnthropicProvider {
                                 if let Some(json) =
                                     delta.get("partial_json").and_then(|j| j.as_str())
                                 {
-                                    // Determine the tool call ID from the index
-                                    let id = data
-                                        .get("index")
-                                        .and_then(|i| i.as_u64())
-                                        .map(|i| format!("block_{}", i))
-                                        .unwrap_or_default();
+                                    // Look up the real tool call ID from the index
+                                    let index = data.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+                                    let id = tool_call_ids.get(&index).cloned()
+                                        .unwrap_or_else(|| format!("block_{}", index));
                                     let _ = tx
                                         .send(StreamChunk::ToolCallDelta {
                                             id,
@@ -340,13 +348,15 @@ impl Provider for AnthropicProvider {
                     }
                 }
                 "content_block_stop" => {
-                    // Check if this was a tool use block
-                    let index = data.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
-                    let _ = tx
-                        .send(StreamChunk::ToolCallEnd {
-                            id: format!("block_{}", index),
-                        })
-                        .await;
+                    let index = data.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+                    // Only send ToolCallEnd if this index was a tool_use block
+                    if let Some(id) = tool_call_ids.get(&index) {
+                        let _ = tx
+                            .send(StreamChunk::ToolCallEnd {
+                                id: id.clone(),
+                            })
+                            .await;
+                    }
                 }
                 "message_stop" => {
                     let _ = tx.send(StreamChunk::Done).await;

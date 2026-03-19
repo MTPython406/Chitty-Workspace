@@ -1,0 +1,53 @@
+{
+  "name": "google-cloud",
+  "display_name": "Google Cloud",
+  "vendor": "Google",
+  "description": "Deploy, query, and manage Google Cloud services directly from Chitty Workspace",
+  "version": "1.0.0",
+  "icon": "cloud",
+  "color": "#4285F4",
+  "status": "not_installed",
+  "tools": [
+    "bigquery"
+  ],
+  "setup_steps": [
+    {
+      "id": "check_gcloud",
+      "label": "Check for Google Cloud CLI",
+      "check_command": "gcloud --version",
+      "install_command_windows": "winget install Google.CloudSDK --accept-package-agreements --accept-source-agreements",
+      "install_command_mac": "brew install --cask google-cloud-sdk",
+      "install_command_linux": "curl https://sdk.cloud.google.com | bash",
+      "help_url": "https://cloud.google.com/sdk/docs/install",
+      "help_text": "Google Cloud CLI is required. It will be installed automatically.",
+      "required": true
+    },
+    {
+      "id": "auth_login",
+      "label": "Sign in to Google Cloud",
+      "check_command": "gcloud auth print-access-token",
+      "install_command": "gcloud auth login --no-launch-browser-for-auth-code",
+      "help_text": "Opens your browser to sign in with your Google account. No passwords are stored by Chitty.",
+      "required": true
+    },
+    {
+      "id": "set_project",
+      "label": "Set default project",
+      "check_command": "gcloud config get-value project",
+      "prompt_user": true,
+      "prompt_label": "Google Cloud Project ID",
+      "prompt_placeholder": "e.g. my-project-12345",
+      "prompt_help": "Enter your GCP project ID. Find it at console.cloud.google.com",
+      "install_command_template": "gcloud config set project {value}",
+      "required": true
+    },
+    {
+      "id": "install_python_deps",
+      "label": "Install BigQuery dependencies",
+      "check_command": "pip show google-cloud-bigquery",
+      "install_command": "pip install google-cloud-bigquery google-auth",
+      "help_text": "Python libraries needed for BigQuery operations.",
+      "required": true
+    }
+  ]
+}

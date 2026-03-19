@@ -1,18 +1,31 @@
-//! Tool system — Native tools + registry
+//! Tool system — Native tools, custom tools, connection tools, and runtime
 //!
 //! Tools are executable functions the agent can call.
 //! Each tool carries its own **Agent Instructions** that are auto-injected
 //! into the system prompt at context assembly time (DataVisions pattern).
 //!
-//! Native tools: file_reader, file_writer, terminal, code_search, save_memory
+//! Three types of tools:
+//! - **Native**: Compiled into the binary (file_reader, file_writer, terminal, etc.)
+//! - **Custom**: Script-based tools created by the agent or user (~/.chitty-workspace/tools/custom/)
+//! - **Connection**: API integrations with optional sidecars (~/.chitty-workspace/tools/connections/)
+//!
+//! The `ToolRuntime` provides unified dispatch across all three types.
+
+pub mod manifest;
+pub mod executor;
+pub mod runtime;
+
+pub use runtime::ToolRuntime;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::server::BrowserBridge;
 use crate::storage::Database;
 
 // ---------------------------------------------------------------------------
@@ -117,7 +130,7 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     /// Create a registry with all native tools registered
-    pub fn new() -> Self {
+    pub fn new(browser_bridge: Arc<BrowserBridge>) -> Self {
         let mut registry = Self {
             tools: HashMap::new(),
             order: Vec::new(),
@@ -128,6 +141,9 @@ impl ToolRegistry {
         registry.register(Box::new(TerminalTool));
         registry.register(Box::new(CodeSearchTool));
         registry.register(Box::new(SaveMemoryTool));
+        registry.register(Box::new(CreateToolTool));
+        registry.register(Box::new(InstallPackageTool));
+        registry.register(Box::new(BrowserTool { bridge: browser_bridge }));
 
         registry
     }
@@ -199,6 +215,11 @@ impl ToolRegistry {
         }
 
         format!("\n\n## Tool Instructions\n\n{}", parts.join("\n\n"))
+    }
+
+    /// Check if a native tool exists by name
+    pub fn has_tool(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
     }
 
     /// Execute a tool by name
@@ -327,13 +348,20 @@ impl NativeTool for FileReaderTool {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                let max_chars = 100_000;
+                let max_chars = 8_000;
                 if numbered.len() > max_chars {
-                    let truncated = &numbered[..max_chars];
+                    // Show first portion + last portion for context
+                    let head = &numbered[..max_chars * 3 / 4];
+                    let tail_start = numbered.len().saturating_sub(max_chars / 4);
+                    let tail = &numbered[tail_start..];
                     ToolResult::ok(format!(
-                        "{}\n\n... [truncated, file is {} bytes total]",
-                        truncated,
-                        content.len()
+                        "{}\n\n... [truncated: showing first {} + last {} of {} total chars, {} lines]\n\n{}",
+                        head,
+                        head.len(),
+                        tail.len(),
+                        numbered.len(),
+                        content.lines().count(),
+                        tail
                     ))
                 } else {
                     ToolResult::ok(numbered)
@@ -509,13 +537,19 @@ impl NativeTool for TerminalTool {
                     result_text.push_str(&stderr);
                 }
 
-                // Truncate very long output
-                let max_chars = 50_000;
+                // Truncate long output to preserve context budget
+                let max_chars = 8_000;
                 if result_text.len() > max_chars {
+                    let head_len = max_chars * 3 / 4;
+                    let tail_len = max_chars / 4;
+                    let tail_start = result_text.len().saturating_sub(tail_len);
                     result_text = format!(
-                        "{}\n\n... [output truncated, {} bytes total]",
-                        &result_text[..max_chars],
-                        result_text.len()
+                        "{}\n\n... [output truncated: showing first {} + last {} of {} total chars]\n\n{}",
+                        &result_text[..head_len],
+                        head_len,
+                        result_text.len() - tail_start,
+                        result_text.len(),
+                        &result_text[tail_start..]
                     );
                 }
 
@@ -815,6 +849,433 @@ impl NativeTool for SaveMemoryTool {
         {
             Ok(()) => ToolResult::ok(format!("Memory saved: '{}'", name)),
             Err(e) => ToolResult::err(format!("Failed to save memory: {}", e)),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// create_tool — Agent can create new custom tools on-the-fly
+// ---------------------------------------------------------------------------
+
+struct CreateToolTool;
+
+#[async_trait]
+impl NativeTool for CreateToolTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "create_tool".to_string(),
+            display_name: "Create Tool".to_string(),
+            description: "Create a new reusable custom tool. The tool is a script (Python, Node.js, Shell) that receives JSON parameters on stdin and returns JSON on stdout.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Unique tool name (snake_case, e.g., 'pdf_generator', 'chart_builder')"
+                    },
+                    "display_name": {
+                        "type": "string",
+                        "description": "Human-readable display name (e.g., 'PDF Generator')"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What the tool does (shown to LLMs in function calling)"
+                    },
+                    "runtime": {
+                        "type": "string",
+                        "enum": ["python", "node", "powershell", "shell"],
+                        "description": "Script runtime to use"
+                    },
+                    "script": {
+                        "type": "string",
+                        "description": "The script source code. Must read JSON from stdin and write JSON to stdout with format: {\"success\": true, \"output\": \"result\"}"
+                    },
+                    "parameters": {
+                        "type": "object",
+                        "description": "Parameter definitions. Each key is the param name, value is {\"type\": \"string\", \"description\": \"...\", \"required\": true/false}"
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "Instructions for when/how to use this tool (injected into system prompt). Optional."
+                    }
+                },
+                "required": ["name", "display_name", "description", "runtime", "script", "parameters"]
+            }),
+            instructions: Some(
+                "Create reusable custom tools that persist across sessions.\n\
+                 - **Use when the user needs a capability that doesn't exist** (e.g., PDF generation, chart creation, API integration).\n\
+                 - The script MUST read JSON from stdin and write JSON to stdout.\n\
+                 - Output format: `{\"success\": true, \"output\": \"result data\"}` or `{\"success\": false, \"error\": \"error message\"}`.\n\
+                 - For Python tools, use `import json, sys; args = json.load(sys.stdin)` to read params.\n\
+                 - For Node tools, use `process.stdin` to read JSON input.\n\
+                 - After creating the tool, it's immediately available for use.\n\
+                 - If the tool needs packages, use `install_package` first, then create the tool.\n\
+                 - Example Python tool template:\n\
+                 ```python\n\
+                 import json, sys\n\
+                 args = json.load(sys.stdin)\n\
+                 # Do work with args...\n\
+                 result = {\"success\": True, \"output\": \"done\"}\n\
+                 print(json.dumps(result))\n\
+                 ```"
+                    .to_string(),
+            ),
+            category: ToolCategory::Native,
+        }
+    }
+
+    async fn execute(&self, args: &serde_json::Value, _ctx: &ToolContext) -> ToolResult {
+        let name = match args.get("name").and_then(|v| v.as_str()) {
+            Some(n) => n,
+            None => return ToolResult::err("Missing required parameter: name"),
+        };
+        let display_name = match args.get("display_name").and_then(|v| v.as_str()) {
+            Some(n) => n,
+            None => return ToolResult::err("Missing required parameter: display_name"),
+        };
+        let description = match args.get("description").and_then(|v| v.as_str()) {
+            Some(d) => d,
+            None => return ToolResult::err("Missing required parameter: description"),
+        };
+        let runtime = match args.get("runtime").and_then(|v| v.as_str()) {
+            Some(r) => r,
+            None => return ToolResult::err("Missing required parameter: runtime"),
+        };
+        let script = match args.get("script").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => return ToolResult::err("Missing required parameter: script"),
+        };
+
+        // Validate name
+        if !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            return ToolResult::err("Tool name must be alphanumeric with underscores/hyphens only");
+        }
+
+        // Determine runtime and extension
+        let runtime_type = match runtime {
+            "python" => manifest::RuntimeType::Python,
+            "node" | "javascript" => manifest::RuntimeType::Node,
+            "powershell" => manifest::RuntimeType::PowerShell,
+            "shell" | "bash" | "sh" => manifest::RuntimeType::Shell,
+            _ => return ToolResult::err(format!("Unsupported runtime: {}. Use: python, node, powershell, shell", runtime)),
+        };
+
+        let (_, ext) = runtime_type.command_and_ext();
+        let entry_point = format!("tool{}", ext);
+
+        // Parse parameters
+        let mut param_defs = std::collections::HashMap::new();
+        if let Some(params) = args.get("parameters").and_then(|v| v.as_object()) {
+            for (key, val) in params {
+                let param_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("string").to_string();
+                let desc = val.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
+                let required = val.get("required").and_then(|r| r.as_bool()).unwrap_or(false);
+                param_defs.insert(key.clone(), manifest::ParamDef {
+                    param_type,
+                    description: desc,
+                    required,
+                    default: val.get("default").cloned(),
+                });
+            }
+        }
+
+        let instructions = args.get("instructions").and_then(|v| v.as_str()).map(String::from);
+
+        // Create the manifest
+        let tool_manifest = manifest::ToolManifest {
+            name: name.to_string(),
+            display_name: display_name.to_string(),
+            description: description.to_string(),
+            version: "1.0.0".to_string(),
+            tool_type: manifest::ToolType::Custom,
+            runtime: runtime_type,
+            entry_point: entry_point.clone(),
+            parameters: param_defs,
+            install_commands: Vec::new(),
+            timeout_seconds: 30,
+            permission_tier: manifest::PermissionTier::Moderate,
+            source: manifest::ToolSource::AgentCreated,
+            marketplace_id: None,
+            instructions,
+            connection: None,
+            actions: None,
+        };
+
+        // Write to disk
+        let data_dir = crate::storage::default_data_dir();
+        let tool_dir = data_dir.join("tools").join("custom").join(name);
+
+        if let Err(e) = tokio::fs::create_dir_all(&tool_dir).await {
+            return ToolResult::err(format!("Failed to create tool directory: {}", e));
+        }
+
+        // Write manifest
+        let manifest_json = match serde_json::to_string_pretty(&tool_manifest) {
+            Ok(j) => j,
+            Err(e) => return ToolResult::err(format!("Failed to serialize manifest: {}", e)),
+        };
+        if let Err(e) = tokio::fs::write(tool_dir.join("manifest.json"), &manifest_json).await {
+            return ToolResult::err(format!("Failed to write manifest: {}", e));
+        }
+
+        // Write script
+        if let Err(e) = tokio::fs::write(tool_dir.join(&entry_point), script).await {
+            return ToolResult::err(format!("Failed to write script: {}", e));
+        }
+
+        tracing::info!("Created custom tool '{}' at {}", name, tool_dir.display());
+
+        ToolResult::ok(format!(
+            "Tool '{}' created successfully at {}. It will be available after the ToolRuntime reloads. \
+             The tool reads JSON from stdin and writes JSON to stdout.",
+            name,
+            tool_dir.display()
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// install_package — Install packages for custom tool dependencies
+// ---------------------------------------------------------------------------
+
+struct InstallPackageTool;
+
+#[async_trait]
+impl NativeTool for InstallPackageTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "install_package".to_string(),
+            display_name: "Install Package".to_string(),
+            description: "Install Python or Node.js packages for use by custom tools. Packages are installed in an isolated directory.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "runtime": {
+                        "type": "string",
+                        "enum": ["python", "node"],
+                        "description": "Package manager to use"
+                    },
+                    "packages": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of package names to install (e.g., ['markdown2', 'weasyprint'])"
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "description": "Name of the custom tool these packages are for (creates isolated install)"
+                    }
+                },
+                "required": ["runtime", "packages", "tool_name"]
+            }),
+            instructions: Some(
+                "Install package dependencies for custom tools.\n\
+                 - **Use before create_tool** when the tool needs external packages.\n\
+                 - Packages are installed in an isolated directory per tool (not globally).\n\
+                 - Python packages go to `~/.chitty-workspace/packages/python/{tool_name}/`.\n\
+                 - Node packages go to `~/.chitty-workspace/packages/node/{tool_name}/`.\n\
+                 - The custom tool executor automatically adds these paths to the runtime search path."
+                    .to_string(),
+            ),
+            category: ToolCategory::Native,
+        }
+    }
+
+    async fn execute(&self, args: &serde_json::Value, _ctx: &ToolContext) -> ToolResult {
+        let runtime = match args.get("runtime").and_then(|v| v.as_str()) {
+            Some(r) => r,
+            None => return ToolResult::err("Missing required parameter: runtime"),
+        };
+        let packages: Vec<String> = match args.get("packages").and_then(|v| v.as_array()) {
+            Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+            None => return ToolResult::err("Missing required parameter: packages"),
+        };
+        let tool_name = match args.get("tool_name").and_then(|v| v.as_str()) {
+            Some(n) => n,
+            None => return ToolResult::err("Missing required parameter: tool_name"),
+        };
+
+        if packages.is_empty() {
+            return ToolResult::err("No packages specified");
+        }
+
+        // Validate package names (basic safety check)
+        for pkg in &packages {
+            if pkg.contains("..") || pkg.contains('/') || pkg.contains('\\') || pkg.contains(';') {
+                return ToolResult::err(format!("Invalid package name: {}", pkg));
+            }
+        }
+
+        let data_dir = crate::storage::default_data_dir();
+        let packages_dir = data_dir.join("packages");
+
+        let (cmd, cmd_args, target_dir) = match runtime {
+            "python" => {
+                let target = packages_dir.join("python").join(tool_name);
+                if let Err(e) = tokio::fs::create_dir_all(&target).await {
+                    return ToolResult::err(format!("Failed to create packages directory: {}", e));
+                }
+                let python = if cfg!(target_os = "windows") { "python" } else { "python3" };
+                let mut install_args = vec![
+                    "-m".to_string(), "pip".to_string(), "install".to_string(),
+                    "--target".to_string(), target.to_string_lossy().to_string(),
+                    "--quiet".to_string(),
+                ];
+                install_args.extend(packages.clone());
+                (python.to_string(), install_args, target)
+            }
+            "node" => {
+                let target = packages_dir.join("node").join(tool_name);
+                if let Err(e) = tokio::fs::create_dir_all(&target).await {
+                    return ToolResult::err(format!("Failed to create packages directory: {}", e));
+                }
+                let mut install_args = vec![
+                    "install".to_string(),
+                    "--prefix".to_string(), target.to_string_lossy().to_string(),
+                ];
+                install_args.extend(packages.clone());
+                ("npm".to_string(), install_args, target)
+            }
+            _ => return ToolResult::err(format!("Unsupported runtime for package install: {}", runtime)),
+        };
+
+        tracing::info!("Installing packages for '{}': {} {:?}", tool_name, cmd, packages);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            tokio::process::Command::new(&cmd)
+                .args(&cmd_args)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output(),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(output)) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+
+                if output.status.success() {
+                    tracing::info!("Packages installed for '{}' at {}", tool_name, target_dir.display());
+                    ToolResult::ok(format!(
+                        "Installed {} package(s) for '{}': {}\nTarget: {}",
+                        packages.len(),
+                        tool_name,
+                        packages.join(", "),
+                        target_dir.display()
+                    ))
+                } else {
+                    let error_text = if stderr.is_empty() { stdout.to_string() } else { stderr.to_string() };
+                    ToolResult::err(format!(
+                        "Package installation failed:\n{}",
+                        &error_text[..error_text.len().min(2000)]
+                    ))
+                }
+            }
+            Ok(Err(e)) => ToolResult::err(format!("Failed to run {}: {} (is it installed?)", cmd, e)),
+            Err(_) => ToolResult::err("Package installation timed out after 120 seconds"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Browser tool — opens and interacts with web pages in the Action Panel
+// ---------------------------------------------------------------------------
+
+struct BrowserTool {
+    bridge: Arc<BrowserBridge>,
+}
+
+#[async_trait]
+impl NativeTool for BrowserTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "browser".to_string(),
+            display_name: "Browser".to_string(),
+            description: "Open and interact with web pages in the Chitty Browser panel. \
+                Supports opening URLs, reading page content, clicking elements, typing text, \
+                and executing JavaScript.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["open", "screenshot", "click", "type", "read_text", "execute_js", "close"],
+                        "description": "The browser action to perform"
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "URL to open (required for 'open' action)"
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for targeting elements (for click/type/read_text)"
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to type into the targeted element (for 'type' action)"
+                    },
+                    "coordinate": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number" },
+                            "y": { "type": "number" }
+                        },
+                        "description": "Click coordinates as alternative to selector (for 'click' action)"
+                    },
+                    "script": {
+                        "type": "string",
+                        "description": "JavaScript code to execute in the page context (for 'execute_js' action)"
+                    }
+                },
+                "required": ["action"]
+            }),
+            instructions: Some(
+                "Open and interact with web pages in the Chitty Browser panel.\n\
+                 - Use `open` to display a URL in the browser panel. Best for locally-served apps (localhost).\n\
+                 - Use `screenshot` to read what's currently displayed (returns page title and text content).\n\
+                 - Use `click` with a CSS `selector` or `coordinate` to click elements.\n\
+                 - Use `type` with a `selector` and `text` to enter text into form fields.\n\
+                 - Use `read_text` to extract text content. Pass `selector` for specific elements, or omit for full page.\n\
+                 - Use `execute_js` with a `script` to run JavaScript in the page context.\n\
+                 - Use `close` to close the browser panel.\n\
+                 \n\
+                 **Limitations:** Cross-origin pages block DOM access. For full interaction, use localhost URLs.\n\
+                 If the browser panel is not connected, ask the user to open the Action Panel."
+                    .to_string(),
+            ),
+            category: ToolCategory::Native,
+        }
+    }
+
+    async fn execute(&self, args: &serde_json::Value, _ctx: &ToolContext) -> ToolResult {
+        let action = match args.get("action").and_then(|v| v.as_str()) {
+            Some(a) => a,
+            None => return ToolResult::err("Missing required parameter: action"),
+        };
+
+        if !self.bridge.is_connected() {
+            return ToolResult::err(
+                "No browser frontend connected. The user needs to open the Action Panel browser tab."
+            );
+        }
+
+        let cmd = crate::server::BrowserCommand {
+            id: uuid::Uuid::new_v4().to_string(),
+            action: action.to_string(),
+            params: args.clone(),
+        };
+
+        let timeout = match action {
+            "open" => std::time::Duration::from_secs(15),
+            "execute_js" => std::time::Duration::from_secs(30),
+            _ => std::time::Duration::from_secs(10),
+        };
+
+        match self.bridge.send_command(cmd, timeout).await {
+            Ok(resp) if resp.success => ToolResult::ok(resp.data),
+            Ok(resp) => ToolResult::err(resp.error.unwrap_or_else(|| "Browser action failed".into())),
+            Err(e) => ToolResult::err(format!("Browser command failed: {}", e)),
         }
     }
 }

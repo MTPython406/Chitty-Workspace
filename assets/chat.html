@@ -7,27 +7,52 @@
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-:root {
-  --bg-page: #0e0e0e;
-  --bg-panel: #141414;
-  --bg-header: #111;
-  --bg-panel-header: #1a1a1a;
-  --bg-card: #1a1a1a;
-  --bg-card-hover: #222;
-  --bg-input: #111;
+/* ── Dark theme (default) ─────────────────────────────────────── */
+:root, [data-theme="dark"] {
+  --bg-page: #0f0f0f;
+  --bg-panel: #161616;
+  --bg-header: #131313;
+  --bg-panel-header: #1c1c1c;
+  --bg-card: #1e1e1e;
+  --bg-card-hover: #272727;
+  --bg-input: #141414;
   --bg-divider: transparent;
-  --border: #252525;
+  --border: #333;
   --border-active: #3b82f6;
-  --border-hover: #444;
-  --text-primary: #d4d4d4;
-  --text-secondary: #888;
-  --text-muted: #555;
+  --border-hover: #555;
+  --text-primary: #e8e8e8;
+  --text-secondary: #a0a0a0;
+  --text-muted: #6b6b6b;
   --accent: #3b82f6;
   --accent-hover: #2563eb;
-  --danger: #c44;
-  --scrollbar-thumb: #333;
+  --danger: #e55;
+  --scrollbar-thumb: #444;
+  --shadow-modal: rgba(0,0,0,0.7);
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* ── Light theme ──────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-page: #f0f2f5;
+  --bg-panel: #ffffff;
+  --bg-header: #fafafa;
+  --bg-panel-header: #f5f5f5;
+  --bg-card: #f0f0f0;
+  --bg-card-hover: #e6e6e6;
+  --bg-input: #ffffff;
+  --bg-divider: transparent;
+  --border: #d0d0d0;
+  --border-active: #3b82f6;
+  --border-hover: #999;
+  --text-primary: #1a1a1a;
+  --text-secondary: #555;
+  --text-muted: #888;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --danger: #dc2626;
+  --scrollbar-thumb: #c0c0c0;
+  --shadow-modal: rgba(0,0,0,0.3);
 }
 
 html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color: var(--text-primary); background: var(--bg-page); overflow: hidden; }
@@ -65,11 +90,11 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .topbar-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); border-color: var(--border-hover); }
 
 #add-panel-btn {
-  padding: 6px 14px; background: var(--text-primary); border: none;
-  border-radius: 6px; color: var(--bg-page); font-size: 12px; font-weight: 600;
+  padding: 6px 14px; background: var(--accent); border: none;
+  border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600;
   cursor: pointer;
 }
-#add-panel-btn:hover { background: #fff; }
+#add-panel-btn:hover { background: var(--accent-hover); }
 #add-panel-btn:disabled { opacity: 0.3; cursor: default; }
 
 /* ── Workspace ──────────────────────────────────────────────────── */
@@ -105,6 +130,45 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 }
 .panel-project-path:focus { border-color: var(--border-hover); color: var(--text-primary); }
 .panel-project-path::placeholder { color: var(--text-muted); }
+.panel-project-path.highlight-pulse {
+  border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,130,246,0.3);
+  animation: pulse-border 0.6s ease 2;
+}
+@keyframes pulse-border {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(59,130,246,0.3); }
+  50% { box-shadow: 0 0 0 4px rgba(59,130,246,0.5); }
+}
+
+/* ── Project path prompt card ──────────────────────────────────── */
+.project-path-prompt {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 18px; margin: 12px 20px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 10px; animation: fadeSlideIn 0.3s ease;
+}
+.project-path-prompt svg { width: 24px; height: 24px; fill: var(--accent); flex-shrink: 0; }
+.project-path-prompt-text { flex: 1; }
+.project-path-prompt-title { font-size: 13px; font-weight: 500; color: var(--text-primary); margin-bottom: 2px; }
+.project-path-prompt-sub { font-size: 11px; color: var(--text-muted); }
+.project-path-prompt-input {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px;
+}
+.project-path-prompt-input input {
+  flex: 1; padding: 6px 10px; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text-primary); font-family: var(--font-mono);
+  font-size: 12px; outline: none;
+}
+.project-path-prompt-input input:focus { border-color: var(--accent); }
+.project-path-prompt-input input::placeholder { color: var(--text-muted); }
+.project-path-prompt-btn {
+  padding: 6px 14px; background: var(--accent); border: none; border-radius: 6px;
+  color: #fff; font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.project-path-prompt-btn:hover { background: var(--accent-hover); }
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .panel-project-label { color: var(--text-muted); font-size: 10px; flex-shrink: 0; }
 .panel-header-icon { width: 16px; height: 16px; fill: var(--text-muted); flex-shrink: 0; }
 .panel-header-title {
@@ -157,8 +221,8 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   font-size: 11px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.5px; margin-bottom: 3px; color: var(--text-muted);
 }
-.message-role.user { color: #7a8baa; }
-.message-role.assistant { color: #8a8a8a; }
+.message-role.user { color: var(--accent); }
+.message-role.assistant { color: var(--text-secondary); }
 .message-content {
   font-size: 14px; line-height: 1.65; color: var(--text-primary);
   white-space: pre-wrap; word-wrap: break-word;
@@ -233,7 +297,7 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 }
 #action-panel.open { transform: translateX(0); }
 #action-backdrop {
-  position: absolute; inset: 0; background: rgba(0,0,0,0.15); z-index: 9;
+  position: absolute; inset: 0; background: rgba(0,0,0,0.2); z-index: 9;
   display: none; pointer-events: auto;
 }
 #action-backdrop.visible { display: block; }
@@ -261,11 +325,44 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 #action-toggle:hover { background: var(--bg-card-hover); }
 #action-toggle svg { width: 14px; height: 14px; fill: var(--text-muted); }
 
+/* ── Action panel tabs ─────────────────────────────────────────── */
+.action-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.action-tab {
+  padding: 7px 16px; font-size: 12px; color: var(--text-secondary);
+  border: none; background: none; cursor: pointer; font-family: var(--font-sans);
+  border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s;
+}
+.action-tab:hover { color: var(--text-primary); }
+.action-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+
+/* ── Browser view ──────────────────────────────────────────────── */
+#browser-body {
+  flex: 1; flex-direction: column; min-height: 0; display: none;
+}
+#browser-body.active { display: flex; }
+.browser-url-bar {
+  padding: 6px 10px; margin: 8px; background: var(--bg-input);
+  border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-primary); font-family: var(--font-mono); font-size: 12px;
+  outline: none; flex-shrink: 0;
+}
+.browser-url-bar:focus { border-color: var(--border-hover); }
+#browser-iframe {
+  flex: 1; border: none; background: #fff; border-radius: 0 0 10px 10px;
+  min-height: 0;
+}
+#browser-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 13px; text-align: center; padding: 20px;
+}
+
 /* ── History popover ────────────────────────────────────────────── */
 .history-popover {
   position: absolute; top: 40px; right: 30px; width: 300px; max-height: 350px;
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
-  z-index: 20; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 20; overflow-y: auto; box-shadow: 0 8px 24px var(--shadow-modal);
   display: none; padding: 4px;
 }
 .history-popover.visible { display: block; }
@@ -281,7 +378,7 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 
 /* ── Settings modal ─────────────────────────────────────────────── */
 .modal-overlay {
-  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: none; position: fixed; inset: 0; background: var(--shadow-modal);
   z-index: 100; align-items: center; justify-content: center;
 }
 .modal-overlay.visible { display: flex; }
@@ -425,35 +522,35 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   margin: 4px 0; font-family: var(--font-mono);
 }
 
-/* ── Skills settings ───────────────────────────────────────────── */
-.skill-item {
+/* ── Agents settings ───────────────────────────────────────────── */
+.agent-item {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
   margin-bottom: 4px;
 }
-.skill-item:hover { border-color: var(--border-hover); }
-.skill-item-info { flex: 1; }
-.skill-item-name { font-size: 13px; color: var(--text-primary); font-weight: 500; }
-.skill-item-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.skill-item-tags { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
-.skill-item-tags span { padding: 1px 6px; background: var(--bg-page); border-radius: 3px; margin-right: 4px; }
-.skill-edit-btn, .skill-delete-btn {
+.agent-item:hover { border-color: var(--border-hover); }
+.agent-item-info { flex: 1; }
+.agent-item-name { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+.agent-item-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.agent-item-tags { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+.agent-item-tags span { padding: 1px 6px; background: var(--bg-page); border-radius: 3px; margin-right: 4px; }
+.agent-edit-btn, .agent-delete-btn {
   padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer;
   border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
 }
-.skill-edit-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); }
-.skill-delete-btn:hover { color: var(--danger); border-color: var(--danger); }
+.agent-edit-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+.agent-delete-btn:hover { color: var(--danger); border-color: var(--danger); }
 
-.skill-form { margin-top: 16px; }
-.skill-form label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; margin-top: 12px; }
-.skill-form input, .skill-form textarea {
+.agent-form { margin-top: 16px; }
+.agent-form label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; margin-top: 12px; }
+.agent-form input, .agent-form textarea {
   width: 100%; padding: 8px 10px; background: var(--bg-card); border: 1px solid var(--border);
   border-radius: 4px; color: var(--text-primary); font-size: 13px; outline: none;
   font-family: var(--font-sans);
 }
-.skill-form input:focus, .skill-form textarea:focus { border-color: var(--border-hover); }
-.skill-form textarea { min-height: 80px; resize: vertical; font-family: var(--font-mono); font-size: 12px; }
-.skill-form .hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.agent-form input:focus, .agent-form textarea:focus { border-color: var(--border-hover); }
+.agent-form textarea { min-height: 80px; resize: vertical; font-family: var(--font-mono); font-size: 12px; }
+.agent-form .hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .tool-checkboxes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .tool-checkbox {
   display: flex; align-items: center; gap: 4px; padding: 4px 10px;
@@ -463,21 +560,229 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .tool-checkbox:hover { border-color: var(--border-hover); }
 .tool-checkbox input { accent-color: var(--accent); }
 .tool-checkbox.checked { border-color: var(--accent); background: rgba(59,130,246,0.08); }
-.skill-form-actions { display: flex; gap: 8px; margin-top: 16px; }
-.skill-save-btn {
+.agent-form-actions { display: flex; gap: 8px; margin-top: 16px; }
+.agent-save-btn {
   padding: 8px 20px; background: var(--accent); border: none; border-radius: 6px;
   color: #fff; font-size: 12px; cursor: pointer;
 }
-.skill-save-btn:hover { background: var(--accent-hover); }
-.skill-cancel-btn {
+.agent-save-btn:hover { background: var(--accent-hover); }
+.agent-cancel-btn {
   padding: 8px 16px; background: transparent; border: 1px solid var(--border);
   border-radius: 6px; color: var(--text-secondary); font-size: 12px; cursor: pointer;
 }
-.skill-cancel-btn:hover { background: var(--bg-card-hover); }
+.agent-cancel-btn:hover { background: var(--bg-card-hover); }
 .exec-config { display: flex; gap: 16px; margin-top: 8px; }
 .exec-config label { margin-top: 0; }
 .exec-config .config-field { flex: 1; }
 .exec-config input[type="number"] { width: 100%; }
+
+/* ── Agent Builder wizard ─────────────────────────────────────── */
+.agent-builder { margin-top: 16px; }
+.agent-builder textarea.describe-input {
+  width: 100%; min-height: 120px; resize: vertical;
+  padding: 10px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text-primary); font-size: 13px;
+  font-family: var(--font-sans); line-height: 1.5; outline: none;
+}
+.agent-builder textarea.describe-input:focus { border-color: var(--border-hover); }
+.agent-builder textarea.describe-input::placeholder { color: var(--text-muted); }
+.agent-builder .generate-btn {
+  margin-top: 12px; padding: 8px 20px;
+  background: var(--accent); color: #fff; border: none;
+  border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
+}
+.agent-builder .generate-btn:hover { background: var(--accent-hover); }
+.agent-builder .generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.agent-builder-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.agent-builder .loading-state {
+  text-align: center; padding: 32px 16px; color: var(--text-secondary); font-size: 13px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.agent-builder .spinner {
+  display: inline-block; width: 24px; height: 24px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 12px;
+}
+.agent-builder .progress-log {
+  text-align: left; font-size: 11px; color: var(--text-muted); margin-top: 12px;
+  font-family: var(--font-mono); max-height: 80px; overflow-y: auto;
+  background: var(--bg-page); border-radius: 4px; padding: 8px;
+}
+.agent-builder .progress-log div { padding: 1px 0; }
+.agent-builder .progress-log .tool-event { color: var(--accent); }
+
+.ai-notes {
+  margin: 12px 0; padding: 10px 14px;
+  background: var(--bg-page); border-radius: 6px;
+  font-size: 12px; color: var(--text-secondary);
+  border-left: 3px solid var(--accent); line-height: 1.5;
+  white-space: pre-wrap;
+}
+.ai-notes strong { color: var(--text-primary); }
+
+.marketplace-note {
+  margin: 8px 0; padding: 10px 14px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; font-size: 12px; color: var(--text-secondary);
+  line-height: 1.5;
+}
+.marketplace-note .section-label {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+}
+.marketplace-note .mp-tool {
+  display: inline-block; padding: 2px 8px; margin: 2px;
+  background: var(--bg-page); border-radius: 3px; font-family: var(--font-mono); font-size: 11px;
+}
+
+/* ── Marketplace tiles ──────────────────────────────────────────── */
+.marketplace-tile {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 12px;
+  background: var(--bg-secondary);
+}
+.marketplace-tile-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.marketplace-tile-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #fff;
+  flex-shrink: 0;
+}
+.marketplace-tile-info { flex: 1; }
+.marketplace-tile-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.marketplace-tile-vendor {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.marketplace-tile-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+.marketplace-auth-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+.marketplace-auth-status.connected {
+  background: rgba(34,197,94,0.1);
+  color: #22c55e;
+}
+.marketplace-auth-status.disconnected {
+  background: rgba(239,68,68,0.1);
+  color: #ef4444;
+}
+.marketplace-tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.marketplace-tool-chip {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.marketplace-tile-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.marketplace-tile-actions button {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+.marketplace-tile-actions button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.marketplace-tile-actions button.primary:hover {
+  background: var(--accent-hover);
+}
+.marketplace-requirements {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+.setup-progress {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+/* ── Activity log (action panel) ───────────────────────────────── */
+.activity-log { display: flex; flex-direction: column; gap: 0; font-size: 12px; font-family: var(--font-mono); }
+.activity-entry {
+  padding: 4px 8px; border-bottom: 1px solid var(--border);
+  line-height: 1.5; display: flex; gap: 8px; align-items: flex-start;
+}
+.activity-entry:hover { background: var(--bg-card); }
+.activity-time { color: var(--text-muted); font-size: 10px; flex-shrink: 0; min-width: 55px; }
+.activity-tag {
+  font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px;
+  flex-shrink: 0; min-width: 48px; text-align: center; text-transform: uppercase;
+}
+.activity-tag.iter { background: rgba(59,130,246,0.15); color: #5b9cf6; }
+.activity-tag.tool { background: rgba(232,168,76,0.15); color: #e8a84c; }
+.activity-tag.result { background: rgba(102,170,102,0.15); color: #6a6; }
+.activity-tag.error { background: rgba(204,68,68,0.15); color: #e55; }
+.activity-tag.llm { background: rgba(160,100,220,0.15); color: #a064dc; }
+.activity-tag.info { background: rgba(128,128,128,0.15); color: var(--text-secondary); }
+.activity-tag.meta { background: rgba(80,180,180,0.12); color: #5bb8b0; }
+.activity-msg { color: var(--text-secondary); flex: 1; word-break: break-all; }
+.activity-msg .hl { color: var(--text-primary); font-weight: 500; }
+.activity-msg .dim { color: var(--text-muted); }
+
+.activity-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 0; margin-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.activity-header-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.activity-clear-btn {
+  padding: 3px 8px; font-size: 10px; background: transparent;
+  border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text-muted); cursor: pointer;
+}
+.activity-clear-btn:hover { color: var(--text-primary); border-color: var(--border-hover); }
+.activity-status {
+  padding: 6px 8px; font-size: 11px; display: flex; align-items: center; gap: 6px;
+}
+.activity-status .dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.activity-status .dot.active { background: #5b5; animation: pulse 1.5s infinite; }
+.activity-status .dot.idle { background: var(--text-muted); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 </style>
 </head>
 <body>
@@ -495,6 +800,10 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <div id="topbar-right">
       <select id="provider-select" class="topbar-select"></select>
       <select id="model-select" class="topbar-select"></select>
+      <button class="topbar-btn" id="theme-toggle-btn" title="Toggle light/dark mode">
+        <svg id="theme-icon-sun" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display:none"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58a.996.996 0 00-1.41 0 .996.996 0 000 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37a.996.996 0 00-1.41 0 .996.996 0 000 1.41l1.06 1.06c.39.39 1.03.39 1.41 0a.996.996 0 000-1.41l-1.06-1.06zm1.06-10.96a.996.996 0 000-1.41.996.996 0 00-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36a.996.996 0 000-1.41.996.996 0 00-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></svg>
+        <svg id="theme-icon-moon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 3a9 9 0 109 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 01-4.4 2.26 5.403 5.403 0 01-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>
+      </button>
       <button class="topbar-btn" id="settings-btn">Settings</button>
       <button id="add-panel-btn">+ New Panel</button>
     </div>
@@ -507,19 +816,28 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <button id="action-toggle"><svg viewBox="0 0 24 24"><path d="M4 15h16v-2H4v2zm0 4h16v-2H4v2zm0-8h16V9H4v2zm0-6v2h16V5H4z"/></svg></button>
     <div id="action-panel">
       <div id="action-header">
-        <div><div id="action-title">Action Panel</div><div id="action-subtitle">Waiting for content</div></div>
+        <div><div id="action-title">Action Panel</div><div id="action-subtitle">Idle</div></div>
         <button id="action-close">&times;</button>
       </div>
+      <div class="action-tabs">
+        <button class="action-tab active" data-action-tab="activity">Activity</button>
+        <button class="action-tab" data-action-tab="browser">Browser</button>
+      </div>
       <div id="action-body">
-        <h3 style="font-size:14px;font-weight:500;margin-bottom:12px;">Action Panel</h3>
-        <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:12px;">This panel displays content from your AI sessions:</p>
-        <ul style="font-size:13px;color:var(--text-secondary);line-height:1.8;padding-left:18px;">
-          <li><strong>Documents</strong> - markdown, HTML, or PDF content</li>
-          <li><strong>Code</strong> - source code with syntax view</li>
-          <li><strong>Websites</strong> - embedded web content</li>
-          <li><strong>Custom HTML</strong> - agent-generated content</li>
-        </ul>
-        <p style="font-size:12px;color:var(--text-muted);margin-top:16px;">Content will appear here automatically when triggered by a session.</p>
+        <div class="activity-header">
+          <div class="activity-header-title">Session Activity</div>
+          <button class="activity-clear-btn" id="activity-clear">Clear</button>
+        </div>
+        <div class="activity-status" id="activity-status">
+          <span class="dot idle" id="activity-dot"></span>
+          <span style="color:var(--text-muted);font-size:11px;" id="activity-status-text">No active session</span>
+        </div>
+        <div class="activity-log" id="activity-log"></div>
+      </div>
+      <div id="browser-body">
+        <input class="browser-url-bar" id="browser-url" type="text" placeholder="No page loaded" readonly />
+        <div id="browser-empty">No page loaded.<br>The agent can open URLs here.</div>
+        <iframe id="browser-iframe" style="display:none;" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
       </div>
     </div>
   </div>
@@ -533,8 +851,9 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <div class="settings-tabs">
       <button class="settings-tab active" data-tab="keys">API Keys</button>
       <button class="settings-tab" data-tab="models">Models</button>
-      <button class="settings-tab" data-tab="skills">Skills</button>
+      <button class="settings-tab" data-tab="agents">Agents</button>
       <button class="settings-tab" data-tab="tokens">Usage</button>
+      <button class="settings-tab" data-tab="marketplace">Marketplace</button>
     </div>
     <div id="tab-keys" class="settings-tab-content active">
       <div id="provider-settings"></div>
@@ -542,11 +861,14 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <div id="tab-models" class="settings-tab-content">
       <div id="models-settings"></div>
     </div>
-    <div id="tab-skills" class="settings-tab-content">
-      <div id="skills-settings"></div>
+    <div id="tab-agents" class="settings-tab-content">
+      <div id="agents-settings"></div>
     </div>
     <div id="tab-tokens" class="settings-tab-content">
       <div id="token-settings"></div>
+    </div>
+    <div id="tab-marketplace" class="settings-tab-content">
+      <div id="marketplace-settings"></div>
     </div>
   </div>
 </div>
@@ -562,6 +884,7 @@ const ICONS = {
   history: '<svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 00-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0013 21a9 9 0 000-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>',
   clock: '<svg viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>',
   robot: '<svg viewBox="0 0 24 24"><path d="M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z"/></svg>',
+  newSession: '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>',
 };
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -582,7 +905,7 @@ const App = {
     discoveredModels: [],
     selectedProvider: null,
     selectedModel: null,
-    skills: [],
+    agents: [],
     availableTools: [],
     conversations: [],
     actionPanelOpen: false,
@@ -590,24 +913,51 @@ const App = {
 
   /* ── Init ───────────────────────────────────────────────────────── */
   async init() {
+    this.loadTheme();
     this.bindGlobalEvents();
+    this.initBrowserWs();
     await this.loadProviders();
-    await this.loadSkills();
+    await this.loadAgents();
     await this.loadConversations();
     this.addPanel();
     document.addEventListener('click', () => this.closeAllPopovers());
+  },
+
+  /* ── Theme ──────────────────────────────────────────────────────── */
+  loadTheme() {
+    const saved = localStorage.getItem('chitty-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+    this.updateThemeIcon(saved);
+  },
+
+  toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('chitty-theme', next);
+    this.updateThemeIcon(next);
+  },
+
+  updateThemeIcon(theme) {
+    document.getElementById('theme-icon-sun').style.display = theme === 'dark' ? 'none' : 'inline';
+    document.getElementById('theme-icon-moon').style.display = theme === 'dark' ? 'inline' : 'none';
   },
 
   bindGlobalEvents() {
     document.getElementById('add-panel-btn').addEventListener('click', () => this.addPanel());
     document.getElementById('settings-btn').addEventListener('click', () => this.openSettings());
     document.getElementById('settings-close').addEventListener('click', () => this.closeSettings());
+    document.getElementById('theme-toggle-btn').addEventListener('click', () => this.toggleTheme());
     document.getElementById('settings-overlay').addEventListener('click', e => {
       if (e.target === e.currentTarget) this.closeSettings();
     });
     document.getElementById('action-toggle').addEventListener('click', () => this.toggleActionPanel());
     document.getElementById('action-close').addEventListener('click', () => this.toggleActionPanel(false));
     document.getElementById('action-backdrop').addEventListener('click', () => this.toggleActionPanel(false));
+    document.getElementById('activity-clear').addEventListener('click', () => this.activityClear());
+    document.querySelectorAll('.action-tab').forEach(tab => {
+      tab.addEventListener('click', () => this.switchActionTab(tab.dataset.actionTab));
+    });
     document.getElementById('provider-select').addEventListener('change', e => {
       this.state.selectedProvider = e.target.value;
       this.loadModels(e.target.value);
@@ -623,8 +973,9 @@ const App = {
         tab.classList.add('active');
         document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
         if (tab.dataset.tab === 'models') this.renderModelsSettings();
-        if (tab.dataset.tab === 'skills') this.renderSkillsSettings();
+        if (tab.dataset.tab === 'agents') this.renderAgentsSettings();
         if (tab.dataset.tab === 'tokens') this.renderTokenSettings();
+        if (tab.dataset.tab === 'marketplace') this.renderMarketplaceSettings();
       });
     });
     window.addEventListener('resize', () => this.recalcPanelWidths());
@@ -683,8 +1034,9 @@ const App = {
   addPanel() {
     if (this.state.panels.length >= MAX_PANELS) return;
     const id = 'panel_' + (++panelIdCounter);
+    const savedPath = localStorage.getItem('chitty-default-project-path') || null;
     this.state.panels.push({
-      id, name: 'Chat', conversationId: null, messages: [], isStreaming: false, selectedSkill: null, projectPath: null,
+      id, name: 'Chat', conversationId: null, messages: [], isStreaming: false, selectedAgent: null, projectPath: savedPath,
     });
     this.state.activePanelId = id;
     this.recalcPanelWidths();
@@ -703,6 +1055,18 @@ const App = {
     this.renderWorkspace();
     this.updateSubtitle();
     document.getElementById('add-panel-btn').disabled = this.state.panels.length >= MAX_PANELS;
+  },
+
+  newSession(panelId) {
+    const panel = this.getPanel(panelId);
+    if (!panel) return;
+    // If streaming, don't allow new session
+    if (panel.isStreaming) return;
+    panel.conversationId = null;
+    panel.messages = [];
+    panel.name = 'Chitty';
+    this.renderWorkspace();
+    this.updateSubtitle();
   },
 
   setActivePanel(panelId) {
@@ -811,6 +1175,44 @@ const App = {
       return;
     }
 
+    // Prompt for project path if not set — show inline card
+    if (!panel.projectPath) {
+      const panelBody = document.querySelector(`[data-panel-id="${panelId}"] .panel-body`);
+      // Remove existing prompt if any
+      const existing = panelBody?.querySelector('.project-path-prompt');
+      if (existing) existing.remove();
+      if (panelBody) {
+        const card = document.createElement('div');
+        card.className = 'project-path-prompt';
+        card.innerHTML = `
+          <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+          <div class="project-path-prompt-text">
+            <div class="project-path-prompt-title">Set a project path</div>
+            <div class="project-path-prompt-sub">The agent uses this as its working directory for files and commands.</div>
+            <div class="project-path-prompt-input">
+              <input type="text" placeholder="e.g. C:\\my_project" />
+              <button class="project-path-prompt-btn">Set Path</button>
+            </div>
+          </div>`;
+        panelBody.insertBefore(card, panelBody.firstChild);
+        const pathInput = card.querySelector('input');
+        const setBtn = card.querySelector('button');
+        pathInput.focus();
+        const applyPath = () => {
+          const val = pathInput.value.trim();
+          if (!val) return;
+          panel.projectPath = val;
+          localStorage.setItem('chitty-default-project-path', val);
+          const headerInput = document.querySelector(`[data-panel-id="${panelId}"] .panel-project-path`);
+          if (headerInput) headerInput.value = val;
+          card.remove();
+        };
+        setBtn.addEventListener('click', applyPath);
+        pathInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyPath(); });
+      }
+      return;
+    }
+
     textarea.value = '';
     textarea.style.height = 'auto';
     panel.isStreaming = true;
@@ -819,6 +1221,12 @@ const App = {
     panel.messages.push({ role: 'user', content: text });
     panel.messages.push({ role: 'assistant', content: '', streaming: true });
     this.renderPanel(panelId);
+
+    // Activity log — open panel and start logging
+    this.toggleActionPanel(true);
+    this.activitySetStatus(true, `Streaming — ${this.state.selectedProvider}/${this.state.selectedModel}`);
+    this.activityLog('info', `<span class="hl">Chat started</span> <span class="dim">provider=${esc(this.state.selectedProvider)} model=${esc(this.state.selectedModel)}${panel.selectedAgent ? ' agent=' + esc(panel.selectedAgent) : ''}</span>`);
+    this.activityLog('llm', `<span class="hl">User message</span> <span class="dim">(${text.length} chars)</span>`);
 
     const sendBtn = document.querySelector(`[data-panel-id="${panelId}"] .panel-send-btn`);
     if (sendBtn) sendBtn.disabled = true;
@@ -830,7 +1238,7 @@ const App = {
         provider: this.state.selectedProvider,
         model: this.state.selectedModel,
       };
-      if (panel.selectedSkill) reqBody.skill_id = panel.selectedSkill;
+      if (panel.selectedAgent) reqBody.agent_id = panel.selectedAgent;
       if (panel.projectPath) reqBody.project_path = panel.projectPath;
 
       const response = await fetch('/api/chat', {
@@ -864,17 +1272,33 @@ const App = {
             const parsed = JSON.parse(evData);
             if (evType === 'meta') {
               if (parsed.conversation_id) panel.conversationId = parsed.conversation_id;
+              this.activityLog('meta', `<span class="hl">Conversation</span> <span class="dim">${esc(parsed.conversation_id || '')}</span>`);
             } else if (evType === 'iteration') {
+              this.activityLog('iter', `<span class="hl">Iteration ${parsed.iteration}/${parsed.max_iterations}</span>`);
               if (parsed.iteration > 1) {
-                // Show iteration badge for multi-turn tool loops
                 this.appendToolBlockInPanel(panelId,
                   `<div class="iteration-badge">Iteration ${parsed.iteration}/${parsed.max_iterations}</div>`);
               }
             } else if (evType === 'thinking') {
-              this.appendToolBlockInPanel(panelId,
-                `<div class="thinking-indicator">${esc(parsed.content)}</div>`);
+              const tc = parsed.content || '';
+              if (tc.startsWith('PROMPT[')) {
+                this.activityLog('llm', `${esc(tc)}`);
+              } else if (tc.startsWith('LLM returned:')) {
+                this.activityLog('info', `${esc(tc)}`);
+              } else if (tc.startsWith('Tool call:')) {
+                this.activityLog('tool', `<span class="dim">${esc(tc)}</span>`);
+              } else if (tc.startsWith('WARNING:')) {
+                this.activityLog('error', `${esc(tc)}`);
+              } else {
+                this.activityLog('llm', `<span class="dim">${esc(tc)}</span>`);
+              }
+              if (!tc.startsWith('PROMPT[') && !tc.startsWith('LLM returned') && !tc.startsWith('Tool call:') && !tc.startsWith('WARNING:')) {
+                this.appendToolBlockInPanel(panelId,
+                  `<div class="thinking-indicator">${esc(tc)}</div>`);
+              }
             } else if (evType === 'tool_call_start') {
               toolCalls[parsed.tool_call_id] = { name: parsed.tool_name, args: '', result: null };
+              this.activityLog('tool', `<span class="hl">Calling ${esc(parsed.tool_name)}</span> <span class="dim">id=${esc(parsed.tool_call_id)}</span>`);
               this.appendToolBlockInPanel(panelId,
                 `<div class="tool-call-block" data-tool-id="${parsed.tool_call_id}">
                   <div class="tool-call-header" onclick="this.querySelector('.tool-call-chevron').classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
@@ -889,6 +1313,7 @@ const App = {
                 toolCalls[parsed.tool_call_id].args += parsed.arguments || '';
               }
             } else if (evType === 'tool_result') {
+              this.activityLog('result', `<span class="hl">${esc(parsed.tool_name || '?')}</span> ${parsed.success ? '<span style="color:#6a6">OK</span>' : '<span style="color:#e55">FAIL</span>'} <span class="dim">${parsed.duration_ms || 0}ms, ${(parsed.content || '').length} chars</span>`);
               const tc = toolCalls[parsed.tool_call_id];
               if (tc) {
                 tc.result = parsed.content;
@@ -923,8 +1348,16 @@ const App = {
               const last = panel.messages[panel.messages.length - 1];
               if (last?.role === 'assistant') last.content = assistantText;
               this.renderStreamingInPanel(panelId, assistantText);
+              // Log text milestones (not every chunk)
+              if (!this._lastTextLog || assistantText.length - this._lastTextLog >= 500) {
+                this.activityLog('llm', `<span class="dim">Streaming response... ${assistantText.length} chars</span>`);
+                this._lastTextLog = assistantText.length;
+              }
             } else if (evType === 'error') {
+              this.activityLog('error', `<span class="hl">${esc(parsed.error || 'Unknown error')}</span>`);
               panel.messages.push({ role: 'system', content: 'Error: ' + (parsed.error || 'Unknown') });
+            } else if (evType === 'done') {
+              // done is handled after the loop
             }
           } catch (_) {}
         }
@@ -932,6 +1365,10 @@ const App = {
 
       const last = panel.messages[panel.messages.length - 1];
       if (last) last.streaming = false;
+      this._lastTextLog = 0;
+
+      this.activityLog('info', `<span class="hl">Chat completed</span> <span class="dim">${assistantText.length} chars response</span>`);
+      this.activitySetStatus(false, 'Idle');
 
       await this.loadConversations();
       if (!panel.conversationId && this.state.conversations.length) {
@@ -942,8 +1379,11 @@ const App = {
       const last = panel.messages[panel.messages.length - 1];
       if (last?.role === 'assistant' && !last.content) panel.messages.pop();
       panel.messages.push({ role: 'system', content: 'Error: ' + e.message });
+      this.activityLog('error', `<span class="hl">Stream error:</span> ${esc(e.message)}`);
+      this.activitySetStatus(false, 'Error');
     } finally {
       panel.isStreaming = false;
+      this._lastTextLog = 0;
       this.renderPanel(panelId);
       const ta = document.querySelector(`[data-panel-id="${panelId}"] .panel-textarea`);
       if (ta) ta.focus();
@@ -967,6 +1407,173 @@ const App = {
     this.state.actionPanelOpen = open;
     document.getElementById('action-panel').classList.toggle('open', open);
     document.getElementById('action-backdrop').classList.toggle('visible', open);
+  },
+
+  /* ── Activity Log ──────────────────────────────────────────────── */
+  activityLog(tag, msg) {
+    const log = document.getElementById('activity-log');
+    if (!log) return;
+    const now = new Date();
+    const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const entry = document.createElement('div');
+    entry.className = 'activity-entry';
+    entry.innerHTML = `<span class="activity-time">${time}</span><span class="activity-tag ${tag}">${tag}</span><span class="activity-msg">${msg}</span>`;
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+  },
+
+  activitySetStatus(active, text) {
+    const dot = document.getElementById('activity-dot');
+    const label = document.getElementById('activity-status-text');
+    const subtitle = document.getElementById('action-subtitle');
+    if (dot) { dot.className = 'dot ' + (active ? 'active' : 'idle'); }
+    if (label) label.textContent = text;
+    if (subtitle) subtitle.textContent = active ? 'Streaming' : 'Idle';
+  },
+
+  activityClear() {
+    const log = document.getElementById('activity-log');
+    if (log) log.innerHTML = '';
+    this.activitySetStatus(false, 'No active session');
+  },
+
+  /* ── Action panel tabs ───────────────────────────────────────────── */
+  switchActionTab(tabName) {
+    document.querySelectorAll('.action-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.actionTab === tabName)
+    );
+    const actionBody = document.getElementById('action-body');
+    const browserBody = document.getElementById('browser-body');
+    if (actionBody) actionBody.style.display = tabName === 'activity' ? '' : 'none';
+    if (browserBody) browserBody.classList.toggle('active', tabName === 'browser');
+  },
+
+  /* ── Browser bridge WebSocket ────────────────────────────────────── */
+  browserWs: null,
+  browserConnected: false,
+
+  initBrowserWs() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${location.host}/ws/browser`);
+
+    ws.onopen = () => {
+      this.browserConnected = true;
+      this.activityLog('info', '<span class="hl">Browser bridge connected</span>');
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const cmd = JSON.parse(event.data);
+        const response = await this.executeBrowserCommand(cmd);
+        ws.send(JSON.stringify(response));
+      } catch (e) {
+        console.error('Browser WS message error:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      this.browserConnected = false;
+      setTimeout(() => this.initBrowserWs(), 2000);
+    };
+
+    ws.onerror = () => ws.close();
+    this.browserWs = ws;
+  },
+
+  async executeBrowserCommand(cmd) {
+    const iframe = document.getElementById('browser-iframe');
+    const urlBar = document.getElementById('browser-url');
+    const empty = document.getElementById('browser-empty');
+
+    try {
+      switch (cmd.action) {
+        case 'open': {
+          const url = cmd.params.url;
+          if (!url) return { id: cmd.id, success: false, data: null, error: 'Missing url parameter' };
+          iframe.src = url;
+          iframe.style.display = 'block';
+          empty.style.display = 'none';
+          urlBar.value = url;
+          this.switchActionTab('browser');
+          this.toggleActionPanel(true);
+          await new Promise((resolve) => {
+            const timer = setTimeout(resolve, 10000);
+            iframe.onload = () => { clearTimeout(timer); resolve(); };
+          });
+          this.activityLog('tool', `<span class="hl">Browser opened</span> <span class="dim">${esc(url)}</span>`);
+          return { id: cmd.id, success: true, data: `Opened ${url}`, error: null };
+        }
+
+        case 'screenshot': {
+          try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            const text = doc.body.innerText.substring(0, 4000);
+            const title = doc.title || '';
+            return { id: cmd.id, success: true, data: JSON.stringify({ title, text, url: iframe.src }), error: null };
+          } catch (e) {
+            return { id: cmd.id, success: true, data: JSON.stringify({
+              url: iframe.src,
+              note: 'Cross-origin page — cannot read content. Only same-origin (localhost) pages support full interaction.'
+            }), error: null };
+          }
+        }
+
+        case 'click': {
+          const doc = iframe.contentDocument || iframe.contentWindow.document;
+          if (cmd.params.selector) {
+            const el = doc.querySelector(cmd.params.selector);
+            if (!el) return { id: cmd.id, success: false, data: null, error: `Element not found: ${cmd.params.selector}` };
+            el.click();
+            return { id: cmd.id, success: true, data: `Clicked ${cmd.params.selector}`, error: null };
+          } else if (cmd.params.coordinate) {
+            const { x, y } = cmd.params.coordinate;
+            const el = doc.elementFromPoint(x, y);
+            if (el) el.click();
+            return { id: cmd.id, success: true, data: `Clicked at (${x}, ${y})`, error: null };
+          }
+          return { id: cmd.id, success: false, data: null, error: 'Provide selector or coordinate' };
+        }
+
+        case 'type': {
+          const doc = iframe.contentDocument || iframe.contentWindow.document;
+          const el = cmd.params.selector ? doc.querySelector(cmd.params.selector) : doc.activeElement;
+          if (!el) return { id: cmd.id, success: false, data: null, error: `Element not found: ${cmd.params.selector || 'active element'}` };
+          el.focus();
+          el.value = cmd.params.text || '';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return { id: cmd.id, success: true, data: `Typed into ${cmd.params.selector || 'active element'}`, error: null };
+        }
+
+        case 'read_text': {
+          const doc = iframe.contentDocument || iframe.contentWindow.document;
+          const el = cmd.params.selector ? doc.querySelector(cmd.params.selector) : doc.body;
+          if (!el) return { id: cmd.id, success: false, data: null, error: `Element not found: ${cmd.params.selector}` };
+          const text = el.innerText.substring(0, 8000);
+          return { id: cmd.id, success: true, data: text, error: null };
+        }
+
+        case 'execute_js': {
+          const win = iframe.contentWindow;
+          const result = win.eval(cmd.params.script);
+          const serialized = typeof result === 'object' ? JSON.stringify(result) : String(result);
+          return { id: cmd.id, success: true, data: serialized.substring(0, 8000), error: null };
+        }
+
+        case 'close': {
+          iframe.src = 'about:blank';
+          iframe.style.display = 'none';
+          empty.style.display = 'flex';
+          urlBar.value = '';
+          return { id: cmd.id, success: true, data: 'Browser closed', error: null };
+        }
+
+        default:
+          return { id: cmd.id, success: false, data: null, error: `Unknown action: ${cmd.action}` };
+      }
+    } catch (e) {
+      return { id: cmd.id, success: false, data: null, error: e.message };
+    }
   },
 
   /* ── History popover ────────────────────────────────────────────── */
@@ -1048,15 +1655,16 @@ const App = {
       <div class="panel-header">
         <span class="panel-header-icon">${ICONS.chat}</span>
         <span class="panel-header-title">${esc(panel.name)}</span>
-        <select class="panel-skill-select topbar-select" style="font-size:11px;padding:3px 6px;">
-          <option value="">No Skill</option>
-          ${this.state.skills.map(sk => `<option value="${esc(sk.id)}" ${panel.selectedSkill === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`).join('')}
+        <select class="panel-agent-select topbar-select" style="font-size:11px;padding:3px 6px;">
+          <option value="">No Agent</option>
+          ${this.state.agents.map(sk => `<option value="${esc(sk.id)}" ${panel.selectedAgent === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`).join('')}
         </select>
+        <button class="panel-header-btn new-session-btn" title="New Session">${ICONS.newSession}</button>
         <button class="panel-header-btn history-btn" title="History">${ICONS.history}</button>
-        ${this.state.panels.length > 1 ? `<button class="panel-header-btn close-btn" title="Close">${ICONS.close}</button>` : ''}
+        <button class="panel-header-btn close-btn" title="Close Panel">${ICONS.close}</button>
         <div class="panel-project-row">
           <span class="panel-project-label">Project:</span>
-          <input class="panel-project-path" type="text" placeholder="C:\\path\\to\\project" value="${esc(panel.projectPath || '')}" />
+          <input class="panel-project-path" type="text" placeholder="e.g. C:\\my_project" value="${esc(panel.projectPath || '')}" />
         </div>
       </div>
       <div class="panel-body">${panel.messages.length ? this.messagesHTML(panel) : this.welcomeHTML(panel)}</div>
@@ -1172,20 +1780,35 @@ const App = {
     if (!el) return;
     // Activate on click
     el.addEventListener('mousedown', () => this.setActivePanel(panelId));
+    // New Session
+    const newBtn = el.querySelector('.new-session-btn');
+    if (newBtn) newBtn.addEventListener('click', e => { e.stopPropagation(); this.newSession(panelId); });
     // Close
     const closeBtn = el.querySelector('.close-btn');
     if (closeBtn) closeBtn.addEventListener('click', e => { e.stopPropagation(); this.closePanel(panelId); });
-    // Skill selector
-    const skillSel = el.querySelector('.panel-skill-select');
-    if (skillSel) skillSel.addEventListener('change', () => {
+    // Agent selector
+    const agentSel = el.querySelector('.panel-agent-select');
+    if (agentSel) agentSel.addEventListener('change', () => {
       const panel = this.getPanel(panelId);
-      if (panel) panel.selectedSkill = skillSel.value || null;
+      if (panel) {
+        panel.selectedAgent = agentSel.value || null;
+        // Auto-fill project path from agent's default project_path
+        const agent = this.state.agents.find(s => s.id === agentSel.value);
+        if (agent && agent.project_path) {
+          panel.projectPath = agent.project_path;
+          const projInput = el.querySelector('.panel-project-path');
+          if (projInput) projInput.value = agent.project_path;
+        }
+      }
     });
     // Project path
     const projInput = el.querySelector('.panel-project-path');
     if (projInput) projInput.addEventListener('change', () => {
       const panel = this.getPanel(panelId);
-      if (panel) panel.projectPath = projInput.value.trim() || null;
+      if (panel) {
+        panel.projectPath = projInput.value.trim() || null;
+        if (panel.projectPath) localStorage.setItem('chitty-default-project-path', panel.projectPath);
+      }
     });
     // History
     const histBtn = el.querySelector('.history-btn');
@@ -1418,14 +2041,14 @@ const App = {
     }
   },
 
-  /* ── Skills ─────────────────────────────────────────────────── */
-  async loadSkills() {
+  /* ── Agents ─────────────────────────────────────────────────── */
+  async loadAgents() {
     try {
-      const resp = await fetch('/api/skills');
+      const resp = await fetch('/api/agents');
       const data = await resp.json();
-      this.state.skills = data.skills || [];
-      this.renderSkillSelect();
-    } catch (e) { console.error('loadSkills:', e); }
+      this.state.agents = data.agents || [];
+      this.renderAgentSelect();
+    } catch (e) { console.error('loadAgents:', e); }
   },
 
   async loadAvailableTools() {
@@ -1436,71 +2059,85 @@ const App = {
     } catch (e) { console.error('loadTools:', e); }
   },
 
-  renderSkillSelect() {
-    // Update skill dropdowns in all existing panels
-    document.querySelectorAll('.panel-skill-select').forEach(sel => {
+  renderAgentSelect() {
+    // Update agent dropdowns in all existing panels
+    document.querySelectorAll('.panel-agent-select').forEach(sel => {
       const current = sel.value;
-      let html = '<option value="">No Skill</option>';
-      for (const sk of this.state.skills) {
+      let html = '<option value="">No Agent</option>';
+      for (const sk of this.state.agents) {
         html += `<option value="${esc(sk.id)}" ${current === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`;
       }
       sel.innerHTML = html;
     });
   },
 
-  async renderSkillsSettings() {
-    const c = document.getElementById('skills-settings');
+  async renderAgentsSettings() {
+    const c = document.getElementById('agents-settings');
     await this.loadAvailableTools();
-    await this.loadSkills();
+    await this.loadAgents();
 
     let html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
-    html += '<div class="model-section-title" style="margin:0;">Your Skills</div>';
-    html += '<button class="discover-btn" id="create-skill-btn">+ Create Skill</button>';
-    html += '</div>';
+    html += '<div class="model-section-title" style="margin:0;">Your Agents</div>';
+    html += '<div style="display:flex;gap:6px;">';
+    html += '<button class="discover-btn" id="agent-builder-btn">Agent Builder</button>';
+    html += '<button class="discover-btn" id="create-agent-btn" style="background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border);">+ Manual</button>';
+    html += '</div></div>';
 
-    if (!this.state.skills.length) {
-      html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No skills yet. Create one to get started.</div>';
+    if (!this.state.agents.length) {
+      html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No agents yet. Create one to get started.</div>';
     }
 
-    for (const sk of this.state.skills) {
+    for (const sk of this.state.agents) {
       const tools = (sk.tools || []).join(', ') || 'all tools';
-      html += `<div class="skill-item">
-        <div class="skill-item-info">
-          <div class="skill-item-name">${esc(sk.name)}</div>
-          <div class="skill-item-desc">${esc(sk.description)}</div>
-          <div class="skill-item-tags">Tools: ${esc(tools)}${sk.max_iterations ? ' &middot; max ' + sk.max_iterations + ' iterations' : ''}</div>
+      html += `<div class="agent-item">
+        <div class="agent-item-info">
+          <div class="agent-item-name">${esc(sk.name)}</div>
+          <div class="agent-item-desc">${esc(sk.description)}</div>
+          <div class="agent-item-tags">Tools: ${esc(tools)}${sk.max_iterations ? ' &middot; max ' + sk.max_iterations + ' iterations' : ''}</div>
         </div>
-        <button class="skill-edit-btn" data-skill-id="${esc(sk.id)}">Edit</button>
-        <button class="skill-delete-btn" data-skill-id="${esc(sk.id)}">Delete</button>
+        <button class="agent-edit-btn" data-agent-id="${esc(sk.id)}">Edit</button>
+        <button class="agent-delete-btn" data-agent-id="${esc(sk.id)}">Delete</button>
       </div>`;
     }
 
-    html += '<div id="skill-form-container"></div>';
+    html += '<div id="agent-form-container"></div>';
     c.innerHTML = html;
 
     // Bind buttons
-    document.getElementById('create-skill-btn')?.addEventListener('click', () => this.showSkillForm());
-    c.querySelectorAll('.skill-edit-btn').forEach(btn => {
-      btn.addEventListener('click', () => this.showSkillForm(btn.dataset.skillId));
+    document.getElementById('agent-builder-btn')?.addEventListener('click', () => this.showAgentBuilder());
+    document.getElementById('create-agent-btn')?.addEventListener('click', () => this.showAgentForm());
+    c.querySelectorAll('.agent-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => this.showAgentForm(btn.dataset.agentId));
     });
-    c.querySelectorAll('.skill-delete-btn').forEach(btn => {
+    c.querySelectorAll('.agent-delete-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
-        if (!confirm('Delete this skill?')) return;
-        await fetch(`/api/skills/${btn.dataset.skillId}`, { method: 'DELETE' });
-        // Clear from any panels using this skill
-        this.state.panels.forEach(p => { if (p.selectedSkill === btn.dataset.skillId) p.selectedSkill = null; });
-        await this.renderSkillsSettings();
-        await this.loadSkills();
+        if (!confirm('Delete this agent?')) return;
+        await fetch(`/api/agents/${btn.dataset.agentId}`, { method: 'DELETE' });
+        // Clear from any panels using this agent
+        this.state.panels.forEach(p => { if (p.selectedAgent === btn.dataset.agentId) p.selectedAgent = null; });
+        await this.renderAgentsSettings();
+        await this.loadAgents();
       });
     });
   },
 
-  showSkillForm(editId) {
-    const existing = editId ? this.state.skills.find(s => s.id === editId) : null;
-    const container = document.getElementById('skill-form-container');
+  async showAgentForm(editId) {
+    let existing = null;
+    if (editId) {
+      try {
+        const resp = await fetch(`/api/agents/${editId}`);
+        if (resp.ok) existing = await resp.json();
+      } catch (e) { console.error('Failed to load agent:', e); }
+    }
+    const container = document.getElementById('agent-form-container');
 
     let toolChecks = '';
+    let addedMarketplaceSeparator = false;
     for (const t of this.state.availableTools) {
+      if (!addedMarketplaceSeparator && t.name.startsWith('gcloud_')) {
+        toolChecks += '<div style="width:100%;font-size:11px;color:var(--text-muted);font-weight:600;margin:8px 0 4px;padding-top:8px;border-top:1px solid var(--border);">\u2500\u2500 Google Cloud \u2500\u2500</div>';
+        addedMarketplaceSeparator = true;
+      }
       const checked = existing ? (existing.tools || []).includes(t.name) : false;
       toolChecks += `<label class="tool-checkbox${checked ? ' checked' : ''}">
         <input type="checkbox" value="${esc(t.name)}" ${checked ? 'checked' : ''} />
@@ -1508,27 +2145,30 @@ const App = {
       </label>`;
     }
 
-    container.innerHTML = `<div class="skill-form">
-      <div class="model-section-title">${existing ? 'Edit Skill' : 'Create Skill'}</div>
+    container.innerHTML = `<div class="agent-form">
+      <div class="model-section-title">${existing ? 'Edit Agent' : 'Create Agent'}</div>
       <label>Name</label>
       <input id="sf-name" value="${esc(existing?.name || '')}" placeholder="e.g. Code Assistant" />
       <label>Description</label>
-      <input id="sf-desc" value="${esc(existing?.description || '')}" placeholder="Short description of what this skill does" />
+      <input id="sf-desc" value="${esc(existing?.description || '')}" placeholder="Short description of what this agent does" />
       <label>Instructions (System Prompt)</label>
       <textarea id="sf-instructions" placeholder="Describe the agent's role and task. You do NOT need to describe how to use tools.">${esc(existing?.instructions || '')}</textarea>
       <div class="hint">Tool usage instructions are automatically included from the tools themselves.</div>
       <label>Tools</label>
       <div class="tool-checkboxes" id="sf-tools">${toolChecks || '<span style="font-size:12px;color:var(--text-muted);">No tools registered</span>'}</div>
       <div class="hint">Leave all unchecked to give access to all tools.</div>
+      <label>Default Project Path</label>
+      <input id="sf-project-path" value="${esc(existing?.project_path || '')}" placeholder="C:\\path\\to\\project (optional — auto-fills when agent selected)" />
+      <div class="hint">When this agent is selected, this path will be used as the default working directory.</div>
       <label>Execution Config</label>
       <div class="exec-config">
         <div class="config-field"><label>Max Iterations</label><input type="number" id="sf-max-iter" value="${existing?.max_iterations || 10}" min="1" max="100" /></div>
         <div class="config-field"><label>Temperature</label><input type="number" id="sf-temp" value="${existing?.temperature ?? ''}" min="0" max="2" step="0.1" placeholder="default" /></div>
         <div class="config-field"><label>Max Tokens</label><input type="number" id="sf-max-tokens" value="${existing?.max_tokens ?? ''}" placeholder="default" /></div>
       </div>
-      <div class="skill-form-actions">
-        <button class="skill-save-btn" id="sf-save">${existing ? 'Update' : 'Create'}</button>
-        <button class="skill-cancel-btn" id="sf-cancel">Cancel</button>
+      <div class="agent-form-actions">
+        <button class="agent-save-btn" id="sf-save">${existing ? 'Update' : 'Create'}</button>
+        <button class="agent-cancel-btn" id="sf-cancel">Cancel</button>
       </div>
     </div>`;
 
@@ -1550,12 +2190,13 @@ const App = {
         description: document.getElementById('sf-desc').value.trim(),
         instructions: document.getElementById('sf-instructions').value,
         tools: selectedTools,
+        project_path: document.getElementById('sf-project-path').value.trim() || null,
         max_iterations: parseInt(document.getElementById('sf-max-iter').value) || null,
         temperature: parseFloat(document.getElementById('sf-temp').value) || null,
         max_tokens: parseInt(document.getElementById('sf-max-tokens').value) || null,
       };
 
-      const url = existing ? `/api/skills/${editId}` : '/api/skills';
+      const url = existing ? `/api/agents/${editId}` : '/api/agents';
       const method = existing ? 'PUT' : 'POST';
 
       try {
@@ -1564,10 +2205,261 @@ const App = {
           body: JSON.stringify(body),
         });
         if (resp.ok) {
-          await this.renderSkillsSettings();
-          await this.loadSkills();
+          await this.renderAgentsSettings();
+          await this.loadAgents();
         } else {
-          alert('Error saving skill: ' + await resp.text());
+          alert('Error saving agent: ' + await resp.text());
+        }
+      } catch (e) { alert('Error: ' + e.message); }
+    });
+  },
+
+  /* ── Agent Builder (AI-powered) ─────────────────────────────── */
+  showAgentBuilder(prefillDescription) {
+    const container = document.getElementById('agent-form-container');
+    container.innerHTML = `<div class="agent-builder">
+      <div class="model-section-title">Agent Builder</div>
+      <p style="font-size:12px;color:var(--text-secondary);margin:4px 0 12px;line-height:1.5;">
+        Describe what you want your agent to do in plain language. The AI will inspect available tools and design a complete agent definition for you.
+      </p>
+      <textarea class="describe-input" id="sb-description"
+        placeholder="Example: Create an agent that helps me write and refactor Rust code. It should be able to read files, search code, and write changes. It should follow Rust best practices and always handle errors properly.">${esc(prefillDescription || '')}</textarea>
+      <div class="agent-builder-actions">
+        <button class="generate-btn" id="sb-generate">Generate Agent</button>
+        <button class="agent-cancel-btn" id="sb-cancel">Cancel</button>
+      </div>
+    </div>`;
+
+    document.getElementById('sb-cancel').addEventListener('click', () => { container.innerHTML = ''; });
+    document.getElementById('sb-generate').addEventListener('click', () => this.generateAgentFromBuilder());
+    // Focus the textarea
+    document.getElementById('sb-description')?.focus();
+  },
+
+  async generateAgentFromBuilder() {
+    const description = document.getElementById('sb-description')?.value?.trim();
+    if (!description) return alert('Please describe what you want the agent to do.');
+
+    const container = document.getElementById('agent-form-container');
+
+    // Show loading state with progress log
+    container.innerHTML = `<div class="agent-builder">
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <div>Generating agent definition...</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Using default agent</div>
+      </div>
+      <div class="progress-log" id="sb-progress"></div>
+    </div>`;
+
+    const progressLog = document.getElementById('sb-progress');
+    const addProgress = (msg, cls) => {
+      const div = document.createElement('div');
+      if (cls) div.className = cls;
+      div.textContent = msg;
+      progressLog.appendChild(div);
+      progressLog.scrollTop = progressLog.scrollHeight;
+    };
+
+    try {
+      const resp = await fetch('/api/agent-builder/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.text();
+        throw new Error(err);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let suggestion = null;
+      let fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            var currentEvent = line.slice(6).trim();
+          } else if (line.startsWith('data:') && currentEvent) {
+            try {
+              const data = JSON.parse(line.slice(5).trim());
+              if (currentEvent === 'text' && data.content) {
+                // Check if this is a result event embedded in text
+                try {
+                  const parsed = JSON.parse(data.content);
+                  if (parsed.type === 'result' && parsed.suggestion) {
+                    suggestion = parsed.suggestion;
+                    addProgress('Agent definition generated successfully!', 'tool-event');
+                  }
+                } catch {
+                  // Regular text chunk — accumulate
+                  fullText += data.content;
+                }
+              } else if (currentEvent === 'tool_call_start' && data.tool_name) {
+                addProgress(`Calling ${data.tool_name}...`, 'tool-event');
+              } else if (currentEvent === 'tool_result' && data.tool_name) {
+                addProgress(`${data.tool_name} returned results`, 'tool-event');
+              } else if (currentEvent === 'error' && data.error) {
+                addProgress(`Error: ${data.error}`);
+                throw new Error(data.error);
+              } else if (currentEvent === 'done') {
+                // If we didn't get a structured result, try parsing accumulated text
+                if (!suggestion && fullText) {
+                  try {
+                    suggestion = JSON.parse(fullText.trim());
+                  } catch {
+                    // Try extracting JSON from code fences
+                    const match = fullText.match(/```(?:json)?\s*([\s\S]*?)```/);
+                    if (match) {
+                      try { suggestion = JSON.parse(match[1].trim()); } catch {}
+                    }
+                    // Try first { to last }
+                    if (!suggestion) {
+                      const start = fullText.indexOf('{');
+                      const end = fullText.lastIndexOf('}');
+                      if (start !== -1 && end > start) {
+                        try { suggestion = JSON.parse(fullText.substring(start, end + 1)); } catch {}
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (parseErr) {
+              // Skip unparseable SSE data
+            }
+            currentEvent = null;
+          }
+        }
+      }
+
+      if (suggestion) {
+        this.showAgentFormFromSuggestion(suggestion, description);
+      } else {
+        alert('Could not parse agent definition from AI response. Please try again.');
+        this.showAgentBuilder(description);
+      }
+    } catch (e) {
+      alert('Error generating agent: ' + e.message);
+      this.showAgentBuilder(description);
+    }
+  },
+
+  showAgentFormFromSuggestion(suggestion, originalDescription) {
+    const container = document.getElementById('agent-form-container');
+
+    // Build tool checkboxes, pre-checking AI-recommended tools
+    let toolChecks = '';
+    let addedMarketplaceSeparator = false;
+    for (const t of this.state.availableTools) {
+      if (!addedMarketplaceSeparator && t.name.startsWith('gcloud_')) {
+        toolChecks += '<div style="width:100%;font-size:11px;color:var(--text-muted);font-weight:600;margin:8px 0 4px;padding-top:8px;border-top:1px solid var(--border);">\u2500\u2500 Google Cloud \u2500\u2500</div>';
+        addedMarketplaceSeparator = true;
+      }
+      const checked = (suggestion.tools || []).includes(t.name);
+      toolChecks += `<label class="tool-checkbox${checked ? ' checked' : ''}">
+        <input type="checkbox" value="${esc(t.name)}" ${checked ? 'checked' : ''} />
+        ${esc(t.display_name || t.name)}
+      </label>`;
+    }
+
+    // AI notes
+    let notesHtml = '';
+    if (suggestion.notes) {
+      notesHtml = `<div class="ai-notes"><strong>AI Notes:</strong> ${esc(suggestion.notes)}</div>`;
+    }
+
+    // Marketplace tools
+    let marketplaceHtml = '';
+    if (suggestion.marketplace_tools && suggestion.marketplace_tools.length) {
+      marketplaceHtml = `<div class="marketplace-note">
+        <div class="section-label">Suggested Marketplace Tools</div>
+        <div>These additional tools would enhance this agent when available:</div>
+        <div style="margin-top:4px;">${suggestion.marketplace_tools.map(t => `<span class="mp-tool">${esc(t)}</span>`).join('')}</div>
+      </div>`;
+    }
+
+    container.innerHTML = `<div class="agent-form">
+      <div class="model-section-title">Review AI-Generated Agent</div>
+      ${notesHtml}
+      ${marketplaceHtml}
+      <label>Name</label>
+      <input id="sf-name" value="${esc(suggestion.name || '')}" />
+      <label>Description</label>
+      <input id="sf-desc" value="${esc(suggestion.description || '')}" />
+      <label>Instructions (System Prompt)</label>
+      <textarea id="sf-instructions">${esc(suggestion.instructions || '')}</textarea>
+      <div class="hint">Tool usage instructions are automatically included from the tools themselves.</div>
+      <label>Tools</label>
+      <div class="tool-checkboxes" id="sf-tools">${toolChecks || '<span style="font-size:12px;color:var(--text-muted);">No tools registered</span>'}</div>
+      <div class="hint">Leave all unchecked to give access to all tools.</div>
+      <label>Default Project Path</label>
+      <input id="sf-project-path" value="" placeholder="e.g. C:\\projects\\myapp (optional)" />
+      <div class="hint">When this agent is selected, this path will be used as the default working directory.</div>
+      <label>Execution Config</label>
+      <div class="exec-config">
+        <div class="config-field"><label>Max Iterations</label><input type="number" id="sf-max-iter" value="${suggestion.max_iterations || 10}" min="1" max="100" /></div>
+        <div class="config-field"><label>Temperature</label><input type="number" id="sf-temp" value="${suggestion.temperature ?? ''}" min="0" max="2" step="0.1" placeholder="default" /></div>
+        <div class="config-field"><label>Max Tokens</label><input type="number" id="sf-max-tokens" value="${suggestion.max_tokens ?? ''}" placeholder="default" /></div>
+      </div>
+      <div class="agent-form-actions">
+        <button class="agent-save-btn" id="sf-save">Save Agent</button>
+        <button class="agent-cancel-btn" id="sf-regenerate">Regenerate</button>
+        <button class="agent-cancel-btn" id="sf-cancel">Cancel</button>
+      </div>
+    </div>`;
+
+    // Toggle checked class on checkboxes
+    container.querySelectorAll('.tool-checkbox input').forEach(cb => {
+      cb.addEventListener('change', () => cb.parentElement.classList.toggle('checked', cb.checked));
+    });
+
+    document.getElementById('sf-cancel').addEventListener('click', () => { container.innerHTML = ''; });
+
+    // Regenerate — go back to builder with original description
+    document.getElementById('sf-regenerate').addEventListener('click', () => {
+      this.showAgentBuilder(originalDescription);
+    });
+
+    // Save — POST to /api/agents
+    document.getElementById('sf-save').addEventListener('click', async () => {
+      const name = document.getElementById('sf-name').value.trim();
+      if (!name) return alert('Name is required');
+
+      const selectedTools = [];
+      container.querySelectorAll('.tool-checkbox input:checked').forEach(cb => selectedTools.push(cb.value));
+
+      const body = {
+        name,
+        description: document.getElementById('sf-desc').value.trim(),
+        instructions: document.getElementById('sf-instructions').value,
+        tools: selectedTools,
+        project_path: document.getElementById('sf-project-path').value.trim() || null,
+        max_iterations: parseInt(document.getElementById('sf-max-iter').value) || null,
+        temperature: parseFloat(document.getElementById('sf-temp').value) || null,
+        max_tokens: parseInt(document.getElementById('sf-max-tokens').value) || null,
+      };
+
+      try {
+        const resp = await fetch('/api/agents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (resp.ok) {
+          await this.renderAgentsSettings();
+          await this.loadAgents();
+        } else {
+          alert('Error saving agent: ' + await resp.text());
         }
       } catch (e) { alert('Error: ' + e.message); }
     });
@@ -1615,6 +2507,202 @@ const App = {
       c.innerHTML = html;
     } catch (e) {
       c.innerHTML = `<div style="font-size:12px;color:var(--danger);">Error loading usage: ${esc(e.message)}</div>`;
+    }
+  },
+
+  /* ── Marketplace ─────────────────────────────────────────────── */
+  async renderMarketplaceSettings() {
+    const container = document.getElementById('marketplace-settings');
+    if (!container) return;
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px;">Loading marketplace...</div>';
+
+    try {
+      const resp = await fetch('/api/marketplace/packages');
+      const data = await resp.json();
+      const packages = data.packages || [];
+
+      if (packages.length === 0) {
+        container.innerHTML = `
+          <div class="model-section-title">Marketplace</div>
+          <div style="font-size:12px;color:var(--text-muted);padding:16px 0;">
+            No marketplace packages installed.<br>
+            Packages will be available for download from datavisions.io.
+          </div>`;
+        return;
+      }
+
+      let html = '<div class="model-section-title">Installed Packages</div>';
+
+      for (const pkg of packages) {
+        // Check auth status
+        let authHtml = '';
+        try {
+          const authResp = await fetch('/api/marketplace/packages/' + encodeURIComponent(pkg.name) + '/auth-status');
+          const authData = await authResp.json();
+          if (authData.authenticated) {
+            const projectInfo = authData.project ? ' \u00b7 Project: ' + esc(authData.project) : '';
+            authHtml = '<span class="marketplace-auth-status connected">\u2713 Connected' + projectInfo + '</span>';
+          } else {
+            authHtml = '<span class="marketplace-auth-status disconnected">\u2717 Not authenticated</span>';
+          }
+        } catch (e) {
+          authHtml = '<span class="marketplace-auth-status disconnected">\u2717 Status unknown</span>';
+        }
+
+        const toolChips = (pkg.tools || []).map(t =>
+          '<span class="marketplace-tool-chip">' + esc(t.display_name || t.name) + '</span>'
+        ).join('');
+
+        const requirements = (pkg.requirements || []).map(r => '\u2022 ' + esc(r)).join('<br>');
+        const reqHtml = requirements ? '<div class="marketplace-requirements">' + requirements + '</div>' : '';
+
+        const authInstructions = pkg.auth ? esc(pkg.auth.instructions) : '';
+
+        html += '<div class="marketplace-tile">' +
+          '<div class="marketplace-tile-header">' +
+            '<div class="marketplace-tile-icon" style="background:' + esc(pkg.color || '#666') + ';">\u2601</div>' +
+            '<div class="marketplace-tile-info">' +
+              '<div class="marketplace-tile-name">' + esc(pkg.display_name) + '</div>' +
+              '<div class="marketplace-tile-vendor">by ' + esc(pkg.vendor) + ' \u00b7 v' + esc(pkg.version) + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="marketplace-tile-desc">' + esc(pkg.description) + '</div>' +
+          authHtml +
+          '<div class="marketplace-tool-list">' + toolChips + '</div>' +
+          reqHtml +
+          '<div class="marketplace-tile-actions">' +
+            '<button class="primary" data-setup-pkg="' + esc(pkg.name) + '">Set Up</button>' +
+          '</div>' +
+          '<div class="setup-progress" id="setup-' + esc(pkg.name) + '" style="display:none;margin-top:12px;"></div>' +
+        '</div>';
+      }
+
+      container.innerHTML = html;
+
+      // Bind setup buttons
+      const self = this;
+      container.querySelectorAll('[data-setup-pkg]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const vendor = btn.dataset.setupPkg;
+          const progressDiv = document.getElementById('setup-' + vendor);
+          if (!progressDiv) return;
+
+          btn.disabled = true;
+          btn.textContent = 'Setting up...';
+          progressDiv.style.display = 'block';
+          progressDiv.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Checking requirements...</div>';
+
+          // First run without user values to see what's needed
+          let userValues = {};
+          let maxAttempts = 3;
+
+          for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+              const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/setup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ values: userValues }),
+              });
+              const data = await resp.json();
+
+              // Render step results
+              let stepsHtml = '';
+              let needsInput = false;
+              let inputStepId = null;
+
+              for (const step of (data.steps || [])) {
+                let icon = '';
+                let statusClass = '';
+                let extra = '';
+
+                switch (step.status) {
+                  case 'already_done':
+                    icon = '\u2713';
+                    statusClass = 'color:#22c55e;';
+                    break;
+                  case 'completed':
+                    icon = '\u2713';
+                    statusClass = 'color:#22c55e;';
+                    break;
+                  case 'failed':
+                    icon = '\u2717';
+                    statusClass = 'color:#ef4444;';
+                    extra = '<div style="font-size:11px;color:#ef4444;margin:2px 0 0 24px;">' + esc(step.message || '') + '</div>';
+                    if (step.help_url) {
+                      extra += '<div style="font-size:11px;margin:2px 0 0 24px;"><a href="' + esc(step.help_url) + '" target="_blank" style="color:var(--accent);">Help: ' + esc(step.help_url) + '</a></div>';
+                    }
+                    break;
+                  case 'needs_input':
+                    icon = '?';
+                    statusClass = 'color:var(--accent);';
+                    needsInput = true;
+                    inputStepId = step.step_id;
+                    extra = '<div style="margin:8px 0 0 24px;">' +
+                      '<label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:4px;">' + esc(step.prompt_label || 'Enter value') + '</label>' +
+                      '<input type="text" id="setup-input-' + esc(step.step_id) + '" placeholder="' + esc(step.prompt_placeholder || '') + '" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text-primary);font-size:12px;width:100%;box-sizing:border-box;" />' +
+                      (step.prompt_help ? '<div style="font-size:10px;color:var(--text-muted);margin-top:3px;">' + esc(step.prompt_help) + '</div>' : '') +
+                      '<button class="primary" id="setup-submit-' + esc(step.step_id) + '" style="margin-top:6px;padding:5px 14px;font-size:11px;">Continue</button>' +
+                      '</div>';
+                    break;
+                  default:
+                    icon = '\u25CB';
+                    statusClass = 'color:var(--text-muted);';
+                }
+
+                stepsHtml += '<div style="display:flex;align-items:flex-start;gap:8px;margin:6px 0;font-size:12px;">' +
+                  '<span style="' + statusClass + 'font-weight:600;width:16px;flex-shrink:0;">' + icon + '</span>' +
+                  '<span style="color:var(--text-primary);">' + esc(step.label) + '</span>' +
+                  '</div>' + extra;
+              }
+
+              if (data.success) {
+                stepsHtml += '<div style="margin-top:10px;font-size:12px;color:#22c55e;font-weight:600;">\u2713 Package ready!</div>';
+                progressDiv.innerHTML = stepsHtml;
+                btn.textContent = '\u2713 Installed';
+                btn.style.background = '#22c55e';
+                btn.style.borderColor = '#22c55e';
+                await new Promise(r => setTimeout(r, 2000));
+                self.renderMarketplaceSettings();
+                return;
+              }
+
+              progressDiv.innerHTML = stepsHtml;
+
+              if (needsInput && inputStepId) {
+                // Wait for user to fill in input and click Continue
+                btn.textContent = 'Waiting for input...';
+                await new Promise((resolve) => {
+                  const submitBtn = document.getElementById('setup-submit-' + inputStepId);
+                  if (submitBtn) {
+                    submitBtn.addEventListener('click', () => {
+                      const input = document.getElementById('setup-input-' + inputStepId);
+                      if (input && input.value.trim()) {
+                        userValues[inputStepId] = input.value.trim();
+                        btn.textContent = 'Setting up...';
+                        resolve();
+                      }
+                    });
+                  }
+                });
+                continue; // Re-run setup with the new value
+              }
+
+              // Failed and no input needed — stop
+              btn.textContent = 'Setup incomplete';
+              btn.disabled = false;
+              return;
+
+            } catch (e) {
+              progressDiv.innerHTML = '<div style="font-size:12px;color:#ef4444;">Error: ' + esc(e.message) + '</div>';
+              btn.textContent = 'Retry Setup';
+              btn.disabled = false;
+              return;
+            }
+          }
+        });
+      });
+    } catch (e) {
+      container.innerHTML = '<div style="color:var(--danger);font-size:12px;">Error loading marketplace: ' + e.message + '</div>';
     }
   },
 };

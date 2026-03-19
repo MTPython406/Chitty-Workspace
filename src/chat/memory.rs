@@ -1,12 +1,12 @@
 //! Memory system
 //!
 //! Persistent knowledge the agent retains across sessions.
-//! Memories are scoped (global, per-project, per-skill) and typed
+//! Memories are scoped (global, per-project, per-agent) and typed
 //! (user, feedback, project, reference).
 //!
 //! The agent can save, recall, update, and delete memories.
 //! Relevant memories are loaded at conversation start based on
-//! the active project and skill.
+//! the active project and agent.
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -58,8 +58,8 @@ pub enum MemoryScope {
     Global,
     /// Applies to a specific project directory
     Project,
-    /// Applies when a specific skill is active
-    Skill,
+    /// Applies when a specific agent is active
+    Agent,
 }
 
 impl std::fmt::Display for MemoryScope {
@@ -67,7 +67,7 @@ impl std::fmt::Display for MemoryScope {
         match self {
             Self::Global => write!(f, "global"),
             Self::Project => write!(f, "project"),
-            Self::Skill => write!(f, "skill"),
+            Self::Agent => write!(f, "agent"),
         }
     }
 }
@@ -118,11 +118,11 @@ impl MemoryManager {
     }
 
     /// Load all memories relevant to the current context
-    /// Returns: global memories + project-scoped + skill-scoped
+    /// Returns: global memories + project-scoped + agent-scoped
     pub fn load_relevant(
         conn: &Connection,
         project_path: Option<&str>,
-        skill_id: Option<&str>,
+        agent_id: Option<&str>,
     ) -> Result<Vec<Memory>> {
         let mut sql = String::from(
             "SELECT id, memory_type, name, description, content, scope, scope_ref, tags, created_at, updated_at
@@ -135,9 +135,9 @@ impl MemoryManager {
             params.push(Box::new(project.to_string()));
         }
 
-        if let Some(skill) = skill_id {
-            sql.push_str(" UNION ALL SELECT id, memory_type, name, description, content, scope, scope_ref, tags, created_at, updated_at FROM memories WHERE scope = 'skill' AND scope_ref = ?");
-            params.push(Box::new(skill.to_string()));
+        if let Some(agent) = agent_id {
+            sql.push_str(" UNION ALL SELECT id, memory_type, name, description, content, scope, scope_ref, tags, created_at, updated_at FROM memories WHERE scope = 'agent' AND scope_ref = ?");
+            params.push(Box::new(agent.to_string()));
         }
 
         sql.push_str(" ORDER BY updated_at DESC");
@@ -156,7 +156,7 @@ impl MemoryManager {
                 content: row.get(4)?,
                 scope: match row.get::<_, String>(5)?.as_str() {
                     "project" => MemoryScope::Project,
-                    "skill" => MemoryScope::Skill,
+                    "agent" => MemoryScope::Agent,
                     _ => MemoryScope::Global,
                 },
                 scope_ref: row.get(6)?,
@@ -202,7 +202,7 @@ impl MemoryManager {
                 content: row.get(4)?,
                 scope: match row.get::<_, String>(5)?.as_str() {
                     "project" => MemoryScope::Project,
-                    "skill" => MemoryScope::Skill,
+                    "agent" => MemoryScope::Agent,
                     _ => MemoryScope::Global,
                 },
                 scope_ref: row.get(6)?,

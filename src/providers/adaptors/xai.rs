@@ -24,7 +24,10 @@ pub struct XaiProvider {
 impl XaiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             api_key,
             base_url: base_url.unwrap_or_else(|| "https://api.x.ai/v1".to_string()),
         }
@@ -72,7 +75,9 @@ impl XaiProvider {
                             "role": "assistant",
                             "tool_calls": tc,
                         });
-                        if !msg.content.is_empty() {
+                        if msg.content.is_empty() {
+                            obj["content"] = serde_json::Value::Null;
+                        } else {
                             obj["content"] = serde_json::Value::String(msg.content.clone());
                         }
                         obj
@@ -345,6 +350,12 @@ impl Provider for XaiProvider {
     ) -> Result<()> {
         let body = self.build_request_body(model, messages, tools, true);
 
+        // Log request details for debugging
+        let msg_count = messages.len();
+        let tool_count = tools.map_or(0, |t| t.len());
+        let body_size = serde_json::to_string(&body).map(|s| s.len()).unwrap_or(0);
+        tracing::info!("xAI chat_stream: model={}, messages={}, tools={}, body_size={}", model, msg_count, tool_count, body_size);
+
         let response = self
             .client
             .post(format!("{}/chat/completions", self.base_url))
@@ -355,9 +366,12 @@ impl Provider for XaiProvider {
             .await
             .context("Failed to send request to xAI")?;
 
+        tracing::info!("xAI response status: {}", response.status());
+
         if !response.status().is_success() {
             let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
+            tracing::error!("xAI API error ({}): {}", status, error_body);
             let _ = tx
                 .send(StreamChunk::Error(format!(
                     "xAI API error ({}): {}",
@@ -412,7 +426,14 @@ impl Provider for XaiProvider {
                         .map(|s| s.to_string());
 
                     if let Some(delta) = choice.get("delta") {
-                        // Text content
+                        // Reasoning content (thinking) — send as Thinking event, not Text
+                        if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+                            if !reasoning.is_empty() {
+                                let _ = tx.send(StreamChunk::Thinking(reasoning.to_string())).await;
+                            }
+                        }
+
+                        // Text content (actual response)
                         if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                             if !content.is_empty() {
                                 let _ = tx.send(StreamChunk::Text(content.to_string())).await;
