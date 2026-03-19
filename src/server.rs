@@ -117,14 +117,18 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
     {
         let rt = tool_runtime.read().await;
         let marketplace_dir = rt.tools_dir().join("marketplace");
-        let google_cloud_dir = marketplace_dir.join("google-cloud");
-        if !google_cloud_dir.exists() {
-            // Seed from bundled assets
-            let assets_dir = std::path::Path::new("assets/marketplace/google-cloud");
-            if assets_dir.exists() {
-                tracing::info!("Seeding Google Cloud marketplace package...");
-                if let Err(e) = copy_dir_recursive(assets_dir, &google_cloud_dir) {
-                    tracing::warn!("Failed to seed Google Cloud package: {}", e);
+
+        // Seed each bundled package
+        let packages = ["google-cloud", "web-tools", "social-media"];
+        for pkg_name in &packages {
+            let pkg_dir = marketplace_dir.join(pkg_name);
+            if !pkg_dir.exists() {
+                let assets_dir = std::path::Path::new("assets/marketplace").join(pkg_name);
+                if assets_dir.exists() {
+                    tracing::info!("Seeding marketplace package: {}", pkg_name);
+                    if let Err(e) = copy_dir_recursive(&assets_dir, &pkg_dir) {
+                        tracing::warn!("Failed to seed {} package: {}", pkg_name, e);
+                    }
                 }
             }
         }

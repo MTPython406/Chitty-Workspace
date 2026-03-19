@@ -1,0 +1,22 @@
+{
+  "name": "social-media",
+  "display_name": "Social Media",
+  "vendor": "Chitty",
+  "description": "Create and schedule social media content for X/Twitter, LinkedIn, Facebook, and Instagram. Uses Chitty Browser for posting.",
+  "version": "1.0.0",
+  "icon": "share",
+  "color": "#1d9bf0",
+  "status": "not_installed",
+  "tools": [
+    "x-twitter"
+  ],
+  "setup_steps": [
+    {
+      "id": "check_browser",
+      "label": "Verify Chitty Browser is available",
+      "check_command": "echo browser_ready",
+      "help_text": "The Social Media package uses Chitty Browser to log into and post on social platforms.",
+      "required": true
+    }
+  ]
+}

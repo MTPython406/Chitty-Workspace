@@ -1,0 +1,51 @@
+{
+  "name": "social_post_formatter",
+  "display_name": "Social Post Formatter",
+  "description": "Format content for social media platforms (X/Twitter 280 chars, LinkedIn long-form, Facebook, Instagram captions). Returns ready-to-post text.",
+  "version": "1.0.0",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "action": {
+      "type": "string",
+      "description": "Action: 'format' to create platform-specific posts, 'calendar' to generate a content calendar",
+      "required": true
+    },
+    "platform": {
+      "type": "string",
+      "description": "Target platform: 'x' (Twitter/X, 280 chars), 'linkedin' (professional), 'facebook' (casual), 'instagram' (visual caption), 'all' (generate for all platforms)",
+      "required": false
+    },
+    "topic": {
+      "type": "string",
+      "description": "The topic or content to post about",
+      "required": false
+    },
+    "job_data": {
+      "type": "object",
+      "description": "Job posting data: {title, location, url, company}",
+      "required": false
+    },
+    "industry_news": {
+      "type": "string",
+      "description": "Industry news or trend to incorporate into the post",
+      "required": false
+    },
+    "tone": {
+      "type": "string",
+      "description": "Tone: 'professional', 'casual', 'urgent', 'informative' (default: professional)",
+      "required": false
+    },
+    "hashtags": {
+      "type": "boolean",
+      "description": "Include relevant hashtags (default: true)",
+      "required": false
+    }
+  },
+  "timeout_seconds": 15,
+  "permission_tier": "safe",
+  "source": "marketplace",
+  "marketplace_id": "social-media",
+  "instructions": "Use this tool to format social media posts for different platforms. It generates platform-appropriate text with hashtags, character limits, and formatting.\n\n**Actions:**\n- `format` — Generate a post for one or all platforms\n- `calendar` — Generate a week of content ideas\n\n**To post on social media**, use the Browser tool to:\n1. Navigate to the platform (x.com, linkedin.com)\n2. Log in (user does this once)\n3. Use click/type to create a new post\n4. Paste the formatted content\n5. Submit\n\n**Example workflow:**\n1. web_scraper → get job postings from careers page\n2. web_search → find industry news related to the jobs\n3. social_post_formatter → create platform-specific posts\n4. browser → navigate to X.com and post"
+}
