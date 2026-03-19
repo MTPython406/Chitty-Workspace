@@ -141,6 +141,14 @@ impl Provider for AnthropicProvider {
     async fn list_models(&self) -> Result<Vec<Model>> {
         Ok(vec![
             Model {
+                id: "claude-sonnet-4-6".to_string(),
+                provider: ProviderId::Anthropic,
+                display_name: "Claude Sonnet 4.6".to_string(),
+                context_window: Some(1_000_000),
+                supports_tools: true,
+                supports_streaming: true,
+            },
+            Model {
                 id: "claude-sonnet-4-20250514".to_string(),
                 provider: ProviderId::Anthropic,
                 display_name: "Claude Sonnet 4".to_string(),
