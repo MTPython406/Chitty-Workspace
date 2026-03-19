@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "chitty-workspace",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run"],
+      "port": 8770
+    }
+  ]
+}

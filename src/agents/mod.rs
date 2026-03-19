@@ -1,8 +1,8 @@
-//! Skills system
+//! Agents system
 //!
-//! A Skill = System Prompt + Tool Selection + Execution Config
+//! An Agent = System Prompt + Tool Selection + Execution Config
 //!
-//! Skills are simple: the user picks which tools the agent has access to
+//! Agents are simple: the user picks which tools the agent has access to
 //! and writes a system prompt describing the agent's role/task.
 //! Tool usage instructions come FROM the tools themselves (agent instructions),
 //! so the user never has to describe how to use tools.
@@ -11,18 +11,18 @@ use anyhow::Result;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-/// A skill definition
+/// An agent definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Skill {
+pub struct Agent {
     /// Unique identifier
     pub id: String,
     /// Display name
     pub name: String,
-    /// Short description of what this skill does
+    /// Short description of what this agent does
     pub description: String,
     /// System prompt / instructions for the agent (persona/task only — NOT tool usage docs)
     pub instructions: String,
-    /// Tool names this skill uses (empty = all tools)
+    /// Tool names this agent uses (empty = all tools)
     pub tools: Vec<String>,
     /// Optional project directory scope (None = global)
     pub project_path: Option<String>,
@@ -31,12 +31,12 @@ pub struct Skill {
     pub preferred_model: Option<String>,
     /// Tags for organization
     pub tags: Vec<String>,
-    /// Version for skill updates
+    /// Version for agent updates
     pub version: String,
-    /// Whether this skill was AI-generated via Skills Builder
+    /// Whether this agent was AI-generated via Agent Builder
     pub ai_generated: bool,
     // Execution config (mirrors DataVisions agent node properties)
-    /// Max tool call iterations (default 10, coding skills: 25)
+    /// Max tool call iterations (default 10, coding agents: 25)
     pub max_iterations: Option<u32>,
     /// Temperature override (None = use model default)
     pub temperature: Option<f64>,
@@ -44,28 +44,29 @@ pub struct Skill {
     pub max_tokens: Option<u32>,
 }
 
-/// Summary for listing skills (lightweight)
+/// Summary for listing agents (lightweight)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillSummary {
+pub struct AgentSummary {
     pub id: String,
     pub name: String,
     pub description: String,
     pub tools: Vec<String>,
     pub tags: Vec<String>,
     pub max_iterations: Option<u32>,
+    pub project_path: Option<String>,
 }
 
-/// Skills CRUD manager
-pub struct SkillsManager;
+/// Agents CRUD manager
+pub struct AgentsManager;
 
-impl SkillsManager {
-    /// Save a skill (insert or update)
-    pub fn save(conn: &Connection, skill: &Skill) -> Result<()> {
-        let tools_json = serde_json::to_string(&skill.tools)?;
-        let tags_json = serde_json::to_string(&skill.tags)?;
+impl AgentsManager {
+    /// Save an agent (insert or update)
+    pub fn save(conn: &Connection, agent: &Agent) -> Result<()> {
+        let tools_json = serde_json::to_string(&agent.tools)?;
+        let tags_json = serde_json::to_string(&agent.tags)?;
 
         conn.execute(
-            "INSERT INTO skills (id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens)
+            "INSERT INTO agents (id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
@@ -83,37 +84,37 @@ impl SkillsManager {
                 max_tokens = excluded.max_tokens,
                 updated_at = datetime('now')",
             rusqlite::params![
-                skill.id,
-                skill.name,
-                skill.description,
-                skill.instructions,
+                agent.id,
+                agent.name,
+                agent.description,
+                agent.instructions,
                 tools_json,
-                skill.project_path,
-                skill.preferred_provider,
-                skill.preferred_model,
+                agent.project_path,
+                agent.preferred_provider,
+                agent.preferred_model,
                 tags_json,
-                skill.version,
-                skill.ai_generated,
-                skill.max_iterations.map(|v| v as i32),
-                skill.temperature,
-                skill.max_tokens.map(|v| v as i32),
+                agent.version,
+                agent.ai_generated,
+                agent.max_iterations.map(|v| v as i32),
+                agent.temperature,
+                agent.max_tokens.map(|v| v as i32),
             ],
         )?;
         Ok(())
     }
 
-    /// Load a skill by ID
-    pub fn load(conn: &Connection, id: &str) -> Result<Option<Skill>> {
+    /// Load an agent by ID
+    pub fn load(conn: &Connection, id: &str) -> Result<Option<Agent>> {
         let mut stmt = conn.prepare(
             "SELECT id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens
-             FROM skills WHERE id = ?1",
+             FROM agents WHERE id = ?1",
         )?;
 
         let result = stmt
             .query_row(rusqlite::params![id], |row| {
                 let tools_str: String = row.get(4)?;
                 let tags_str: String = row.get(8)?;
-                Ok(Skill {
+                Ok(Agent {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     description: row.get(2)?,
@@ -135,35 +136,36 @@ impl SkillsManager {
         Ok(result)
     }
 
-    /// List all skills (summaries)
-    pub fn list(conn: &Connection) -> Result<Vec<SkillSummary>> {
+    /// List all agents (summaries)
+    pub fn list(conn: &Connection) -> Result<Vec<AgentSummary>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, tools, tags, max_iterations FROM skills ORDER BY name",
+            "SELECT id, name, description, tools, tags, max_iterations, project_path FROM agents ORDER BY name",
         )?;
 
         let rows = stmt.query_map([], |row| {
             let tools_str: String = row.get(3)?;
             let tags_str: String = row.get(4)?;
-            Ok(SkillSummary {
+            Ok(AgentSummary {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 description: row.get(2)?,
                 tools: serde_json::from_str(&tools_str).unwrap_or_default(),
                 tags: serde_json::from_str(&tags_str).unwrap_or_default(),
                 max_iterations: row.get::<_, Option<i32>>(5)?.map(|v| v as u32),
+                project_path: row.get(6)?,
             })
         })?;
 
-        let mut skills = Vec::new();
+        let mut agents = Vec::new();
         for row in rows {
-            skills.push(row?);
+            agents.push(row?);
         }
-        Ok(skills)
+        Ok(agents)
     }
 
-    /// Delete a skill by ID
+    /// Delete an agent by ID
     pub fn delete(conn: &Connection, id: &str) -> Result<bool> {
-        let count = conn.execute("DELETE FROM skills WHERE id = ?1", rusqlite::params![id])?;
+        let count = conn.execute("DELETE FROM agents WHERE id = ?1", rusqlite::params![id])?;
         Ok(count > 0)
     }
 }

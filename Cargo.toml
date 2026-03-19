@@ -2,7 +2,7 @@
 name = "chitty-workspace"
 version = "0.1.0"
 edition = "2021"
-description = "Chitty Workspace - Local AI assistant with skills, tools, and BYOK providers"
+description = "Chitty Workspace - Local AI assistant with agents, tools, and BYOK providers"
 authors = ["DataVisions"]
 license = "MIT"
 
