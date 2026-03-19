@@ -122,11 +122,27 @@ impl ToolRuntime {
                                     tracing::info!("Loaded marketplace package: {} ({} tools)",
                                         pkg_manifest.display_name, pkg_manifest.tools.len());
 
-                                    // Load each tool in the package
+                                    // Load each tool in the package directly
                                     for tool_name in &pkg_manifest.tools {
                                         let tool_dir = vendor_dir.join(tool_name);
-                                        if tool_dir.exists() {
-                                            self.scan_directory(&tool_dir, ToolType::Custom);
+                                        let manifest_path = tool_dir.join("manifest.json");
+                                        if manifest_path.exists() {
+                                            match std::fs::read_to_string(&manifest_path) {
+                                                Ok(content) => match serde_json::from_str::<ToolManifest>(&content) {
+                                                    Ok(manifest) => {
+                                                        tracing::info!("Loaded marketplace tool: {} ({})", manifest.display_name, manifest.name);
+                                                        self.custom_tools.insert(
+                                                            manifest.name.clone(),
+                                                            LoadedCustomTool {
+                                                                manifest,
+                                                                dir: tool_dir,
+                                                            },
+                                                        );
+                                                    }
+                                                    Err(e) => tracing::warn!("Failed to parse tool manifest {:?}: {}", manifest_path, e),
+                                                }
+                                                Err(e) => tracing::warn!("Failed to read tool manifest {:?}: {}", manifest_path, e),
+                                            }
                                         }
                                     }
 

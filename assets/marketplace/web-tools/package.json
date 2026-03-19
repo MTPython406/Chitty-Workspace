@@ -1,0 +1,24 @@
+{
+  "name": "web-tools",
+  "display_name": "Web Tools",
+  "vendor": "Chitty",
+  "description": "Search the web and scrape websites. Extract job postings, news, prices, and any structured data from any URL.",
+  "version": "1.0.0",
+  "icon": "globe",
+  "color": "#8b5cf6",
+  "status": "not_installed",
+  "tools": [
+    "web-search",
+    "web-scraper"
+  ],
+  "setup_steps": [
+    {
+      "id": "install_deps",
+      "label": "Install Python dependencies",
+      "check_command": "pip show duckduckgo-search beautifulsoup4 requests",
+      "install_command": "pip install duckduckgo-search beautifulsoup4 requests lxml",
+      "help_text": "Installs DuckDuckGo search, BeautifulSoup for HTML parsing, and requests for HTTP.",
+      "required": true
+    }
+  ]
+}
