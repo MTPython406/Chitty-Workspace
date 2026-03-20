@@ -196,20 +196,28 @@ impl XaiProvider {
 
     /// Parse token usage from a response or stream final chunk
     fn parse_usage(data: &serde_json::Value) -> Option<TokenUsage> {
-        data.get("usage").map(|u| TokenUsage {
-            prompt_tokens: u
-                .get("prompt_tokens")
+        data.get("usage").map(|u| {
+            // xAI/OpenAI report cached tokens in prompt_tokens_details.cached_tokens
+            let cached = u.get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            completion_tokens: u
-                .get("completion_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            total_tokens: u
-                .get("total_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            cached_tokens: None,
+                .unwrap_or(0) as u32;
+
+            TokenUsage {
+                prompt_tokens: u
+                    .get("prompt_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                completion_tokens: u
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                total_tokens: u
+                    .get("total_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                cached_tokens: if cached > 0 { Some(cached) } else { None },
+            }
         })
     }
 }
@@ -412,9 +420,14 @@ impl Provider for XaiProvider {
             };
 
             // Check for usage in the final chunk (stream_options.include_usage)
-            if let Some(_usage) = Self::parse_usage(&data) {
-                // Token usage from stream — we'll track this via the server
-                // The usage chunk often comes with empty choices
+            if let Some(usage) = Self::parse_usage(&data) {
+                let cached = usage.cached_tokens.unwrap_or(0);
+                let _ = tx.send(StreamChunk::TokenUsage {
+                    input_tokens: usage.prompt_tokens,
+                    output_tokens: usage.completion_tokens,
+                    cache_read_tokens: cached,
+                    cache_write_tokens: 0, // OpenAI/xAI don't report write separately
+                }).await;
             }
 
             // Process choices

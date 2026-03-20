@@ -17,6 +17,10 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Handle a chitty:// protocol URL (e.g. chitty://install/web-tools)
+    #[arg(long = "protocol", hide = true)]
+    protocol_url: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -75,9 +79,18 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    // Handle chitty:// protocol URLs (launched by clicking Install on chitty.ai)
+    if let Some(url) = &cli.protocol_url {
+        return handle_protocol_url(url).await;
+    }
+
     match cli.command.unwrap_or(Commands::Run) {
         Commands::Run => {
             tracing::info!("Starting Chitty Workspace v{}", env!("CARGO_PKG_VERSION"));
+
+            // Register chitty:// protocol handler (Windows)
+            #[cfg(target_os = "windows")]
+            register_protocol_handler();
 
             // Initialize storage
             let data_dir = storage::default_data_dir();
@@ -87,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
             // Load config (creates default if missing)
             let _config = config::AppConfig::load(&data_dir)?;
 
-            // Create browser bridge (shared between tool system and server)
+            // Browser bridge — connects to the Chitty Browser Extension via WebSocket
             let browser_bridge = std::sync::Arc::new(server::BrowserBridge::new());
 
             // Create tool registry (native tools) and runtime (native + custom + connections)
@@ -408,4 +421,97 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Handle a chitty:// protocol URL.
+/// Called when the user clicks an Install button on chitty.ai.
+/// URL format: chitty://install/{package-name}
+async fn handle_protocol_url(url: &str) -> anyhow::Result<()> {
+    tracing::info!("Protocol URL received: {}", url);
+
+    // Parse: chitty://install/web-tools → ("install", "web-tools")
+    let path = url
+        .strip_prefix("chitty://").unwrap_or(url)
+        .trim_end_matches('/');
+
+    let parts: Vec<&str> = path.splitn(2, '/').collect();
+    let (action, target) = match parts.as_slice() {
+        [action, target] => (*action, *target),
+        [action] => (*action, ""),
+        _ => {
+            eprintln!("Invalid protocol URL: {}", url);
+            return Ok(());
+        }
+    };
+
+    match action {
+        "install" => {
+            if target.is_empty() {
+                eprintln!("Missing package name: chitty://install/<package-name>");
+                return Ok(());
+            }
+            println!("Installing package: {}", target);
+
+            // Send install request to the running Chitty Workspace server
+            let client = reqwest::Client::new();
+            let resp = client
+                .post("http://127.0.0.1:8770/api/marketplace/registry/install")
+                .json(&serde_json::json!({
+                    "name": target,
+                    "version": "latest"
+                }))
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) => {
+                    let body: serde_json::Value = r.json().await.unwrap_or_default();
+                    if body.get("success").and_then(|s| s.as_bool()).unwrap_or(false) {
+                        println!("Installed {} successfully.", target);
+                    } else {
+                        let err = body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error");
+                        eprintln!("Install failed: {}", err);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Could not connect to Chitty Workspace (is it running?): {}", e);
+                }
+            }
+        }
+        other => {
+            eprintln!("Unknown protocol action: {}", other);
+        }
+    }
+
+    Ok(())
+}
+
+/// Register the chitty:// protocol handler on Windows.
+/// When a user clicks `chitty://install/web-tools` on the website,
+/// Windows launches this binary with the URL as an argument.
+#[cfg(target_os = "windows")]
+fn register_protocol_handler() {
+    use std::process::Command;
+
+    let exe_path = match std::env::current_exe() {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+
+    // Register HKEY_CURRENT_USER\Software\Classes\chitty (no admin needed)
+    let commands = [
+        format!(r#"reg add "HKCU\Software\Classes\chitty" /ve /d "URL:Chitty Workspace" /f"#),
+        format!(r#"reg add "HKCU\Software\Classes\chitty" /v "URL Protocol" /d "" /f"#),
+        format!(r#"reg add "HKCU\Software\Classes\chitty\shell\open\command" /ve /d "\"{exe_path}\" \"--protocol\" \"%1\"" /f"#, exe_path = exe_path),
+    ];
+
+    for cmd in &commands {
+        let _ = Command::new("cmd")
+            .args(["/C", cmd])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    tracing::info!("Registered chitty:// protocol handler → {}", exe_path);
 }

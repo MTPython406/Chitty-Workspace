@@ -1,6 +1,6 @@
 """
 Web Search tool for Chitty Workspace.
-Uses DuckDuckGo (free, no API key) with optional Google Custom Search fallback.
+Uses DuckDuckGo (free, no API key) via the ddgs package.
 """
 
 import json
@@ -9,8 +9,13 @@ import sys
 
 def search_duckduckgo(query, max_results=5):
     """Search using DuckDuckGo (free, no API key needed)."""
+    # Try the new 'ddgs' package first, fall back to 'duckduckgo_search'
     try:
-        from duckduckgo_search import DDGS
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
 
@@ -34,7 +39,7 @@ def search_duckduckgo(query, max_results=5):
     except ImportError:
         return {
             "success": False,
-            "error": "duckduckgo-search not installed. Run: pip install duckduckgo-search"
+            "error": "Neither 'ddgs' nor 'duckduckgo-search' is installed. Run: pip install ddgs"
         }
     except Exception as e:
         return {"success": False, "error": f"Search failed: {str(e)}"}

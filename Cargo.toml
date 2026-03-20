@@ -52,6 +52,13 @@ eventsource-stream = "0.2"
 futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
+# Browser automation (Chrome DevTools Protocol) — optional, for headless/CI testing
+chromiumoxide = { version = "0.7", features = ["tokio-runtime"], optional = true }
+
+[features]
+default = []
+cdp-browser = ["chromiumoxide"]
+
 [profile.release]
 opt-level = "z"
 lto = true

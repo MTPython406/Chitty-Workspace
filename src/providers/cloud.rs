@@ -102,14 +102,29 @@ impl AnthropicProvider {
             "stream": stream,
         });
 
+        // ── Prompt Caching ──────────────────────────────────────────
+        // Add cache_control breakpoints to save users up to 90% on input tokens.
+        // Cached content: system prompt (stable), tool definitions (stable),
+        // conversation history prefix (grows but prefix is stable across iterations).
+        //
+        // Breakpoint strategy (max 4 allowed):
+        //   1. System prompt — cached for entire conversation
+        //   2. Last tool definition — tools rarely change within a session
+        //   3. Second-to-last user message — caches conversation history prefix
+
         if !system_text.is_empty() {
-            body["system"] = serde_json::Value::String(system_text);
+            // System prompt as content block array with cache_control
+            body["system"] = serde_json::json!([{
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"}
+            }]);
         }
 
         if let Some(tools) = tools {
             if !tools.is_empty() {
                 // Convert from OpenAI-style tool format to Anthropic format
-                let anthropic_tools: Vec<serde_json::Value> = tools
+                let mut anthropic_tools: Vec<serde_json::Value> = tools
                     .iter()
                     .map(|t| {
                         if let Some(func) = t.get("function") {
@@ -124,7 +139,47 @@ impl AnthropicProvider {
                         }
                     })
                     .collect();
+
+                // Add cache_control to the LAST tool (caches all tools as a block)
+                if let Some(last_tool) = anthropic_tools.last_mut() {
+                    last_tool["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                }
+
                 body["tools"] = serde_json::Value::Array(anthropic_tools);
+            }
+        }
+
+        // Add cache_control to conversation history — cache the prefix up to the
+        // second-to-last user message so subsequent iterations read from cache.
+        // Only useful when there are multiple messages (multi-turn or tool iterations).
+        if let Some(msgs) = body["messages"].as_array_mut() {
+            if msgs.len() >= 4 {
+                // Find the second-to-last user/tool_result message and add cache_control
+                let mut user_msg_indices: Vec<usize> = Vec::new();
+                for (i, m) in msgs.iter().enumerate() {
+                    if m.get("role").and_then(|r| r.as_str()) == Some("user") {
+                        user_msg_indices.push(i);
+                    }
+                }
+                // Cache up to the second-to-last user message
+                if user_msg_indices.len() >= 2 {
+                    let cache_idx = user_msg_indices[user_msg_indices.len() - 2];
+                    let msg = &mut msgs[cache_idx];
+                    // If content is a string, convert to content block array
+                    if msg.get("content").map_or(false, |c| c.is_string()) {
+                        let text = msg["content"].as_str().unwrap_or("").to_string();
+                        msg["content"] = serde_json::json!([{
+                            "type": "text",
+                            "text": text,
+                            "cache_control": {"type": "ephemeral"}
+                        }]);
+                    } else if let Some(blocks) = msg["content"].as_array_mut() {
+                        // Add cache_control to the last content block
+                        if let Some(last_block) = blocks.last_mut() {
+                            last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                        }
+                    }
+                }
             }
         }
 
@@ -323,7 +378,18 @@ impl Provider for AnthropicProvider {
                             // Map event index to real tool call ID
                             let index = data.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
                             tool_call_ids.insert(index, id.clone());
-                            let _ = tx.send(StreamChunk::ToolCallStart { id, name }).await;
+                            let _ = tx.send(StreamChunk::ToolCallStart { id: id.clone(), name }).await;
+
+                            // Some API versions include full input in content_block_start
+                            // Send it as a delta so arguments aren't lost if no input_json_delta follows
+                            if let Some(input) = block.get("input") {
+                                if input.is_object() && !input.as_object().unwrap().is_empty() {
+                                    let _ = tx.send(StreamChunk::ToolCallDelta {
+                                        id,
+                                        arguments: input.to_string(),
+                                    }).await;
+                                }
+                            }
                         }
                     }
                 }
@@ -379,7 +445,40 @@ impl Provider for AnthropicProvider {
                     let _ = tx.send(StreamChunk::Error(msg.to_string())).await;
                     break;
                 }
-                _ => {} // message_start, message_delta, ping — ignore
+                "message_start" => {
+                    // Anthropic sends input token counts in message_start.message.usage
+                    // With caching: cache_read_input_tokens, cache_creation_input_tokens, input_tokens
+                    if let Some(usage) = data.get("message").and_then(|m| m.get("usage")) {
+                        let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let cache_read = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let cache_write = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        // Total input = input (uncached) + cache_read + cache_write
+                        let total_input = input + cache_read + cache_write;
+                        if total_input > 0 || cache_read > 0 {
+                            let _ = tx.send(StreamChunk::TokenUsage {
+                                input_tokens: total_input,
+                                output_tokens: 0,
+                                cache_read_tokens: cache_read,
+                                cache_write_tokens: cache_write,
+                            }).await;
+                        }
+                    }
+                }
+                "message_delta" => {
+                    // Anthropic sends output token count in message_delta.usage
+                    if let Some(usage) = data.get("usage") {
+                        let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        if output > 0 {
+                            let _ = tx.send(StreamChunk::TokenUsage {
+                                input_tokens: 0,
+                                output_tokens: output,
+                                cache_read_tokens: 0,
+                                cache_write_tokens: 0,
+                            }).await;
+                        }
+                    }
+                }
+                _ => {} // ping — ignore
             }
         }
 

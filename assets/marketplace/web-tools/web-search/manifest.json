@@ -18,7 +18,7 @@
       "required": false
     }
   },
-  "install_commands": ["pip install duckduckgo-search"],
+  "install_commands": ["pip install ddgs"],
   "timeout_seconds": 30,
   "permission_tier": "safe",
   "source": "marketplace",

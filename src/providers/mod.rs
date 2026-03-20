@@ -126,6 +126,26 @@ pub enum StreamChunk {
         conversation_id: String,
         message_id: Option<String>,
     },
+    /// Approval request — agent wants to perform a sensitive action
+    ApprovalRequest {
+        /// Unique ID for this approval request
+        approval_id: String,
+        /// The tool name requesting approval
+        tool_name: String,
+        /// Human-readable description of the action
+        action_description: String,
+        /// Structured details for the UI card
+        details: serde_json::Value,
+    },
+    /// Token usage reported by the provider (sent at end of stream)
+    TokenUsage {
+        input_tokens: u32,
+        output_tokens: u32,
+        /// Tokens read from cache (Anthropic: cache_read_input_tokens, OpenAI/xAI: cached_tokens)
+        cache_read_tokens: u32,
+        /// Tokens written to cache (Anthropic: cache_creation_input_tokens)
+        cache_write_tokens: u32,
+    },
     /// Stream complete
     Done,
     /// Error occurred

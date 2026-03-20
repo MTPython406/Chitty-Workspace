@@ -6,6 +6,12 @@
       "runtimeExecutable": "cargo",
       "runtimeArgs": ["run"],
       "port": 8770
+    },
+    {
+      "name": "chitty-ai",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "--manifest-path", "C:/Github/chitty-ai/server/Cargo.toml"],
+      "port": 8080
     }
   ]
 }

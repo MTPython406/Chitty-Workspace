@@ -14,8 +14,12 @@
 pub mod manifest;
 pub mod executor;
 pub mod runtime;
+pub mod marketplace_client;
+#[cfg(feature = "cdp-browser")]
+pub mod browser_engine;
 
 pub use runtime::ToolRuntime;
+pub use marketplace_client::MarketplaceClient;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1179,7 +1183,7 @@ impl NativeTool for InstallPackageTool {
 }
 
 // ---------------------------------------------------------------------------
-// Browser tool — opens and interacts with web pages in the Action Panel
+// Browser tool — controls the user's browser via the Chitty Browser Extension
 // ---------------------------------------------------------------------------
 
 struct BrowserTool {
@@ -1192,56 +1196,68 @@ impl NativeTool for BrowserTool {
         ToolDefinition {
             name: "browser".to_string(),
             display_name: "Browser".to_string(),
-            description: "Open and interact with web pages in the Chitty Browser panel. \
-                Supports opening URLs, reading page content, clicking elements, typing text, \
-                and executing JavaScript.".to_string(),
+            description: "Control the user's browser via the Chitty Browser Extension. \
+                Navigate to any website, click elements, type text, take screenshots, \
+                and read page content. Works on LinkedIn, X.com, Gmail, and any site. \
+                The user can see everything happening in their browser.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["open", "screenshot", "click", "type", "read_text", "execute_js", "close"],
+                        "enum": ["open", "screenshot", "click", "type", "read_text", "execute_js", "wait_for", "page_info", "close"],
                         "description": "The browser action to perform"
                     },
                     "url": {
                         "type": "string",
-                        "description": "URL to open (required for 'open' action)"
+                        "description": "URL to navigate to (required for 'open' action)"
                     },
                     "selector": {
                         "type": "string",
-                        "description": "CSS selector for targeting elements (for click/type/read_text)"
+                        "description": "CSS selector for targeting elements (for click/type/read_text/wait_for)"
                     },
                     "text": {
                         "type": "string",
                         "description": "Text to type into the targeted element (for 'type' action)"
                     },
-                    "coordinate": {
-                        "type": "object",
-                        "properties": {
-                            "x": { "type": "number" },
-                            "y": { "type": "number" }
-                        },
-                        "description": "Click coordinates as alternative to selector (for 'click' action)"
-                    },
                     "script": {
                         "type": "string",
                         "description": "JavaScript code to execute in the page context (for 'execute_js' action)"
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Timeout in milliseconds for wait_for action (default: 10000)"
                     }
                 },
                 "required": ["action"]
             }),
             instructions: Some(
-                "Open and interact with web pages in the Chitty Browser panel.\n\
-                 - Use `open` to display a URL in the browser panel. Best for locally-served apps (localhost).\n\
-                 - Use `screenshot` to read what's currently displayed (returns page title and text content).\n\
-                 - Use `click` with a CSS `selector` or `coordinate` to click elements.\n\
-                 - Use `type` with a `selector` and `text` to enter text into form fields.\n\
-                 - Use `read_text` to extract text content. Pass `selector` for specific elements, or omit for full page.\n\
-                 - Use `execute_js` with a `script` to run JavaScript in the page context.\n\
-                 - Use `close` to close the browser panel.\n\
+                "Control the user's actual browser via the Chitty Browser Extension.\n\
+                 The user sees everything — pages open in their browser, they can watch and intervene.\n\
                  \n\
-                 **Limitations:** Cross-origin pages block DOM access. For full interaction, use localhost URLs.\n\
-                 If the browser panel is not connected, ask the user to open the Action Panel."
+                 **Actions:**\n\
+                 - `open` — Navigate to any URL. Opens a tab in the user's browser.\n\
+                 - `screenshot` — Capture the visible page as a screenshot.\n\
+                 - `click` — Click an element by CSS `selector`.\n\
+                 - `type` — Type `text` into a field targeted by `selector`. Works with contenteditable too.\n\
+                 - `read_text` — Extract text content. Pass `selector` for specific element, or omit for full page.\n\
+                 - `execute_js` — Run JavaScript in the page context.\n\
+                 - `wait_for` — Wait for element matching `selector` to appear (default 10s timeout).\n\
+                 - `page_info` — Get current URL, title, and text snippet.\n\
+                 - `close` — Close the current tab.\n\
+                 \n\
+                 **Full access:** Works on ANY site — LinkedIn, X.com, Gmail, etc.\n\
+                 The user's login sessions and saved passwords are available (it's their browser).\n\
+                 \n\
+                 **If not connected:** Ask the user to install the Chitty Browser Extension.\n\
+                 \n\
+                 **Workflow for posting on LinkedIn:**\n\
+                 1. `open` https://www.linkedin.com\n\
+                 2. `page_info` to check if logged in (look for 'Feed' in title)\n\
+                 3. If login page: tell user to log in, then `wait_for` the feed\n\
+                 4. `click` the 'Start a post' button (selector: `button.share-box-feed-entry__trigger`)\n\
+                 5. `type` the post content into the compose box\n\
+                 6. Tell user to review and click Post"
                     .to_string(),
             ),
             category: ToolCategory::Native,
@@ -1254,11 +1270,9 @@ impl NativeTool for BrowserTool {
             None => return ToolResult::err("Missing required parameter: action"),
         };
 
-        if !self.bridge.is_connected() {
-            return ToolResult::err(
-                "No browser frontend connected. The user needs to open the Action Panel browser tab."
-            );
-        }
+        // The extension connects via HTTP polling (/api/browser/poll).
+        // Commands are queued and the extension picks them up on its next poll cycle.
+        // If the extension isn't running, the command will timeout.
 
         let cmd = crate::server::BrowserCommand {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1267,7 +1281,11 @@ impl NativeTool for BrowserTool {
         };
 
         let timeout = match action {
-            "open" => std::time::Duration::from_secs(15),
+            "open" => std::time::Duration::from_secs(20),
+            "wait_for" => {
+                let ms = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(10000);
+                std::time::Duration::from_millis(ms + 2000) // extra buffer
+            }
             "execute_js" => std::time::Duration::from_secs(30),
             _ => std::time::Duration::from_secs(10),
         };

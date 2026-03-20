@@ -512,6 +512,64 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 }
 .tool-call-body.open { display: block; }
 
+/* ── Action Approval Cards ──────────────────────────────────── */
+.approval-card {
+  margin: 8px 0; border: 1px solid var(--accent); border-radius: 8px;
+  overflow: hidden; background: var(--bg-card);
+}
+.approval-card.resolved { border-color: var(--border); opacity: 0.7; }
+.approval-header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  background: rgba(59, 130, 246, 0.08); border-bottom: 1px solid var(--border);
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+}
+.approval-header .approval-icon { font-size: 18px; }
+.approval-header .approval-badge {
+  margin-left: auto; font-size: 10px; padding: 2px 8px; border-radius: 10px;
+  background: rgba(59, 130, 246, 0.15); color: var(--accent); font-weight: 500;
+}
+.approval-body {
+  padding: 10px 12px; font-size: 12px; color: var(--text-secondary);
+  font-family: var(--font-mono); line-height: 1.5;
+}
+.approval-detail { margin: 2px 0; }
+.approval-detail .label { color: var(--text-muted); }
+.approval-actions {
+  display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border);
+}
+.approval-actions button {
+  flex: 1; padding: 8px 16px; border: none; border-radius: 6px;
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+}
+.approval-btn-approve {
+  background: var(--accent); color: #fff;
+}
+.approval-btn-approve:hover { background: #2563eb; }
+.approval-btn-deny {
+  background: var(--bg-page); color: var(--text-secondary);
+  border: 1px solid var(--border) !important;
+}
+.approval-btn-deny:hover { background: rgba(239, 68, 68, 0.1); color: var(--danger); border-color: var(--danger) !important; }
+.approval-result {
+  padding: 8px 12px; font-size: 12px; font-weight: 500; text-align: center;
+}
+.approval-result.approved { color: #10b981; }
+.approval-result.denied { color: var(--danger); }
+
+/* ── Screenshot display in chat ──────────────────────────────── */
+.screenshot-container { padding: 4px 0; }
+.screenshot-label {
+  font-size: 11px; color: var(--text-secondary); margin-bottom: 6px;
+  font-family: var(--font-main); font-weight: 500;
+}
+.screenshot-img {
+  max-width: 100%; border-radius: 6px; border: 1px solid var(--border);
+  cursor: pointer; transition: max-height 0.3s ease;
+  max-height: 300px; object-fit: contain;
+}
+.screenshot-img.expanded { max-height: none; }
+.screenshot-img:hover { border-color: var(--accent); }
+
 .thinking-indicator {
   font-size: 12px; color: var(--text-muted); font-style: italic;
   padding: 4px 0; margin: 4px 0;
@@ -835,9 +893,38 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
         <div class="activity-log" id="activity-log"></div>
       </div>
       <div id="browser-body">
+        <div class="browser-status-bar">
+          <span id="browser-status-dot" class="dot idle"></span>
+          <span id="browser-status-text" style="font-size:11px;color:var(--text-muted);">Extension not connected</span>
+        </div>
         <input class="browser-url-bar" id="browser-url" type="text" placeholder="No page loaded" readonly />
-        <div id="browser-empty">No page loaded.<br>The agent can open URLs here.</div>
-        <iframe id="browser-iframe" style="display:none;" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+        <div id="browser-empty">
+          <div id="browser-not-connected" style="text-align:center;padding:16px;">
+            <div style="font-size:28px;margin-bottom:8px;">🌐</div>
+            <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Chitty Browser Extension</div>
+            <div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:16px;">
+              Install the extension to let your agent control your browser.<br>
+              It can open pages, click, type, and read — on any site.
+            </div>
+            <div style="font-size:11px;color:var(--text-secondary);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:left;line-height:1.8;">
+              <b>Install:</b><br>
+              1. Open <b>chrome://extensions</b> in Chrome<br>
+              2. Enable <b>Developer mode</b> (top right)<br>
+              3. Click <b>Load unpacked</b><br>
+              4. Select the <b>extension</b> folder in your Chitty Workspace directory
+            </div>
+          </div>
+          <div id="browser-connected-idle" style="display:none;text-align:center;padding:16px;">
+            <div style="font-size:28px;margin-bottom:8px;">✅</div>
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Extension Connected</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">
+              Your agent can now control your browser.<br>
+              Ask it to open a website or automate a task.
+            </div>
+            <button onclick="app.openMarketplace()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Browse Marketplace</button>
+          </div>
+        </div>
+        <img id="browser-screenshot" style="display:none;width:100%;border-radius:6px;border:1px solid var(--border);" />
       </div>
     </div>
   </div>
@@ -1320,6 +1407,72 @@ const App = {
                 tc.success = parsed.success;
                 tc.duration = parsed.duration_ms;
               }
+              // When the browser tool opens a URL, show it in the Action Panel
+              if ((parsed.tool_name === 'browser') && parsed.success && tc) {
+                try {
+                  const args = JSON.parse(tc.args || '{}');
+                  if (args.action === 'open' && args.url) {
+                    const iframe = document.getElementById('browser-iframe');
+                    const urlBar = document.getElementById('browser-url');
+                    const empty = document.getElementById('browser-empty');
+                    const screenshot = document.getElementById('browser-screenshot');
+                    const statusText = document.getElementById('browser-status-text');
+                    const statusDot = document.getElementById('browser-status-dot');
+
+                    if (urlBar) urlBar.value = args.url;
+                    if (statusText) statusText.textContent = 'Connected — ' + new URL(args.url).hostname;
+                    if (statusDot) statusDot.className = 'dot connected';
+                    this.switchActionTab('browser');
+                    this.toggleActionPanel(true);
+
+                    // Try loading in iframe first
+                    if (iframe) {
+                      iframe.src = args.url;
+                      iframe.style.display = 'block';
+                      if (empty) empty.style.display = 'none';
+                      if (screenshot) screenshot.style.display = 'none';
+
+                      // After a short delay, check if iframe actually loaded visible content
+                      setTimeout(() => {
+                        let canAccess = false;
+                        try {
+                          const doc = iframe.contentDocument || iframe.contentWindow.document;
+                          if (doc && doc.body && doc.body.innerHTML.length > 100) canAccess = true;
+                        } catch(e) { /* cross-origin — cannot access DOM */ }
+
+                        // If we can't access the DOM, the site is cross-origin.
+                        // Sites like LinkedIn also set X-Frame-Options which means
+                        // the iframe renders as blank even though it has dimensions.
+                        // Show the fallback with an "Open in Browser" button.
+                        if (!canAccess) {
+                          // Site can't render in iframe — show Chitty Browser status
+                          iframe.style.display = 'none';
+                          if (empty) {
+                            const hostname = new URL(args.url).hostname;
+                            empty.innerHTML = `
+                              <div style="text-align:center;padding:20px;">
+                                <div style="font-size:32px;margin-bottom:8px;">🌐</div>
+                                <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Chitty Browser</div>
+                                <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">
+                                  <b>${esc(hostname)}</b> is open in the Chitty Browser window.
+                                </div>
+                                <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;line-height:1.6;">
+                                  Look for the Chrome window on your taskbar.<br>
+                                  The agent can click, type, and navigate for you.<br>
+                                  You can also interact with the page directly.
+                                </div>
+                                <div style="padding:10px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--text-secondary);display:inline-block;">
+                                  ✅ Agent connected via Chrome DevTools Protocol
+                                </div>
+                              </div>`;
+                            empty.style.display = '';
+                          }
+                        }
+                      }, 3000);
+                    }
+                  }
+                } catch (e) { /* ignore parse errors */ }
+              }
               // Update the tool call block in the DOM
               const block = document.querySelector(`[data-panel-id="${panelId}"] .tool-call-block[data-tool-id="${parsed.tool_call_id}"]`);
               if (block) {
@@ -1336,11 +1489,51 @@ const App = {
                   dur.textContent = parsed.duration_ms + 'ms';
                   header.appendChild(dur);
                 }
-                // Set body content (preview)
-                const body = block.querySelector('.tool-call-body');
-                if (body) {
-                  const preview = (parsed.content || '').substring(0, 500);
-                  body.textContent = preview + (parsed.content?.length > 500 ? '\n...' : '');
+                // Check if this is a browser screenshot — render as image in chat
+                let hasScreenshot = false;
+                if (parsed.tool_name === 'browser' && parsed.success && parsed.content) {
+                  try {
+                    const resultData = JSON.parse(parsed.content);
+                    if (resultData.screenshot_base64) {
+                      hasScreenshot = true;
+                      const body = block.querySelector('.tool-call-body');
+                      if (body) {
+                        const imgUrl = resultData.screenshot_base64.startsWith('data:')
+                          ? resultData.screenshot_base64
+                          : 'data:image/png;base64,' + resultData.screenshot_base64;
+                        body.innerHTML = `
+                          <div class="screenshot-container">
+                            <div class="screenshot-label">📸 Screenshot — ${esc(resultData.title || resultData.url || 'page')}</div>
+                            <img src="${imgUrl}" class="screenshot-img" alt="Browser screenshot"
+                              onclick="this.classList.toggle('expanded')" />
+                          </div>`;
+                        body.classList.add('open');
+                        // Auto-expand to show screenshot
+                        const chevron = block.querySelector('.tool-call-chevron');
+                        if (chevron) chevron.classList.add('open');
+                      }
+                      // Also show screenshot in the Browser panel
+                      const screenshotEl = document.getElementById('browser-screenshot');
+                      const emptyEl = document.getElementById('browser-empty');
+                      const iframeEl = document.getElementById('browser-iframe');
+                      if (screenshotEl) {
+                        screenshotEl.src = resultData.screenshot_base64.startsWith('data:')
+                          ? resultData.screenshot_base64
+                          : 'data:image/png;base64,' + resultData.screenshot_base64;
+                        screenshotEl.style.display = 'block';
+                        if (iframeEl) iframeEl.style.display = 'none';
+                        if (emptyEl) emptyEl.style.display = 'none';
+                      }
+                    }
+                  } catch (_) { /* not JSON or no screenshot */ }
+                }
+                // Set body content (preview) — skip if we rendered a screenshot
+                if (!hasScreenshot) {
+                  const body = block.querySelector('.tool-call-body');
+                  if (body) {
+                    const preview = (parsed.content || '').substring(0, 500);
+                    body.textContent = preview + (parsed.content?.length > 500 ? '\n...' : '');
+                  }
                 }
               }
             } else if (evType === 'text' && parsed.content) {
@@ -1353,6 +1546,38 @@ const App = {
                 this.activityLog('llm', `<span class="dim">Streaming response... ${assistantText.length} chars</span>`);
                 this._lastTextLog = assistantText.length;
               }
+            } else if (evType === 'approval_request') {
+              // ── Action Approval Card ──────────────────────────
+              const approvalId = parsed.approval_id;
+              const toolName = parsed.tool_name || 'unknown';
+              const description = parsed.action_description || 'Perform action';
+              const details = parsed.details || {};
+              const icon = details.icon || '🔒';
+
+              this.activityLog('tool', `<span style="color:#f59e0b">⏸ APPROVAL</span> ${esc(description)}`);
+
+              // Build detail lines
+              let detailHtml = '';
+              if (details.url) detailHtml += `<div class="approval-detail"><span class="label">URL:</span> ${esc(details.url)}</div>`;
+              if (details.selector) detailHtml += `<div class="approval-detail"><span class="label">Element:</span> ${esc(details.selector)}</div>`;
+              if (details.text_preview) detailHtml += `<div class="approval-detail"><span class="label">Text:</span> ${esc(details.text_preview)}</div>`;
+              if (details.script_preview) detailHtml += `<div class="approval-detail"><span class="label">Script:</span> ${esc(details.script_preview)}</div>`;
+
+              const cardHtml = `
+                <div class="approval-card" data-approval-id="${esc(approvalId)}">
+                  <div class="approval-header">
+                    <span class="approval-icon">${icon}</span>
+                    <span>${esc(description)}</span>
+                    <span class="approval-badge">Awaiting Approval</span>
+                  </div>
+                  ${detailHtml ? `<div class="approval-body">${detailHtml}</div>` : ''}
+                  <div class="approval-actions">
+                    <button class="approval-btn-approve" onclick="App.respondApproval('${esc(approvalId)}', true, this)">✓ Approve</button>
+                    <button class="approval-btn-deny" onclick="App.respondApproval('${esc(approvalId)}', false, this)">✕ Deny</button>
+                  </div>
+                </div>`;
+              this.appendToolBlockInPanel(panelId, cardHtml);
+
             } else if (evType === 'error') {
               this.activityLog('error', `<span class="hl">${esc(parsed.error || 'Unknown error')}</span>`);
               panel.messages.push({ role: 'system', content: 'Error: ' + (parsed.error || 'Unknown') });
@@ -1448,36 +1673,38 @@ const App = {
     if (browserBody) browserBody.classList.toggle('active', tabName === 'browser');
   },
 
+  /* ── Open Marketplace in Browser ──────────────────────────────────── */
+  openMarketplace() {
+    const iframe = document.getElementById('browser-iframe');
+    const urlBar = document.getElementById('browser-url');
+    const empty = document.getElementById('browser-empty');
+    const url = 'https://chitty.ai/marketplace';
+    iframe.src = url;
+    iframe.style.display = 'block';
+    empty.style.display = 'none';
+    urlBar.value = url;
+    this.switchActionTab('browser');
+    this.toggleActionPanel(true);
+    this.activityLog('info', '<span class="hl">Opened Marketplace</span>');
+  },
+
   /* ── Browser bridge WebSocket ────────────────────────────────────── */
   browserWs: null,
   browserConnected: false,
 
   initBrowserWs() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${location.host}/ws/browser`);
+    // Poll extension connection status every 3 seconds
+    // The extension connects to /ws/extension — this just checks if it's connected
+    this._checkExtensionStatus();
+    setInterval(() => this._checkExtensionStatus(), 3000);
+  },
 
-    ws.onopen = () => {
-      this.browserConnected = true;
-      this.activityLog('info', '<span class="hl">Browser bridge connected</span>');
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const cmd = JSON.parse(event.data);
-        const response = await this.executeBrowserCommand(cmd);
-        ws.send(JSON.stringify(response));
-      } catch (e) {
-        console.error('Browser WS message error:', e);
-      }
-    };
-
-    ws.onclose = () => {
-      this.browserConnected = false;
-      setTimeout(() => this.initBrowserWs(), 2000);
-    };
-
-    ws.onerror = () => ws.close();
-    this.browserWs = ws;
+  async _checkExtensionStatus() {
+    try {
+      const resp = await fetch('/health');
+      // The bridge.is_connected() flag is set by the /ws/extension handler
+      // For now, we check if the server is up — extension status comes from activity log
+    } catch (e) { /* server not running */ }
   },
 
   async executeBrowserCommand(cmd) {
@@ -1490,18 +1717,27 @@ const App = {
         case 'open': {
           const url = cmd.params.url;
           if (!url) return { id: cmd.id, success: false, data: null, error: 'Missing url parameter' };
+
+          const screenshot = document.getElementById('browser-screenshot');
+          // Show the page in the iframe — user can interact with it directly
           iframe.src = url;
           iframe.style.display = 'block';
+          if (screenshot) screenshot.style.display = 'none';
           empty.style.display = 'none';
           urlBar.value = url;
+          document.getElementById('browser-status-text').textContent = 'Connected — ' + new URL(url).hostname;
+          document.getElementById('browser-status-dot').className = 'dot connected';
           this.switchActionTab('browser');
           this.toggleActionPanel(true);
+
+          // Wait for iframe load
           await new Promise((resolve) => {
-            const timer = setTimeout(resolve, 10000);
+            const timer = setTimeout(resolve, 8000);
             iframe.onload = () => { clearTimeout(timer); resolve(); };
           });
+
           this.activityLog('tool', `<span class="hl">Browser opened</span> <span class="dim">${esc(url)}</span>`);
-          return { id: cmd.id, success: true, data: `Opened ${url}`, error: null };
+          return { id: cmd.id, success: true, data: `Opened ${url} in the Action Panel browser. The user can see and interact with the page.`, error: null };
         }
 
         case 'screenshot': {
@@ -1773,6 +2009,38 @@ const App = {
     if (last) el.insertBefore(div.firstElementChild, last);
     else el.appendChild(div.firstElementChild);
     el.scrollTop = el.scrollHeight;
+  },
+
+  async respondApproval(approvalId, approved, btnEl) {
+    try {
+      await fetch('/api/approval/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approval_id: approvalId, approved }),
+      });
+      // Update the card UI
+      const card = document.querySelector(`.approval-card[data-approval-id="${approvalId}"]`);
+      if (card) {
+        card.classList.add('resolved');
+        const actions = card.querySelector('.approval-actions');
+        if (actions) {
+          actions.innerHTML = approved
+            ? '<div class="approval-result approved">✓ Approved</div>'
+            : '<div class="approval-result denied">✕ Denied</div>';
+        }
+        const badge = card.querySelector('.approval-badge');
+        if (badge) {
+          badge.textContent = approved ? 'Approved' : 'Denied';
+          badge.style.background = approved ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
+          badge.style.color = approved ? '#10b981' : '#ef4444';
+        }
+      }
+      this.activityLog('info', approved
+        ? `<span style="color:#10b981">✓ Action approved</span>`
+        : `<span style="color:#ef4444">✕ Action denied</span>`);
+    } catch (e) {
+      console.error('Approval response failed:', e);
+    }
   },
 
   bindPanelEvents(panelId) {

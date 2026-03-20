@@ -281,11 +281,6 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_agents_project
             ON agents(project_path);
 
-        -- Rename conversation column: add agent_id, drop skill_id
-        -- SQLite doesn't support DROP COLUMN in older versions, so we add the new one
-        -- and leave skill_id as legacy (unused)
-        ALTER TABLE conversations ADD COLUMN agent_id TEXT;
-
         CREATE INDEX IF NOT EXISTS idx_conversations_agent
             ON conversations(agent_id);
 
@@ -293,6 +288,17 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
         UPDATE memories SET scope = 'agent' WHERE scope = 'skill';
         ",
     )?;
+
+    // Add agent_id column if it doesn't already exist (idempotent)
+    let has_agent_id: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name='agent_id'")?
+        .query_row([], |row| row.get::<_, i32>(0))
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    if !has_agent_id {
+        conn.execute_batch("ALTER TABLE conversations ADD COLUMN agent_id TEXT;")?;
+    }
 
     tracing::info!("Database migrated to v4 (skills → agents rename)");
     Ok(())
