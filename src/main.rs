@@ -1,6 +1,7 @@
 mod chat;
 mod config;
 mod integrations;
+mod oauth;
 mod providers;
 mod server;
 mod agents;

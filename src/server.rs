@@ -110,6 +110,7 @@ pub struct AppState {
     pub tool_registry: Arc<ToolRegistry>,
     pub tool_runtime: Arc<tokio::sync::RwLock<ToolRuntime>>,
     pub browser_bridge: Arc<BrowserBridge>,
+    pub oauth_pending: crate::oauth::PendingFlows,
 }
 
 /// Start the axum server on the given port.
@@ -173,7 +174,8 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         tool_runtime.write().await.scan_and_load();
     }
 
-    let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge });
+    let oauth_pending = crate::oauth::PendingFlows::default();
+    let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge, oauth_pending });
 
     let app = Router::new()
         // Health check (for extension connectivity)
@@ -228,6 +230,12 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/browser/result", post(browser_result_handler))
         // Action approval system
         .route("/api/approval/respond", post(approval_response_handler))
+        // OAuth integration flows (PKCE — no server needed)
+        .route("/oauth/start/:provider", get(oauth_start_handler))
+        .route("/oauth/callback", get(oauth_callback_handler))
+        .route("/api/oauth/status", get(oauth_status_handler))
+        .route("/api/oauth/status/:provider", get(oauth_provider_status_handler))
+        .route("/api/oauth/disconnect/:provider", post(oauth_disconnect_handler))
         // Marketplace (local installed packages)
         .route("/api/marketplace/packages", get(list_marketplace_packages))
         .route("/api/marketplace/packages/:vendor/auth-status", get(check_package_auth))
@@ -272,6 +280,171 @@ fn strip_screenshot_base64(content: &str) -> String {
 
 async fn index_handler() -> Html<&'static str> {
     Html(CHAT_HTML)
+}
+
+// ---------------------------------------------------------------------------
+// OAuth Integration Handlers
+// ---------------------------------------------------------------------------
+
+/// Start an OAuth flow — generates PKCE challenge and redirects to provider
+async fn oauth_start_handler(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+) -> impl IntoResponse {
+    let config = match crate::oauth::providers::get_config(&provider) {
+        Some(c) => c,
+        None => {
+            return (StatusCode::BAD_REQUEST, Html(format!(
+                "<h2>Unknown provider: {}</h2><p>Supported: google, microsoft, github</p>", provider
+            ))).into_response();
+        }
+    };
+
+    // Check for placeholder client_id
+    if config.client_id.starts_with("PLACEHOLDER") {
+        return (StatusCode::BAD_REQUEST, Html(format!(
+            "<h2>{} integration not yet configured</h2>\
+             <p>The OAuth client_id for {} hasn't been set up yet.</p>\
+             <p>This requires creating a GCP/Azure/GitHub project with OAuth credentials.</p>",
+            config.provider, config.provider
+        ))).into_response();
+    }
+
+    let code_verifier = crate::oauth::generate_code_verifier();
+    let code_challenge = crate::oauth::generate_code_challenge(&code_verifier);
+    let oauth_state = crate::oauth::generate_state();
+
+    // Store pending flow
+    state.oauth_pending.lock().await.insert(
+        oauth_state.clone(),
+        crate::oauth::PendingFlow {
+            provider: provider.clone(),
+            code_verifier,
+            created_at: std::time::Instant::now(),
+        },
+    );
+
+    let auth_url = crate::oauth::build_auth_url(&config, &oauth_state, &code_challenge);
+    tracing::info!("OAuth start: {} → redirecting to auth URL", provider);
+
+    // Redirect the user's browser to the provider's login page
+    axum::response::Redirect::temporary(&auth_url).into_response()
+}
+
+/// OAuth callback — receives the authorization code from the provider
+async fn oauth_callback_handler(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let code = match params.get("code") {
+        Some(c) => c.clone(),
+        None => {
+            let error = params.get("error").map(|s| s.as_str()).unwrap_or("unknown");
+            let desc = params.get("error_description").map(|s| s.as_str()).unwrap_or("");
+            return Html(format!(
+                "<html><body style='font-family:sans-serif;padding:40px;text-align:center;'>\
+                 <h2 style='color:#e44'>Authorization Failed</h2>\
+                 <p>Error: {} {}</p>\
+                 <p>You can close this tab and try again from Chitty Workspace Settings.</p>\
+                 </body></html>",
+                error, desc
+            )).into_response();
+        }
+    };
+
+    let oauth_state = match params.get("state") {
+        Some(s) => s.clone(),
+        None => {
+            return Html("<h2>Missing state parameter</h2>".to_string()).into_response();
+        }
+    };
+
+    // Look up the pending flow
+    let pending = state.oauth_pending.lock().await.remove(&oauth_state);
+    let pending = match pending {
+        Some(p) => p,
+        None => {
+            return Html("<h2>Invalid or expired OAuth state</h2><p>Please try connecting again from Settings.</p>".to_string()).into_response();
+        }
+    };
+
+    // Check for expired flows (> 10 minutes)
+    if pending.created_at.elapsed() > std::time::Duration::from_secs(600) {
+        return Html("<h2>OAuth flow expired</h2><p>Please try again.</p>".to_string()).into_response();
+    }
+
+    let config = match crate::oauth::providers::get_config(&pending.provider) {
+        Some(c) => c,
+        None => {
+            return Html("<h2>Unknown provider</h2>".to_string()).into_response();
+        }
+    };
+
+    // Exchange the authorization code for tokens
+    match crate::oauth::exchange_code(&config, &code, &pending.code_verifier).await {
+        Ok(tokens) => {
+            // Save tokens to OS keyring
+            if let Err(e) = crate::oauth::save_tokens(&pending.provider, &tokens) {
+                tracing::error!("Failed to save OAuth tokens: {}", e);
+                return Html(format!(
+                    "<html><body style='font-family:sans-serif;padding:40px;text-align:center;'>\
+                     <h2 style='color:#e44'>Failed to save credentials</h2>\
+                     <p>{}</p></body></html>", e
+                )).into_response();
+            }
+
+            tracing::info!("OAuth connected: {} (scopes: {:?})", pending.provider, tokens.scopes);
+
+            Html(format!(
+                "<html><body style='font-family:sans-serif;padding:40px;text-align:center;background:#0d1117;color:#e6edf3;'>\
+                 <div style='max-width:400px;margin:0 auto;'>\
+                 <div style='font-size:48px;margin-bottom:16px;'>✅</div>\
+                 <h2 style='color:#3fb950;margin-bottom:8px;'>Connected!</h2>\
+                 <p style='color:#8b949e;margin-bottom:24px;'>{} is now connected to Chitty Workspace.</p>\
+                 <p style='color:#8b949e;font-size:14px;'>You can close this tab and return to Chitty.</p>\
+                 <script>setTimeout(() => window.close(), 3000);</script>\
+                 </div></body></html>",
+                pending.provider
+            )).into_response()
+        }
+        Err(e) => {
+            tracing::error!("OAuth token exchange failed: {}", e);
+            Html(format!(
+                "<html><body style='font-family:sans-serif;padding:40px;text-align:center;'>\
+                 <h2 style='color:#e44'>Connection Failed</h2>\
+                 <p>{}</p>\
+                 <p>Please try again from Chitty Workspace Settings.</p>\
+                 </body></html>", e
+            )).into_response()
+        }
+    }
+}
+
+/// Get connection status for all OAuth integrations
+async fn oauth_status_handler() -> impl IntoResponse {
+    let statuses = crate::oauth::get_all_status();
+    Json(serde_json::json!({"integrations": statuses}))
+}
+
+/// Get connection status for a specific provider
+async fn oauth_provider_status_handler(
+    Path(provider): Path<String>,
+) -> impl IntoResponse {
+    let connected = crate::oauth::is_connected(&provider);
+    Json(serde_json::json!({"provider": provider, "connected": connected}))
+}
+
+/// Disconnect an OAuth integration (remove tokens from keyring)
+async fn oauth_disconnect_handler(
+    Path(provider): Path<String>,
+) -> impl IntoResponse {
+    match crate::oauth::disconnect(&provider) {
+        Ok(()) => Json(serde_json::json!({"ok": true, "provider": provider})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------

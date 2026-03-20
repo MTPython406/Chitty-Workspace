@@ -43,6 +43,11 @@ keyring = "2"
 base64 = "0.22"
 async-trait = "0.1"
 
+# OAuth PKCE
+sha2 = "0.10"
+rand = "0.9"
+urlencoding = "2"
+
 # Tools (code search)
 walkdir = "2"
 regex = "1"
