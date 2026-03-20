@@ -30,6 +30,10 @@ use crate::config;
 pub struct OAuthConfig {
     pub provider: String,
     pub client_id: String,
+    /// Optional client_secret — required by Google even for Desktop apps.
+    /// For open source: stored in OS keyring, not in code.
+    /// Users set it once via Settings or it's bundled in the installer.
+    pub client_secret: Option<String>,
     pub auth_url: String,
     pub token_url: String,
     pub scopes: Vec<String>,
@@ -64,8 +68,11 @@ pub struct IntegrationStatus {
     pub display_name: String,
     pub description: String,
     pub connected: bool,
+    pub configured: bool,       // Has OAuth credentials been set up
     pub services: Vec<String>,
     pub scopes: Vec<String>,
+    pub setup_url: String,
+    pub setup_instructions: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +117,7 @@ pub fn build_auth_url(config: &OAuthConfig, state: &str, code_challenge: &str) -
     )
 }
 
-/// Exchange authorization code for tokens (PKCE — no client_secret needed)
+/// Exchange authorization code for tokens (PKCE + client_secret for Google)
 pub async fn exchange_code(
     config: &OAuthConfig,
     code: &str,
@@ -118,13 +125,19 @@ pub async fn exchange_code(
 ) -> Result<OAuthTokens> {
     let client = reqwest::Client::new();
 
-    let params = [
+    let empty = String::new();
+    let secret = config.client_secret.as_ref().unwrap_or(&empty);
+
+    let mut params: Vec<(&str, &str)> = vec![
         ("grant_type", "authorization_code"),
         ("code", code),
         ("redirect_uri", &config.redirect_uri),
         ("client_id", &config.client_id),
         ("code_verifier", code_verifier),
     ];
+    if !secret.is_empty() {
+        params.push(("client_secret", secret));
+    }
 
     let resp = client
         .post(&config.token_url)
@@ -172,11 +185,17 @@ pub async fn refresh_access_token(
 ) -> Result<OAuthTokens> {
     let client = reqwest::Client::new();
 
-    let params = [
+    let empty = String::new();
+    let secret = config.client_secret.as_ref().unwrap_or(&empty);
+
+    let mut params: Vec<(&str, &str)> = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
         ("client_id", &config.client_id),
     ];
+    if !secret.is_empty() {
+        params.push(("client_secret", secret));
+    }
 
     let resp = client
         .post(&config.token_url)
@@ -314,32 +333,36 @@ pub fn disconnect(provider: &str) -> Result<()> {
     Ok(())
 }
 
+/// Check if a provider has OAuth credentials configured
+/// Google is always configured (first-party, client_id shipped in code)
+/// Others need user to paste their client_id
+pub fn is_configured(provider: &str) -> bool {
+    if provider == "google" {
+        return true; // First-party — client_id shipped
+    }
+    config::get_api_key(&format!("oauth_{}_client_id", provider))
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 /// Get integration status for all known providers
 pub fn get_all_status() -> Vec<IntegrationStatus> {
-    vec![
-        IntegrationStatus {
-            provider: "google".into(),
-            display_name: "Google".into(),
-            description: "Gmail, Calendar, Drive, Contacts".into(),
-            connected: is_connected("google"),
-            services: vec!["Gmail".into(), "Calendar".into(), "Drive".into(), "Contacts".into()],
-            scopes: providers::google_config().scopes,
-        },
-        IntegrationStatus {
-            provider: "microsoft".into(),
-            display_name: "Microsoft".into(),
-            description: "Outlook, OneDrive, Teams, Calendar".into(),
-            connected: is_connected("microsoft"),
-            services: vec!["Outlook".into(), "OneDrive".into(), "Teams".into(), "Calendar".into()],
-            scopes: vec![], // future
-        },
-        IntegrationStatus {
-            provider: "github".into(),
-            display_name: "GitHub".into(),
-            description: "Repos, Issues, Pull Requests".into(),
-            connected: is_connected("github"),
-            services: vec!["Repos".into(), "Issues".into(), "PRs".into()],
-            scopes: vec![], // future
-        },
-    ]
+    providers::ALL_TEMPLATES
+        .iter()
+        .map(|t| {
+            let configured = is_configured(t.provider);
+            IntegrationStatus {
+                provider: t.provider.to_string(),
+                display_name: t.display_name.to_string(),
+                description: t.description.to_string(),
+                connected: configured && is_connected(t.provider),
+                configured,
+                services: t.description.split(", ").map(|s| s.to_string()).collect(),
+                scopes: t.default_scopes.iter().map(|s| s.to_string()).collect(),
+                setup_url: t.setup_url.to_string(),
+                setup_instructions: t.setup_instructions.to_string(),
+            }
+        })
+        .collect()
 }

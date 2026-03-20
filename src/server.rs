@@ -291,24 +291,33 @@ async fn oauth_start_handler(
     State(state): State<Arc<AppState>>,
     Path(provider): Path<String>,
 ) -> impl IntoResponse {
+    // Check if provider template exists
+    let template = crate::oauth::providers::get_template(&provider);
+    if template.is_none() {
+        return (StatusCode::BAD_REQUEST, Html(format!(
+            "<h2>Unknown provider: {}</h2>", provider
+        ))).into_response();
+    }
+    let template = template.unwrap();
+
     let config = match crate::oauth::providers::get_config(&provider) {
         Some(c) => c,
         None => {
+            // Not configured — show setup instructions
             return (StatusCode::BAD_REQUEST, Html(format!(
-                "<h2>Unknown provider: {}</h2><p>Supported: google, microsoft, github</p>", provider
+                "<html><body style='font-family:sans-serif;padding:40px;max-width:600px;margin:0 auto;'>\
+                 <h2>{} — Setup Required</h2>\
+                 <p>You need to configure your own OAuth credentials for {}.</p>\
+                 <h3>Steps:</h3>\
+                 <pre style='background:#f5f5f5;padding:16px;border-radius:8px;white-space:pre-wrap;'>{}</pre>\
+                 <p><a href='{}' target='_blank'>Open {} Developer Console →</a></p>\
+                 <p>Once you have the Client ID and Secret, go to <b>Chitty Settings → Integrations</b> and paste them.</p>\
+                 </body></html>",
+                template.display_name, template.display_name,
+                template.setup_instructions, template.setup_url, template.display_name
             ))).into_response();
         }
     };
-
-    // Check for placeholder client_id
-    if config.client_id.starts_with("PLACEHOLDER") {
-        return (StatusCode::BAD_REQUEST, Html(format!(
-            "<h2>{} integration not yet configured</h2>\
-             <p>The OAuth client_id for {} hasn't been set up yet.</p>\
-             <p>This requires creating a GCP/Azure/GitHub project with OAuth credentials.</p>",
-            config.provider, config.provider
-        ))).into_response();
-    }
 
     let code_verifier = crate::oauth::generate_code_verifier();
     let code_challenge = crate::oauth::generate_code_challenge(&code_verifier);
