@@ -24,7 +24,7 @@ pub struct ToolManifest {
     #[serde(default = "default_version")]
     pub version: String,
     /// Tool type
-    #[serde(rename = "type")]
+    #[serde(alias = "type", alias = "tool_type")]
     pub tool_type: ToolType,
     /// Script runtime
     pub runtime: RuntimeType,

@@ -13,9 +13,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -118,20 +119,55 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         let rt = tool_runtime.read().await;
         let marketplace_dir = rt.tools_dir().join("marketplace");
 
-        // Seed each bundled package
-        let packages = ["google-cloud", "web-tools", "social-media"];
-        for pkg_name in &packages {
-            let pkg_dir = marketplace_dir.join(pkg_name);
-            if !pkg_dir.exists() {
-                let assets_dir = std::path::Path::new("assets/marketplace").join(pkg_name);
-                if assets_dir.exists() {
-                    tracing::info!("Seeding marketplace package: {}", pkg_name);
-                    if let Err(e) = copy_dir_recursive(&assets_dir, &pkg_dir) {
-                        tracing::warn!("Failed to seed {} package: {}", pkg_name, e);
+        // Resolve the assets directory independent of CWD:
+        // 1. Try relative to the binary location (for installed/release builds)
+        // 2. Try CARGO_MANIFEST_DIR (for cargo run during development)
+        // 3. Fall back to CWD (last resort)
+        let assets_base = {
+            let mut candidates = Vec::new();
+
+            // Next to the binary (release installs)
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(exe_dir) = exe.parent() {
+                    candidates.push(exe_dir.join("assets").join("marketplace"));
+                    // Also check one level up (binary might be in bin/ or target/release/)
+                    if let Some(parent) = exe_dir.parent() {
+                        candidates.push(parent.join("assets").join("marketplace"));
                     }
                 }
             }
+
+            // Cargo workspace root (development: cargo run)
+            if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                candidates.push(std::path::PathBuf::from(manifest_dir).join("assets").join("marketplace"));
+            }
+
+            // CWD fallback
+            candidates.push(std::path::PathBuf::from("assets/marketplace"));
+
+            candidates.into_iter().find(|p| p.exists())
+        };
+
+        if let Some(assets_marketplace) = assets_base {
+            tracing::info!("Marketplace assets found at: {:?}", assets_marketplace);
+            let packages = ["google-cloud", "web-tools", "social-media"];
+            for pkg_name in &packages {
+                let pkg_dir = marketplace_dir.join(pkg_name);
+                if !pkg_dir.exists() {
+                    let assets_dir = assets_marketplace.join(pkg_name);
+                    if assets_dir.exists() {
+                        tracing::info!("Seeding marketplace package: {}", pkg_name);
+                        if let Err(e) = copy_dir_recursive(&assets_dir, &pkg_dir) {
+                            tracing::warn!("Failed to seed {} package: {}", pkg_name, e);
+                        }
+                    }
+                }
+            }
+        } else {
+            tracing::warn!("Marketplace assets directory not found — marketplace tools won't be available. \
+                Searched relative to binary, CARGO_MANIFEST_DIR, and CWD.");
         }
+
         drop(rt);
         // Re-scan to pick up marketplace tools
         tool_runtime.write().await.scan_and_load();
@@ -140,6 +176,8 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
     let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge });
 
     let app = Router::new()
+        // Health check (for extension connectivity)
+        .route("/health", get(|| async { "ok" }))
         // UI
         .route("/", get(index_handler))
         // Chat
@@ -183,11 +221,22 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/agent-builder/generate", post(agent_builder_handler))
         // Browser bridge WebSocket
         .route("/ws/browser", get(ws_browser_handler))
-        // Marketplace
+        // Extension WebSocket — dedicated endpoint for the Chitty Browser Extension
+        .route("/ws/extension", get(ws_extension_handler))
+        // Extension HTTP polling — alternative to WebSocket for Manifest V3 service workers
+        .route("/api/browser/poll", post(browser_poll_handler))
+        .route("/api/browser/result", post(browser_result_handler))
+        // Action approval system
+        .route("/api/approval/respond", post(approval_response_handler))
+        // Marketplace (local installed packages)
         .route("/api/marketplace/packages", get(list_marketplace_packages))
         .route("/api/marketplace/packages/:vendor/auth-status", get(check_package_auth))
         .route("/api/marketplace/packages/:vendor/auth", post(trigger_package_auth))
         .route("/api/marketplace/packages/:vendor/setup", post(run_package_setup))
+        // Marketplace registry (remote — browse/search/install from chitty.ai)
+        .route("/api/marketplace/registry/packages", get(registry_list_packages))
+        .route("/api/marketplace/registry/search", get(registry_search))
+        .route("/api/marketplace/registry/install", post(registry_install_package))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
@@ -200,6 +249,26 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
 // ---------------------------------------------------------------------------
 // UI handler
 // ---------------------------------------------------------------------------
+
+/// Strip screenshot base64 data from tool results to keep LLM context small.
+/// Replaces the huge base64 blob with a text summary so the agent knows
+/// a screenshot was taken without the 500KB+ payload in context.
+fn strip_screenshot_base64(content: &str) -> String {
+    // Try to parse as JSON and check for screenshot_base64
+    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(content) {
+        if let Some(obj) = val.as_object_mut() {
+            if obj.contains_key("screenshot_base64") {
+                // Replace base64 with a marker
+                obj.insert(
+                    "screenshot_base64".to_string(),
+                    serde_json::Value::String("[screenshot captured and displayed to user]".to_string()),
+                );
+                return serde_json::to_string(obj).unwrap_or_else(|_| content.to_string());
+            }
+        }
+    }
+    content.to_string()
+}
 
 async fn index_handler() -> Html<&'static str> {
     Html(CHAT_HTML)
@@ -216,31 +285,197 @@ async fn ws_browser_handler(
     ws.on_upgrade(move |socket| handle_browser_ws(socket, state))
 }
 
-async fn handle_browser_ws(mut socket: WebSocket, state: Arc<AppState>) {
+async fn handle_browser_ws(mut socket: WebSocket, _state: Arc<AppState>) {
+    // This endpoint is for the chat UI only (activity logging, status updates).
+    // Browser commands go through /ws/extension to the Chitty Browser Extension.
+    tracing::info!("Chat UI WebSocket connected on /ws/browser");
+
+    loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(_))) => {
+                // Chat UI might send status messages — just acknowledge
+            }
+            Some(Ok(Message::Close(_))) | None => break,
+            Some(Err(_)) => break,
+            _ => {}
+        }
+    }
+
+    tracing::info!("Chat UI WebSocket disconnected");
+}
+
+// ---------------------------------------------------------------------------
+// Action Approval System — sensitive actions require user consent
+// ---------------------------------------------------------------------------
+
+/// Pending approval senders, keyed by approval_id
+static PENDING_APPROVALS: std::sync::LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Deserialize)]
+struct ApprovalResponse {
+    approval_id: String,
+    approved: bool,
+}
+
+/// User responds to an approval request (approve/deny)
+async fn approval_response_handler(
+    Json(resp): Json<ApprovalResponse>,
+) -> impl IntoResponse {
+    tracing::info!("Approval response: {} approved={}", resp.approval_id, resp.approved);
+    if let Some(tx) = PENDING_APPROVALS.lock().await.remove(&resp.approval_id) {
+        let _ = tx.send(resp.approved);
+    }
+    StatusCode::OK
+}
+
+/// Actions that require user approval before executing
+fn action_requires_approval(tool_name: &str, action: &str) -> bool {
+    match tool_name {
+        "browser" => matches!(action, "click" | "type" | "execute_js" | "open"),
+        _ => false,
+    }
+}
+
+/// Build a human-readable description of what the action will do
+fn describe_action(tool_name: &str, args: &serde_json::Value) -> (String, serde_json::Value) {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("unknown");
+    match (tool_name, action) {
+        ("browser", "open") => {
+            let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("unknown");
+            (
+                format!("Navigate browser to {}", url),
+                serde_json::json!({ "action": "open", "url": url, "icon": "🌐" })
+            )
+        }
+        ("browser", "click") => {
+            let selector = args.get("selector").and_then(|v| v.as_str()).unwrap_or("?");
+            (
+                format!("Click element: {}", selector),
+                serde_json::json!({ "action": "click", "selector": selector, "icon": "👆" })
+            )
+        }
+        ("browser", "type") => {
+            let selector = args.get("selector").and_then(|v| v.as_str()).unwrap_or("?");
+            let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let preview = if text.len() > 100 { format!("{}...", &text[..100]) } else { text.to_string() };
+            (
+                format!("Type text into: {}", selector),
+                serde_json::json!({ "action": "type", "selector": selector, "text_preview": preview, "icon": "⌨️" })
+            )
+        }
+        ("browser", "execute_js") => {
+            let script = args.get("script").and_then(|v| v.as_str()).unwrap_or("");
+            let preview = if script.len() > 80 { format!("{}...", &script[..80]) } else { script.to_string() };
+            (
+                format!("Execute JavaScript on page"),
+                serde_json::json!({ "action": "execute_js", "script_preview": preview, "icon": "⚡" })
+            )
+        }
+        _ => (
+            format!("{}: {}", tool_name, action),
+            serde_json::json!({ "action": action, "icon": "🔧" })
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extension HTTP polling — for Manifest V3 service workers that can't hold WebSockets
+// ---------------------------------------------------------------------------
+
+/// Pending result senders, keyed by command ID
+static PENDING_RESULTS: std::sync::LazyLock<Mutex<HashMap<String, oneshot::Sender<BrowserResponse>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Long-poll: wait for a pending browser command (up to 25s)
+async fn browser_poll_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
     let bridge = &state.browser_bridge;
     bridge.set_connected(true);
-    tracing::info!("Browser bridge WebSocket connected");
 
-    // In-flight commands awaiting responses, keyed by command ID
+    let mut cmd_rx = bridge.cmd_rx.lock().await;
+
+    // Wait up to 25 seconds for a command
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(25),
+        cmd_rx.recv()
+    ).await {
+        Ok(Some((browser_cmd, resp_tx))) => {
+            // Store the response sender so browser_result_handler can complete it
+            let cmd_id = browser_cmd.id.clone();
+            PENDING_RESULTS.lock().await.insert(cmd_id, resp_tx);
+
+            tracing::info!("Extension poll: sending command {} ({})", browser_cmd.action, browser_cmd.id);
+            (StatusCode::OK, Json(serde_json::json!({
+                "id": browser_cmd.id,
+                "action": browser_cmd.action,
+                "params": browser_cmd.params,
+            })))
+        }
+        Ok(None) => {
+            // Channel closed
+            (StatusCode::NO_CONTENT, Json(serde_json::json!(null)))
+        }
+        Err(_) => {
+            // Timeout — no command available, extension should poll again
+            (StatusCode::NO_CONTENT, Json(serde_json::json!(null)))
+        }
+    }
+}
+
+/// Receive a command result from the extension
+async fn browser_result_handler(
+    Json(resp): Json<BrowserResponse>,
+) -> impl IntoResponse {
+    tracing::info!("Extension result: {} success={}", resp.id, resp.success);
+
+    if let Some(tx) = PENDING_RESULTS.lock().await.remove(&resp.id) {
+        let _ = tx.send(resp);
+    } else {
+        tracing::warn!("Extension result for unknown command: {}", resp.id);
+    }
+
+    StatusCode::OK
+}
+
+// ---------------------------------------------------------------------------
+// Extension WebSocket — dedicated endpoint for the Chitty Browser Extension
+// This is the PRIMARY handler for browser commands. The extension connects here
+// and receives all open/click/type/screenshot commands from the agent.
+// ---------------------------------------------------------------------------
+
+async fn ws_extension_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_extension_ws(socket, state))
+}
+
+async fn handle_extension_ws(mut socket: WebSocket, state: Arc<AppState>) {
+    let bridge = &state.browser_bridge;
+    bridge.set_connected(true);
+    tracing::info!("Chitty Browser Extension connected via /ws/extension");
+
     let mut pending: HashMap<String, oneshot::Sender<BrowserResponse>> = HashMap::new();
     let mut cmd_rx = bridge.cmd_rx.lock().await;
 
     loop {
         tokio::select! {
-            // New command from a tool wanting to reach the frontend
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some((browser_cmd, resp_tx)) => {
                         let cmd_id = browser_cmd.id.clone();
+                        tracing::info!("Extension: sending command {} ({})", browser_cmd.action, cmd_id);
                         match serde_json::to_string(&browser_cmd) {
                             Ok(json) => {
                                 if socket.send(Message::Text(json.into())).await.is_err() {
-                                    tracing::warn!("Browser WS send failed, disconnecting");
+                                    tracing::warn!("Extension WS send failed");
                                     let _ = resp_tx.send(BrowserResponse {
                                         id: cmd_id,
                                         success: false,
                                         data: serde_json::Value::Null,
-                                        error: Some("Browser WebSocket disconnected".into()),
+                                        error: Some("Extension WebSocket disconnected".into()),
                                     });
                                     break;
                                 }
@@ -256,54 +491,38 @@ async fn handle_browser_ws(mut socket: WebSocket, state: Arc<AppState>) {
                             }
                         }
                     }
-                    None => {
-                        tracing::info!("Browser bridge channel closed");
-                        break;
-                    }
+                    None => break,
                 }
             }
-            // Response from the frontend
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<BrowserResponse>(&text) {
                             Ok(resp) => {
+                                tracing::info!("Extension: response for {} success={}", resp.id, resp.success);
                                 if let Some(tx) = pending.remove(&resp.id) {
                                     let _ = tx.send(resp);
-                                } else {
-                                    tracing::warn!("Browser response for unknown command: {}", resp.id);
                                 }
                             }
-                            Err(e) => {
-                                tracing::warn!("Invalid browser response JSON: {}", e);
-                            }
+                            Err(e) => tracing::warn!("Invalid extension response: {}", e),
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => {
-                        tracing::info!("Browser bridge WebSocket closed");
-                        break;
-                    }
-                    Some(Err(e)) => {
-                        tracing::warn!("Browser WS error: {}", e);
-                        break;
-                    }
-                    _ => {} // ping/pong/binary — ignore
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(e)) => { tracing::warn!("Extension WS error: {}", e); break; }
+                    _ => {}
                 }
             }
         }
     }
 
     bridge.set_connected(false);
-    // Drop any pending commands with an error
     for (id, tx) in pending {
         let _ = tx.send(BrowserResponse {
-            id,
-            success: false,
-            data: serde_json::Value::Null,
-            error: Some("Browser WebSocket disconnected".into()),
+            id, success: false, data: serde_json::Value::Null,
+            error: Some("Extension disconnected".into()),
         });
     }
-    tracing::info!("Browser bridge WebSocket handler exiting");
+    tracing::info!("Chitty Browser Extension disconnected");
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +567,13 @@ struct ChatEventData {
     max_iterations: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     token_usage: Option<TokenUsageResponse>,
+    // Approval fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Clone)]
@@ -465,6 +691,36 @@ async fn chat_handler(
                     serde_json::to_string(&ChatEventData {
                         conversation_id: Some(conversation_id),
                         message_id,
+                        ..Default::default()
+                    })
+                    .unwrap_or_default(),
+                ),
+            StreamChunk::ApprovalRequest {
+                approval_id,
+                tool_name,
+                action_description,
+                details,
+            } => Event::default()
+                .event("approval_request")
+                .data(
+                    serde_json::to_string(&ChatEventData {
+                        approval_id: Some(approval_id),
+                        tool_name: Some(tool_name),
+                        action_description: Some(action_description),
+                        details: Some(details),
+                        ..Default::default()
+                    })
+                    .unwrap_or_default(),
+                ),
+            StreamChunk::TokenUsage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens } => Event::default()
+                .event("token_usage")
+                .data(
+                    serde_json::to_string(&ChatEventData {
+                        token_usage: Some(TokenUsageResponse {
+                            prompt_tokens: input_tokens,
+                            completion_tokens: output_tokens,
+                            total_tokens: input_tokens + output_tokens,
+                        }),
                         ..Default::default()
                     })
                     .unwrap_or_default(),
@@ -646,6 +902,8 @@ async fn process_chat(
             break;
         }
 
+        // Token usage is now returned by stream_and_collect
+
         // Send iteration event (only visible in UI when iteration > 1)
         if iteration > 1 {
             let _ = sse_tx
@@ -716,7 +974,7 @@ async fn process_chat(
             tracing::debug!("  msg[{}] role={} len={}{}{} preview={}", mi, msg.role, msg.content.len(), tc_info, tcid_info, preview);
         }
 
-        let (full_text, tool_calls) = stream_and_collect(
+        let (full_text, tool_calls, iter_input_tokens, iter_output_tokens, iter_cache_read, iter_cache_write) = stream_and_collect(
             provider.as_ref(),
             &model_str,
             &current_messages,
@@ -782,12 +1040,19 @@ async fn process_chat(
             let prov_id = provider_str.clone();
             let mdl_id = model_str.clone();
 
-            let est_prompt: u32 = current_messages
-                .iter()
-                .map(|m| m.content.len() as u32)
-                .sum::<u32>()
-                / 4;
-            let est_completion = (resp.len() as u32) / 4;
+            // Use real token usage from provider if available, fall back to estimate
+            let real_input = iter_input_tokens;
+            let real_output = iter_output_tokens;
+            let (final_input, final_output) = if real_input > 0 || real_output > 0 {
+                (real_input, real_output)
+            } else {
+                // Fallback estimate (chars / 4)
+                let est_prompt: u32 = current_messages.iter().map(|m| m.content.len() as u32).sum::<u32>() / 4;
+                let est_completion = (resp.len() as u32) / 4;
+                (est_prompt, est_completion)
+            };
+            tracing::info!("Token usage: input={}, output={} (real={}) cache_read={}, cache_write={}",
+                final_input, final_output, real_input > 0, iter_cache_read, iter_cache_write);
 
             let _ = db
                 .with_conn(move |conn| {
@@ -799,7 +1064,7 @@ async fn process_chat(
                     let usage_id = uuid::Uuid::new_v4().to_string();
                     conn.execute(
                         "INSERT INTO token_usage (id, conversation_id, message_id, provider_id, model_id, prompt_tokens, completion_tokens, total_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                        rusqlite::params![usage_id, msg.conversation_id, msg.id, prov_id, mdl_id, est_prompt, est_completion, est_prompt + est_completion],
+                        rusqlite::params![usage_id, msg.conversation_id, msg.id, prov_id, mdl_id, final_input, final_output, final_input + final_output],
                     )?;
 
                     Ok(())
@@ -818,8 +1083,14 @@ async fn process_chat(
         let resp = full_text.clone();
         let tc_json = tool_calls_json.clone();
 
+        // Save token usage for this tool-call iteration
+        let tc_input = iter_input_tokens;
+        let tc_output = iter_output_tokens;
+        let tc_prov = provider_str.clone();
+        let tc_mdl = model_str.clone();
+
         db.with_conn(move |conn| {
-            ChatEngine::save_message(
+            let msg = ChatEngine::save_message(
                 conn,
                 &cid,
                 "assistant",
@@ -827,6 +1098,17 @@ async fn process_chat(
                 Some(&tc_json),
                 None,
             )?;
+
+            // Track token usage for this iteration (tool call iterations count too!)
+            if tc_input > 0 || tc_output > 0 {
+                let usage_id = uuid::Uuid::new_v4().to_string();
+                conn.execute(
+                    "INSERT INTO token_usage (id, conversation_id, message_id, provider_id, model_id, prompt_tokens, completion_tokens, total_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![usage_id, msg.conversation_id, msg.id, tc_prov, tc_mdl, tc_input, tc_output, tc_input + tc_output],
+                )?;
+                tracing::info!("Token usage (tool iter): input={}, output={}", tc_input, tc_output);
+            }
+
             Ok(())
         })
         .await?;
@@ -858,6 +1140,63 @@ async fn process_chat(
                 db: state.db.clone(),
                 conversation_id: conversation_id.clone(),
             };
+
+            // ── Action Approval Gate ──────────────────────────────────
+            // For sensitive tool actions (browser click/type/open/js), pause and
+            // ask the user for approval before executing.
+            let action_str = tc.arguments.get("action").and_then(|v| v.as_str()).unwrap_or("");
+            if action_requires_approval(&tc.name, action_str) {
+                let approval_id = uuid::Uuid::new_v4().to_string();
+                let (description, details) = describe_action(&tc.name, &tc.arguments);
+
+                // Send approval request to frontend via SSE
+                let _ = sse_tx
+                    .send(StreamChunk::ApprovalRequest {
+                        approval_id: approval_id.clone(),
+                        tool_name: tc.name.clone(),
+                        action_description: description.clone(),
+                        details,
+                    })
+                    .await;
+
+                // Wait for user response (up to 120 seconds)
+                let (approval_tx, approval_rx) = oneshot::channel::<bool>();
+                PENDING_APPROVALS.lock().await.insert(approval_id.clone(), approval_tx);
+
+                let approved = match tokio::time::timeout(
+                    std::time::Duration::from_secs(120),
+                    approval_rx,
+                ).await {
+                    Ok(Ok(true)) => true,
+                    _ => false,
+                };
+                PENDING_APPROVALS.lock().await.remove(&approval_id);
+
+                if !approved {
+                    tracing::info!("  Action denied by user: {} {}", tc.name, action_str);
+                    let result_content = format!("Action denied by user. The user chose not to allow: {}. Ask the user what they'd like instead.", description);
+
+                    // Send denied result
+                    let _ = sse_tx
+                        .send(StreamChunk::ToolResult {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            content: result_content.clone(),
+                            success: false,
+                            duration_ms: 0,
+                        })
+                        .await;
+
+                    current_messages.push(ChatMessage {
+                        role: "tool".to_string(),
+                        content: result_content,
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                    continue; // skip execution, move to next tool call
+                }
+                tracing::info!("  Action approved by user: {} {}", tc.name, action_str);
+            }
 
             // Dispatch via tool_runtime (native + custom + connection tools)
             let tool_runtime = state.tool_runtime.read().await;
@@ -904,10 +1243,12 @@ async fn process_chat(
             })
             .await?;
 
-            // Add tool result to current_messages for next LLM call
+            // Add tool result to current_messages for next LLM call.
+            // Strip large base64 data (screenshots) to avoid blowing up context window.
+            let llm_content = strip_screenshot_base64(&result_content);
             current_messages.push(ChatMessage {
                 role: "tool".to_string(),
-                content: result_content,
+                content: llm_content,
                 tool_calls: None,
                 tool_call_id: Some(tc.id.clone()),
             });
@@ -930,13 +1271,14 @@ async fn process_chat(
 /// chunks concurrently with the stream — otherwise the channel fills up
 /// (capacity=256) and chat_stream blocks, causing a deadlock/timeout.
 /// Reasoning models stream hundreds of thinking tokens, so this matters.
+/// Returns (full_text, tool_calls, input_tokens, output_tokens, cache_read, cache_write)
 async fn stream_and_collect(
     provider: &dyn Provider,
     model: &str,
     messages: &[ChatMessage],
     tools: Option<&[serde_json::Value]>,
     sse_tx: &mpsc::Sender<StreamChunk>,
-) -> anyhow::Result<(String, Vec<ToolCall>)> {
+) -> anyhow::Result<(String, Vec<ToolCall>, u32, u32, u32, u32)> {
     // Use a larger channel buffer to reduce backpressure on the provider
     let (ptx, mut prx) = mpsc::channel::<StreamChunk>(256);
 
@@ -948,6 +1290,10 @@ async fn stream_and_collect(
     // When chat_stream finishes, ptx is dropped, prx.recv() returns None.
     let idle_timeout = std::time::Duration::from_secs(120);
     let mut chunk_count: u64 = 0;
+    let mut collected_input_tokens: u32 = 0;
+    let mut collected_output_tokens: u32 = 0;
+    let mut collected_cache_read: u32 = 0;
+    let mut collected_cache_write: u32 = 0;
 
     let stream_result = {
         // Create a future that processes chunks with idle timeout
@@ -979,6 +1325,14 @@ async fn stream_and_collect(
                                 let _ = sse_tx.send(chunk).await;
                             }
                             StreamChunk::ToolCallEnd { .. } => {
+                                let _ = sse_tx.send(chunk).await;
+                            }
+                            StreamChunk::TokenUsage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens } => {
+                                // Accumulate real token usage from provider
+                                collected_input_tokens += input_tokens;
+                                collected_output_tokens += output_tokens;
+                                collected_cache_read += cache_read_tokens;
+                                collected_cache_write += cache_write_tokens;
                                 let _ = sse_tx.send(chunk).await;
                             }
                             StreamChunk::Done => {
@@ -1040,8 +1394,30 @@ async fn stream_and_collect(
     let tool_calls: Vec<ToolCall> = pending_calls
         .into_values()
         .map(|pc| {
-            let args: serde_json::Value =
-                serde_json::from_str(&pc.arguments_json).unwrap_or(serde_json::json!({}));
+            let args: serde_json::Value = if pc.arguments_json.is_empty() {
+                tracing::warn!("Tool call '{}' ({}) has empty arguments — no input_json_delta received",
+                    pc.name, pc.id);
+                serde_json::json!({})
+            } else {
+                match serde_json::from_str(&pc.arguments_json) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!("Failed to parse tool call arguments for '{}': {} — raw: {:?}",
+                            pc.name, e, pc.arguments_json);
+                        // Try to salvage partial JSON by closing any open braces
+                        let mut salvaged = pc.arguments_json.clone();
+                        let open_braces = salvaged.chars().filter(|c| *c == '{').count();
+                        let close_braces = salvaged.chars().filter(|c| *c == '}').count();
+                        for _ in 0..(open_braces.saturating_sub(close_braces)) {
+                            salvaged.push('}');
+                        }
+                        serde_json::from_str(&salvaged).unwrap_or_else(|_| {
+                            tracing::error!("Salvage attempt also failed for '{}'", pc.name);
+                            serde_json::json!({})
+                        })
+                    }
+                }
+            };
             ToolCall {
                 id: pc.id,
                 name: pc.name,
@@ -1050,7 +1426,11 @@ async fn stream_and_collect(
         })
         .collect();
 
-    Ok((full_text, tool_calls))
+    tracing::info!("Cache stats: {} read, {} write, {} uncached",
+        collected_cache_read, collected_cache_write,
+        collected_input_tokens.saturating_sub(collected_cache_read + collected_cache_write));
+
+    Ok((full_text, tool_calls, collected_input_tokens, collected_output_tokens, collected_cache_read, collected_cache_write))
 }
 
 /// Stream a text-only LLM response (no tools, for final forced response)
@@ -1388,6 +1768,27 @@ async fn discover_models_handler(
             .into_response();
     }
 
+    // ── Hardcoded model lists for providers without dynamic discovery ──
+    // These run BEFORE create_provider() so they work even without a full Provider impl.
+    if provider_id == "openai" {
+        return Json(serde_json::json!({"models": [
+            {"id": "gpt-4.1", "display_name": "GPT-4.1", "context_window": 1047576, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+            {"id": "gpt-4.1-mini", "display_name": "GPT-4.1 Mini", "context_window": 1047576, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+            {"id": "gpt-4.1-nano", "display_name": "GPT-4.1 Nano", "context_window": 1047576, "supports_tools": true, "supports_streaming": true, "supports_vision": false},
+            {"id": "o3", "display_name": "o3 (Reasoning)", "context_window": 200000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+            {"id": "o4-mini", "display_name": "o4-mini (Reasoning)", "context_window": 200000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+        ]})).into_response();
+    }
+
+    if provider_id == "google" {
+        return Json(serde_json::json!({"models": [
+            {"id": "gemini-2.5-pro", "display_name": "Gemini 2.5 Pro", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+            {"id": "gemini-2.5-flash", "display_name": "Gemini 2.5 Flash", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+            {"id": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+        ]})).into_response();
+    }
+
+    // ── Dynamic discovery for providers with full implementations ──
     let provider = match create_provider(&state, &provider_id).await {
         Ok(p) => p,
         Err(e) => {
@@ -2422,7 +2823,7 @@ async fn process_agent_builder(
             thinking
         });
 
-        let (full_text, tool_calls) = stream_and_collect(
+        let (full_text, tool_calls, _iter_input, _iter_output, _cache_r, _cache_w) = stream_and_collect(
             provider.as_ref(),
             &model_id,
             &current_messages,
@@ -2792,6 +3193,101 @@ async fn run_shell_command(cmd: &str) -> CommandResult {
             stdout: String::new(),
             stderr: format!("Failed to execute: {}", e),
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Marketplace Registry handlers (remote — browse/search/install from chitty.ai)
+// ---------------------------------------------------------------------------
+
+async fn registry_list_packages() -> impl IntoResponse {
+    let client = crate::tools::MarketplaceClient::new();
+    match client.list_packages().await {
+        Ok(packages) => Json(serde_json::json!({ "packages": packages })),
+        Err(e) => {
+            tracing::error!("Registry list failed: {}", e);
+            Json(serde_json::json!({
+                "packages": [],
+                "error": format!("Failed to connect to marketplace: {}", e),
+            }))
+        }
+    }
+}
+
+async fn registry_search(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let query = params.get("q").cloned().unwrap_or_default();
+    let client = crate::tools::MarketplaceClient::new();
+    match client.search(&query).await {
+        Ok(packages) => Json(serde_json::json!({ "packages": packages })),
+        Err(e) => {
+            tracing::error!("Registry search failed: {}", e);
+            Json(serde_json::json!({
+                "packages": [],
+                "error": format!("Search failed: {}", e),
+            }))
+        }
+    }
+}
+
+async fn registry_install_package(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let name = match body.get("name").and_then(|n| n.as_str()) {
+        Some(n) => n.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'name'" })),
+    };
+    let version = body.get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("latest")
+        .to_string();
+
+    let rt = state.tool_runtime.read().await;
+    let marketplace_dir = rt.tools_dir().join("marketplace");
+    drop(rt);
+
+    let client = crate::tools::MarketplaceClient::new();
+
+    // If version is "latest", fetch package detail to get the actual latest version
+    let actual_version = if version == "latest" {
+        match client.get_package(&name).await {
+            Ok(detail) => detail.versions.last()
+                .map(|v| v.version.clone())
+                .unwrap_or_else(|| "1.0.0".to_string()),
+            Err(e) => return Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to fetch package info: {}", e),
+            })),
+        }
+    } else {
+        version
+    };
+
+    match client.install_package(&name, &actual_version, &marketplace_dir).await {
+        Ok(pkg_dir) => {
+            // Re-scan to pick up the new tools
+            state.tool_runtime.write().await.scan_and_load();
+
+            tracing::info!("Installed {}@{} from registry to {:?}", name, actual_version, pkg_dir);
+            Json(serde_json::json!({
+                "success": true,
+                "message": format!("Installed {}@{}", name, actual_version),
+                "path": pkg_dir.to_string_lossy(),
+            }))
+        }
+        Err(e) => {
+            tracing::error!("Registry install failed for {}@{}: {}", name, actual_version, e);
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Installation failed: {}", e),
+            }))
+        }
     }
 }
 

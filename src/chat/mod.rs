@@ -261,11 +261,15 @@ impl ChatEngine {
                     } else {
                         Some(agent.tools)
                     };
+                    // If agent has browser tool, allow more iterations (browser actions
+                    // consume iterations quickly: open, screenshot, click, type, etc.)
+                    let has_browser = tool_list.as_ref().map_or(true, |names| names.iter().any(|t| t == "browser"));
+                    let default_iters = if has_browser { 25 } else { 10 };
                     (
                         agent.instructions,
                         tool_list,
                         ExecutionConfig {
-                            max_iterations: agent.max_iterations.unwrap_or(10),
+                            max_iterations: agent.max_iterations.unwrap_or(default_iters),
                             temperature: agent.temperature,
                             max_tokens: agent.max_tokens,
                         },
