@@ -6,12 +6,12 @@
 use super::OAuthConfig;
 
 /// Google OAuth config — covers Gmail, Calendar, Drive, Contacts
+/// GCP Project: chitty-workspace (706685776923)
+/// Credentials: Desktop app "Chitty Workspace Desktop"
 pub fn google_config() -> OAuthConfig {
     OAuthConfig {
         provider: "google".into(),
-        // TODO: Replace with real client_id from GCP project "Chitty Workspace"
-        // Created at: console.cloud.google.com → Credentials → OAuth 2.0 Client IDs → Desktop app
-        client_id: "PLACEHOLDER.apps.googleusercontent.com".into(),
+        client_id: "706685776923-gp53edqle1d36fph5o8durm5iqc1ehm2.apps.googleusercontent.com".into(),
         auth_url: "https://accounts.google.com/o/oauth2/v2/auth".into(),
         token_url: "https://oauth2.googleapis.com/token".into(),
         scopes: vec![
