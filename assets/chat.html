@@ -30,6 +30,8 @@
   --shadow-modal: rgba(0,0,0,0.7);
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --carousel-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --carousel-duration: 280ms;
 }
 
 /* ── Light theme ──────────────────────────────────────────────── */
@@ -103,15 +105,58 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   padding: 10px; gap: 0; min-height: 0;
 }
 
+/* ── Carousel rail ─────────────────────────────────────────────── */
+#carousel-rail {
+  flex: 1; position: relative; overflow: hidden; height: 100%;
+  transition: margin-right var(--carousel-duration) var(--carousel-ease);
+}
+#carousel-rail.action-open { margin-right: 36%; }
+#carousel-rail.action-open.builder-open { margin-right: 50%; }
+
 /* ── Panel ──────────────────────────────────────────────────────── */
 .panel {
-  display: flex; flex-direction: column; flex: 0 0 auto;
+  position: absolute; top: 0; bottom: 0;
+  display: flex; flex-direction: column;
   background: var(--bg-panel); border: 2px solid var(--border);
-  border-radius: 12px; overflow: hidden; min-width: 300px;
-  transition: border-color 0.2s ease;
+  border-radius: 12px; overflow: hidden;
+  transition: transform var(--carousel-duration) var(--carousel-ease),
+              width var(--carousel-duration) var(--carousel-ease),
+              left var(--carousel-duration) var(--carousel-ease),
+              opacity var(--carousel-duration) var(--carousel-ease),
+              box-shadow var(--carousel-duration) var(--carousel-ease),
+              border-color var(--carousel-duration) var(--carousel-ease);
+  will-change: transform, left, width, opacity;
 }
-.panel.active { border-color: var(--border-active); }
-.panel.single { margin: 0 auto; }
+.panel.focused {
+  border-color: var(--border-active);
+  box-shadow: 0 4px 24px rgba(59,130,246,0.12);
+  z-index: 2;
+}
+.panel.preview {
+  transform: scale(0.96);
+  opacity: 0.7;
+  z-index: 1;
+  cursor: pointer;
+}
+.panel.preview .panel-body,
+.panel.preview .panel-input { pointer-events: none; }
+.panel.off-canvas {
+  opacity: 0; pointer-events: none; z-index: 0;
+}
+
+/* ── Carousel nav arrows ───────────────────────────────────────── */
+.carousel-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--bg-card); border: 1px solid var(--border);
+  cursor: pointer; z-index: 5; font-size: 18px; color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.15s ease;
+}
+.carousel-nav:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+.carousel-nav.prev { left: 4px; }
+.carousel-nav.next { right: 4px; }
+.carousel-nav.hidden { opacity: 0; pointer-events: none; }
 
 /* Panel header */
 .panel-header {
@@ -276,31 +321,53 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   margin-top: 4px; padding: 0 4px;
 }
 
-/* ── Resize divider ─────────────────────────────────────────────── */
-.resize-divider {
-  width: 8px; flex-shrink: 0; cursor: col-resize; position: relative;
-  display: flex; align-items: center; justify-content: center;
+/* ── Input footer bar (agent + model selectors) ──────────────── */
+.input-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 2px 0; gap: 8px;
 }
-.resize-divider::after {
-  content: ''; width: 2px; height: 40px; background: var(--border);
-  border-radius: 1px; transition: background 0.15s;
-}
-.resize-divider:hover::after { background: var(--text-muted); }
+.input-footer-left { display: flex; align-items: center; gap: 6px; }
+.input-footer-right { display: flex; align-items: center; gap: 6px; }
 
+.input-footer-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px; background: transparent; border: 1px solid transparent;
+  border-radius: 5px; color: var(--text-secondary); font-size: 11px;
+  cursor: pointer; font-family: var(--font-sans); white-space: nowrap;
+  transition: all 0.15s;
+}
+.input-footer-btn:hover { background: var(--bg-card); border-color: var(--border); color: var(--text-primary); }
+.input-footer-btn.active { color: var(--text-primary); }
+.input-footer-btn svg { width: 12px; height: 12px; fill: currentColor; flex-shrink: 0; }
+.input-footer-btn .chevron { font-size: 9px; opacity: 0.5; margin-left: 1px; }
+
+.input-footer-select {
+  padding: 3px 8px; background: transparent; border: 1px solid transparent;
+  border-radius: 5px; color: var(--text-secondary); font-size: 11px;
+  cursor: pointer; font-family: var(--font-sans); outline: none;
+  transition: all 0.15s; -webkit-appearance: none; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 6px center;
+  padding-right: 18px;
+}
+.input-footer-select:hover { background-color: var(--bg-card); border-color: var(--border); color: var(--text-primary); }
+.input-footer-select:focus { border-color: var(--border-hover); color: var(--text-primary); }
+.input-footer-select option { background: var(--bg-card); color: var(--text-primary); }
+
+/* ── Resize divider ─────────────────────────────────────────────── */
 /* ── Action panel ───────────────────────────────────────────────── */
 #action-panel {
-  position: absolute; top: 10px; right: 10px; bottom: 10px;
-  width: 400px; background: var(--bg-panel); border: 2px solid var(--border);
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 36%; background: var(--bg-panel); border: 2px solid var(--border);
   border-radius: 12px; z-index: 10; display: flex; flex-direction: column;
-  transform: translateX(420px); transition: transform 0.3s ease;
+  transform: translateX(calc(100% + 20px));
+  transition: transform 0.3s var(--carousel-ease);
   overflow: hidden;
+  box-shadow: -4px 0 24px rgba(0,0,0,0.15);
 }
 #action-panel.open { transform: translateX(0); }
-#action-backdrop {
-  position: absolute; inset: 0; background: rgba(0,0,0,0.2); z-index: 9;
-  display: none; pointer-events: auto;
-}
-#action-backdrop.visible { display: block; }
+#action-panel.builder-mode { width: 50%; }
+#action-panel.builder-mode.open { transform: translateX(0); }
 
 #action-header {
   display: flex; align-items: center; padding: 12px 16px;
@@ -599,6 +666,94 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .agent-edit-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); }
 .agent-delete-btn:hover { color: var(--danger); border-color: var(--danger); }
 
+/* ── Agent tiles (Action Panel) ──────────────────────────────── */
+.agent-tiles {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.agent-tile {
+  padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; transition: all 0.15s;
+}
+.agent-tile:hover { border-color: var(--accent); background: var(--bg-card-hover); }
+.agent-tile-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.agent-tile-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.agent-tile-desc {
+  font-size: 11px; color: var(--text-muted); margin-top: 3px; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.agent-tile-meta { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+.agent-tile-actions {
+  display: flex; gap: 6px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border);
+}
+.agent-tile-edit, .agent-tile-delete {
+  padding: 3px 10px; font-size: 10px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+}
+.agent-tile-edit:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+.agent-tile-delete:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ── Provider Cards (Action Panel) ─── */
+.provider-card {
+  padding: 12px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; margin-bottom: 8px; transition: border-color 0.15s;
+}
+.provider-card:hover { border-color: var(--border-hover); }
+.provider-card-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.provider-card-info { display: flex; align-items: center; gap: 8px; }
+.provider-card-status {
+  font-size: 12px; color: var(--text-muted); width: 16px; text-align: center;
+}
+.provider-card-status.ok { color: #10b981; }
+.provider-card-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.provider-card-meta { font-size: 11px; color: var(--text-muted); }
+.provider-card-actions {
+  display: flex; gap: 6px; margin-top: 8px;
+}
+.provider-card-btn {
+  padding: 4px 10px; font-size: 10px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+  font-family: var(--font-sans); transition: all 0.15s;
+}
+.provider-card-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); border-color: var(--border-hover); }
+.provider-card-btn:disabled { opacity: 0.4; cursor: default; }
+.provider-card-btn.is-default { background: var(--accent); color: #fff; border-color: var(--accent); }
+.provider-card-key-form {
+  display: flex; gap: 4px; margin-top: 8px; align-items: center;
+}
+.provider-card-key-input {
+  flex: 1; padding: 5px 8px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text-primary); font-size: 12px;
+  font-family: var(--font-mono); outline: none;
+}
+.provider-card-key-input:focus { border-color: var(--accent); }
+.provider-card-models { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+
+/* Local model items */
+.local-models-list { margin-top: 8px; }
+.local-model-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 6px; margin-bottom: 4px;
+}
+.local-model-info { flex: 1; min-width: 0; }
+.local-model-name { font-size: 12px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-model-meta { font-size: 10px; color: var(--text-muted); }
+
+/* Monitoring grid */
+.monitor-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+}
+.monitor-item {
+  padding: 8px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 6px; text-align: center;
+}
+.monitor-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.monitor-value { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-top: 2px; }
+
 .agent-form { margin-top: 16px; }
 .agent-form label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; margin-top: 12px; }
 .agent-form input, .agent-form textarea {
@@ -634,64 +789,138 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .exec-config .config-field { flex: 1; }
 .exec-config input[type="number"] { width: 100%; }
 
-/* ── Agent Builder wizard ─────────────────────────────────────── */
-.agent-builder { margin-top: 16px; }
-.agent-builder textarea.describe-input {
-  width: 100%; min-height: 120px; resize: vertical;
-  padding: 10px; background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 6px; color: var(--text-primary); font-size: 13px;
-  font-family: var(--font-sans); line-height: 1.5; outline: none;
+/* ── Agent Builder — split-panel conversational layout ──────── */
+.agent-builder-panel {
+  display: flex; gap: 12px; padding: 12px;
+  height: 100%; min-height: 0;
 }
-.agent-builder textarea.describe-input:focus { border-color: var(--border-hover); }
-.agent-builder textarea.describe-input::placeholder { color: var(--text-muted); }
-.agent-builder .generate-btn {
-  margin-top: 12px; padding: 8px 20px;
-  background: var(--accent); color: #fff; border: none;
+.builder-chat {
+  flex: 1; display: flex; flex-direction: column;
+  min-width: 0; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-card); overflow: hidden;
+}
+.builder-chat-messages {
+  flex: 1; overflow-y: auto; padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.builder-msg {
+  max-width: 90%; padding: 8px 12px; border-radius: 8px;
+  font-size: 13px; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap;
+}
+.builder-msg.user {
+  align-self: flex-end; background: var(--accent); color: #fff;
+  border-bottom-right-radius: 2px;
+}
+.builder-msg.assistant {
+  align-self: flex-start; background: var(--bg-page); color: var(--text-primary);
+  border-bottom-left-radius: 2px;
+}
+.builder-msg.system {
+  align-self: center; color: var(--text-muted); font-size: 11px;
+  font-style: italic; background: none; padding: 4px 0;
+}
+.builder-chat-input {
+  display: flex; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--border); background: var(--bg-page);
+}
+.builder-chat-input textarea {
+  flex: 1; resize: none; padding: 8px 10px; min-height: 36px; max-height: 80px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-primary); font-size: 13px; font-family: var(--font-sans);
+  outline: none; line-height: 1.4;
+}
+.builder-chat-input textarea:focus { border-color: var(--border-hover); }
+.builder-chat-input textarea::placeholder { color: var(--text-muted); }
+.builder-send-btn {
+  padding: 8px 16px; background: var(--accent); color: #fff; border: none;
   border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
+  align-self: flex-end; white-space: nowrap;
 }
-.agent-builder .generate-btn:hover { background: var(--accent-hover); }
-.agent-builder .generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.agent-builder-actions { display: flex; gap: 8px; margin-top: 8px; }
+.builder-send-btn:hover { background: var(--accent-hover); }
+.builder-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.agent-builder .loading-state {
-  text-align: center; padding: 32px 16px; color: var(--text-secondary); font-size: 13px;
+/* Right preview panel */
+.builder-preview {
+  width: 280px; flex-shrink: 0; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-card); padding: 14px;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
-.agent-builder .spinner {
-  display: inline-block; width: 24px; height: 24px;
-  border: 2px solid var(--border); border-top-color: var(--accent);
-  border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 12px;
+.builder-preview h4 {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid var(--border);
 }
-.agent-builder .progress-log {
-  text-align: left; font-size: 11px; color: var(--text-muted); margin-top: 12px;
-  font-family: var(--font-mono); max-height: 80px; overflow-y: auto;
-  background: var(--bg-page); border-radius: 4px; padding: 8px;
+.draft-section {
+  margin-bottom: 14px;
 }
-.agent-builder .progress-log div { padding: 1px 0; }
-.agent-builder .progress-log .tool-event { color: var(--accent); }
-
-.ai-notes {
-  margin: 12px 0; padding: 10px 14px;
-  background: var(--bg-page); border-radius: 6px;
-  font-size: 12px; color: var(--text-secondary);
-  border-left: 3px solid var(--accent); line-height: 1.5;
-  white-space: pre-wrap;
-}
-.ai-notes strong { color: var(--text-primary); }
-
-.marketplace-note {
-  margin: 8px 0; padding: 10px 14px;
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 6px; font-size: 12px; color: var(--text-secondary);
-  line-height: 1.5;
-}
-.marketplace-note .section-label {
+.draft-section .draft-label {
   font-size: 11px; font-weight: 600; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
 }
-.marketplace-note .mp-tool {
-  display: inline-block; padding: 2px 8px; margin: 2px;
-  background: var(--bg-page); border-radius: 3px; font-family: var(--font-mono); font-size: 11px;
+.draft-section .draft-value {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.4;
+  word-wrap: break-word;
+}
+.draft-section .draft-value.placeholder {
+  color: var(--text-muted); font-style: italic;
+}
+.draft-section .draft-instructions-preview {
+  font-size: 11px; color: var(--text-secondary); line-height: 1.4;
+  max-height: 100px; overflow-y: auto; padding: 6px 8px;
+  background: var(--bg-page); border-radius: 4px;
+  font-family: var(--font-mono); white-space: pre-wrap;
+}
+.draft-tools-list {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;
+}
+.draft-tool-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; background: var(--bg-page); border: 1px solid var(--border);
+  border-radius: 4px; font-size: 11px; color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+/* Package cards in preview */
+.draft-package-card {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; margin-top: 6px;
+  background: var(--bg-page); border: 1px solid var(--border); border-radius: 6px;
+}
+.draft-package-info { flex: 1; min-width: 0; }
+.draft-package-info .pkg-name {
+  font-size: 12px; font-weight: 600; color: var(--text-primary);
+}
+.draft-package-info .pkg-tools {
+  font-size: 10px; color: var(--text-muted); margin-top: 2px;
+}
+.status-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+  flex-shrink: 0; margin-left: 8px;
+}
+.status-badge.ready { background: rgba(34,197,94,0.15); color: #22c55e; }
+.status-badge.needs-setup { background: rgba(245,158,11,0.15); color: #f59e0b; cursor: pointer; }
+.status-badge.not-auth { background: rgba(239,68,68,0.15); color: #ef4444; cursor: pointer; }
+
+/* Save button */
+.builder-save-btn {
+  width: 100%; padding: 10px; margin-top: 16px;
+  background: var(--accent); color: #fff; border: none;
+  border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.builder-save-btn:hover { background: var(--accent-hover); }
+.builder-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.builder-cancel-btn {
+  width: 100%; padding: 8px; margin-top: 6px;
+  background: transparent; color: var(--text-secondary); border: 1px solid var(--border);
+  border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.builder-cancel-btn:hover { background: var(--bg-page); }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.builder-typing {
+  display: inline-block; width: 16px; height: 16px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite;
 }
 
 /* ── Marketplace tiles ──────────────────────────────────────────── */
@@ -798,6 +1027,125 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   padding-top: 10px;
 }
 
+/* ── Package Detail Page ──────────────────────────────────────── */
+.pkg-detail { padding: 0; }
+.pkg-detail-back {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--accent); cursor: pointer;
+  margin-bottom: 12px; background: none; border: none; padding: 0;
+}
+.pkg-detail-back:hover { text-decoration: underline; }
+.pkg-detail-header {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+}
+.pkg-detail-icon {
+  width: 48px; height: 48px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; color: #fff; flex-shrink: 0;
+}
+.pkg-detail-title { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+.pkg-detail-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.pkg-detail-section {
+  margin-bottom: 20px;
+}
+.pkg-detail-section-title {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.pkg-detail-desc {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.6;
+  white-space: pre-line;
+}
+.pkg-detail-capabilities {
+  list-style: none; padding: 0; margin: 0;
+}
+.pkg-detail-capabilities li {
+  font-size: 12px; color: var(--text-secondary); padding: 4px 0;
+  display: flex; align-items: center; gap: 6px;
+}
+.pkg-detail-capabilities li::before {
+  content: '\2713'; color: #22c55e; font-weight: 600; font-size: 13px;
+}
+.pkg-tool-card {
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+  margin-bottom: 8px; background: var(--bg-secondary);
+}
+.pkg-tool-card-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.pkg-tool-card-desc { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+/* ── Resource Config ──────────────────────────────────────────── */
+.pkg-resource-section {
+  border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+  margin-bottom: 12px; background: var(--bg-secondary);
+}
+.pkg-resource-label { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.pkg-resource-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; margin-bottom: 10px; }
+.pkg-resource-list {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;
+}
+.pkg-resource-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 4px 10px; border-radius: 14px;
+  background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3);
+  color: var(--accent);
+}
+.pkg-resource-tag .remove-btn {
+  cursor: pointer; font-size: 13px; margin-left: 2px;
+  color: var(--text-muted); background: none; border: none; padding: 0; line-height: 1;
+}
+.pkg-resource-tag .remove-btn:hover { color: #ef4444; }
+.pkg-resource-add {
+  display: flex; gap: 6px; align-items: center;
+}
+.pkg-resource-add input {
+  flex: 1; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg-input); color: var(--text-primary);
+  font-size: 12px;
+}
+.pkg-resource-add button {
+  padding: 6px 12px; border-radius: 6px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary);
+}
+.pkg-resource-add button.discover-btn {
+  background: var(--bg-card); border-color: var(--accent); color: var(--accent);
+}
+.pkg-resource-add button.discover-btn:hover { background: rgba(59,130,246,0.1); }
+
+/* ── Feature Flags ────────────────────────────────────────────── */
+.pkg-feature-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.pkg-feature-row:last-child { border-bottom: none; }
+.pkg-feature-info { flex: 1; }
+.pkg-feature-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.pkg-feature-desc { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.pkg-feature-toggle {
+  position: relative; width: 36px; height: 20px; flex-shrink: 0;
+}
+.pkg-feature-toggle input { opacity: 0; width: 0; height: 0; }
+.pkg-feature-toggle .slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--bg-input); border-radius: 10px; border: 1px solid var(--border);
+  transition: background 0.2s;
+}
+.pkg-feature-toggle .slider::before {
+  content: ''; position: absolute; width: 14px; height: 14px;
+  left: 2px; bottom: 2px; background: var(--text-muted);
+  border-radius: 50%; transition: transform 0.2s, background 0.2s;
+}
+.pkg-feature-toggle input:checked + .slider { background: var(--accent); border-color: var(--accent); }
+.pkg-feature-toggle input:checked + .slider::before { transform: translateX(16px); background: #fff; }
+
+/* ── Suggested Prompts ────────────────────────────────────────── */
+.pkg-prompt-chip {
+  display: inline-block; font-size: 11px; padding: 6px 12px;
+  border-radius: 16px; background: var(--bg-input);
+  border: 1px solid var(--border); color: var(--text-secondary);
+  margin: 0 6px 6px 0; cursor: default;
+}
+
 /* ── Activity log (action panel) ───────────────────────────────── */
 .activity-log { display: flex; flex-direction: column; gap: 0; font-size: 12px; font-family: var(--font-mono); }
 .activity-entry {
@@ -856,8 +1204,6 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     </div>
     <div id="topbar-spacer"></div>
     <div id="topbar-right">
-      <select id="provider-select" class="topbar-select"></select>
-      <select id="model-select" class="topbar-select"></select>
       <button class="topbar-btn" id="theme-toggle-btn" title="Toggle light/dark mode">
         <svg id="theme-icon-sun" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display:none"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58a.996.996 0 00-1.41 0 .996.996 0 000 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37a.996.996 0 00-1.41 0 .996.996 0 000 1.41l1.06 1.06c.39.39 1.03.39 1.41 0a.996.996 0 000-1.41l-1.06-1.06zm1.06-10.96a.996.996 0 000-1.41.996.996 0 00-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36a.996.996 0 000-1.41.996.996 0 00-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></svg>
         <svg id="theme-icon-moon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 3a9 9 0 109 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 01-4.4 2.26 5.403 5.403 0 01-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>
@@ -869,8 +1215,10 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 
   <!-- Workspace -->
   <div id="workspace">
-    <div id="panels-container"></div>
-    <div id="action-backdrop"></div>
+    <div id="carousel-rail">
+      <button class="carousel-nav prev hidden" id="carousel-prev">&#8249;</button>
+      <button class="carousel-nav next hidden" id="carousel-next">&#8250;</button>
+    </div>
     <button id="action-toggle"><svg viewBox="0 0 24 24"><path d="M4 15h16v-2H4v2zm0 4h16v-2H4v2zm0-8h16V9H4v2zm0-6v2h16V5H4z"/></svg></button>
     <div id="action-panel">
       <div id="action-header">
@@ -880,6 +1228,8 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
       <div class="action-tabs">
         <button class="action-tab active" data-action-tab="activity">Activity</button>
         <button class="action-tab" data-action-tab="browser">Browser</button>
+        <button class="action-tab" data-action-tab="agents">Agents</button>
+        <button class="action-tab" data-action-tab="providers">Providers</button>
       </div>
       <div id="action-body">
         <div class="activity-header">
@@ -926,6 +1276,9 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
         </div>
         <img id="browser-screenshot" style="display:none;width:100%;border-radius:6px;border:1px solid var(--border);" />
       </div>
+      <div id="agents-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
+      <div id="builder-body" style="display:none;flex:1;overflow-y:auto;padding:0;"></div>
+      <div id="providers-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
     </div>
   </div>
 </div>
@@ -936,23 +1289,14 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <button class="modal-close" id="settings-close">&times;</button>
     <h2>Settings</h2>
     <div class="settings-tabs">
-      <button class="settings-tab active" data-tab="keys">API Keys</button>
-      <button class="settings-tab" data-tab="models">Models</button>
-      <button class="settings-tab" data-tab="integrations">Integrations</button>
-      <button class="settings-tab" data-tab="agents">Agents</button>
+      <button class="settings-tab active" data-tab="integrations">Integrations</button>
       <button class="settings-tab" data-tab="tokens">Usage</button>
       <button class="settings-tab" data-tab="marketplace">Marketplace</button>
     </div>
-    <div id="tab-keys" class="settings-tab-content active">
-      <div id="provider-settings"></div>
-    </div>
-    <div id="tab-models" class="settings-tab-content">
-      <div id="models-settings"></div>
-    </div>
-    <div id="tab-integrations" class="settings-tab-content">
+    <div id="tab-integrations" class="settings-tab-content active">
       <div id="integrations-settings"></div>
     </div>
-    <div id="tab-agents" class="settings-tab-content">
+    <div id="tab-agents" class="settings-tab-content" style="display:none;">
       <div id="agents-settings"></div>
     </div>
     <div id="tab-tokens" class="settings-tab-content">
@@ -981,15 +1325,16 @@ const ICONS = {
 /* ═══════════════════════════════════════════════════════════════════
    Application state & logic
    ═══════════════════════════════════════════════════════════════════ */
-const MAX_PANELS = 3;
-const MIN_PANEL_WIDTH = 300;
+const MAX_PANELS = 10;
 let panelIdCounter = 0;
 
 const App = {
   state: {
     panels: [],
     activePanelId: null,
-    panelWidths: [],
+    focusedIndex: 0,
+    panelScrollPositions: {},
+    panelDrafts: {},
     providers: [],
     models: [],
     userModels: [],
@@ -1044,16 +1389,18 @@ const App = {
     });
     document.getElementById('action-toggle').addEventListener('click', () => this.toggleActionPanel());
     document.getElementById('action-close').addEventListener('click', () => this.toggleActionPanel(false));
-    document.getElementById('action-backdrop').addEventListener('click', () => this.toggleActionPanel(false));
     document.getElementById('activity-clear').addEventListener('click', () => this.activityClear());
+    // Carousel navigation
+    document.getElementById('carousel-prev').addEventListener('click', () => this.focusPrev());
+    document.getElementById('carousel-next').addEventListener('click', () => this.focusNext());
     document.querySelectorAll('.action-tab').forEach(tab => {
       tab.addEventListener('click', () => this.switchActionTab(tab.dataset.actionTab));
     });
-    document.getElementById('provider-select').addEventListener('change', e => {
+    document.getElementById('provider-select')?.addEventListener('change', e => {
       this.state.selectedProvider = e.target.value;
       this.loadModels(e.target.value);
     });
-    document.getElementById('model-select').addEventListener('change', e => {
+    document.getElementById('model-select')?.addEventListener('change', e => {
       this.state.selectedModel = e.target.value;
     });
     // Settings tabs
@@ -1063,13 +1410,17 @@ const App = {
         document.querySelectorAll('.settings-tab-content').forEach(c => c.classList.remove('active'));
         tab.classList.add('active');
         document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-        if (tab.dataset.tab === 'models') this.renderModelsSettings();
-        if (tab.dataset.tab === 'agents') this.renderAgentsSettings();
         if (tab.dataset.tab === 'tokens') this.renderTokenSettings();
         if (tab.dataset.tab === 'marketplace') this.renderMarketplaceSettings();
       });
     });
-    window.addEventListener('resize', () => this.recalcPanelWidths());
+    window.addEventListener('resize', () => this.layoutCarousel());
+    // Keyboard shortcuts for carousel
+    document.addEventListener('keydown', e => {
+      if (e.ctrlKey && e.key === ']') { e.preventDefault(); this.focusNext(); }
+      if (e.ctrlKey && e.key === '[') { e.preventDefault(); this.focusPrev(); }
+      if (e.key === 'Escape' && this.state.actionPanelOpen) { this.toggleActionPanel(false); }
+    });
   },
 
   /* ── Data loading ───────────────────────────────────────────────── */
@@ -1081,11 +1432,13 @@ const App = {
       const cfg = this.state.providers.find(p => p.has_key);
       if (cfg) {
         this.state.selectedProvider = cfg.provider_id;
-        document.getElementById('provider-select').value = cfg.provider_id;
+        const ps = document.getElementById('provider-select');
+        if (ps) ps.value = cfg.provider_id;
         await this.loadModels(cfg.provider_id);
       } else if (this.state.providers.length) {
         this.state.selectedProvider = this.state.providers[0].provider_id;
-        document.getElementById('provider-select').value = this.state.providers[0].provider_id;
+        const ps2 = document.getElementById('provider-select');
+        if (ps2) ps2.value = this.state.providers[0].provider_id;
       }
     } catch (e) { console.error('loadProviders:', e); }
   },
@@ -1101,7 +1454,8 @@ const App = {
         const def = this.state.models.find(m => m.is_default);
         const sel = def || this.state.models[0];
         this.state.selectedModel = sel.model_id || sel.id;
-        document.getElementById('model-select').value = this.state.selectedModel;
+        const ms = document.getElementById('model-select');
+        if (ms) ms.value = this.state.selectedModel;
       }
     } catch (e) { console.error('loadModels:', e); }
   },
@@ -1129,8 +1483,9 @@ const App = {
     this.state.panels.push({
       id, name: 'Chat', conversationId: null, messages: [], isStreaming: false, selectedAgent: null, projectPath: savedPath,
     });
+    // Focus the new panel
+    this.state.focusedIndex = this.state.panels.length - 1;
     this.state.activePanelId = id;
-    this.recalcPanelWidths();
     this.renderWorkspace();
     this.updateSubtitle();
     document.getElementById('add-panel-btn').disabled = this.state.panels.length >= MAX_PANELS;
@@ -1138,11 +1493,15 @@ const App = {
 
   closePanel(panelId) {
     if (this.state.panels.length <= 1) return;
+    const closedIndex = this.state.panels.findIndex(p => p.id === panelId);
     this.state.panels = this.state.panels.filter(p => p.id !== panelId);
-    if (this.state.activePanelId === panelId) {
-      this.state.activePanelId = this.state.panels[0]?.id || null;
+    // Adjust focused index
+    if (this.state.focusedIndex >= this.state.panels.length) {
+      this.state.focusedIndex = this.state.panels.length - 1;
+    } else if (closedIndex < this.state.focusedIndex) {
+      this.state.focusedIndex--;
     }
-    this.recalcPanelWidths();
+    this.state.activePanelId = this.state.panels[this.state.focusedIndex]?.id || null;
     this.renderWorkspace();
     this.updateSubtitle();
     document.getElementById('add-panel-btn').disabled = this.state.panels.length >= MAX_PANELS;
@@ -1161,73 +1520,131 @@ const App = {
   },
 
   setActivePanel(panelId) {
-    this.state.activePanelId = panelId;
-    document.querySelectorAll('.panel').forEach(el => {
-      el.classList.toggle('active', el.dataset.panelId === panelId);
-    });
+    const index = this.state.panels.findIndex(p => p.id === panelId);
+    if (index >= 0) this.focusPanel(index);
   },
 
   getPanel(panelId) {
     return this.state.panels.find(p => p.id === panelId);
   },
 
-  recalcPanelWidths() {
-    const container = document.getElementById('panels-container');
-    if (!container) return;
-    requestAnimationFrame(() => {
-      const cw = container.clientWidth;
-      const n = this.state.panels.length;
-      if (n === 0) return;
-      const dividers = (n - 1) * 8;
-      const avail = cw - dividers;
-      if (n === 1) {
-        const w = Math.min(avail, 800);
-        this.state.panelWidths = [w];
-      } else {
-        const each = Math.max(MIN_PANEL_WIDTH, Math.floor(avail / n));
-        this.state.panelWidths = Array(n).fill(each);
-      }
-      this.applyPanelWidths();
-    });
+  /* ── Carousel engine ──────────────────────────────────────────── */
+  layoutCarousel() {
+    const rail = document.getElementById('carousel-rail');
+    if (!rail) return;
+    const panels = rail.querySelectorAll('.panel');
+    const n = this.state.panels.length;
+    if (n === 0) return;
+    const railW = rail.clientWidth;
+    const gap = 10;
+    const fi = this.state.focusedIndex;
+
+    if (n === 1) {
+      // Single panel — centered, max 800px
+      const w = Math.min(railW - 20, 800);
+      const left = (railW - w) / 2;
+      panels[0].style.left = left + 'px';
+      panels[0].style.width = w + 'px';
+      panels[0].className = 'panel focused';
+      panels[0].dataset.panelId = this.state.panels[0].id;
+    } else if (n === 2) {
+      // Two panels — each 48% with gap
+      const pw = Math.floor((railW - gap) * 0.48);
+      const totalW = pw * 2 + gap;
+      const startLeft = (railW - totalW) / 2;
+      panels.forEach((el, i) => {
+        el.style.left = (startLeft + i * (pw + gap)) + 'px';
+        el.style.width = pw + 'px';
+        el.className = i === fi ? 'panel focused' : 'panel preview';
+        el.dataset.panelId = this.state.panels[i].id;
+      });
+    } else {
+      // 3+ panels — carousel: focused=52%, preview=24%
+      const focusW = Math.floor(railW * 0.52);
+      const previewW = Math.floor(railW * 0.24) - gap;
+      panels.forEach((el, i) => {
+        const offset = i - fi;
+        el.dataset.panelId = this.state.panels[i].id;
+        if (offset === 0) {
+          // Focused
+          const left = previewW + gap;
+          el.style.left = left + 'px';
+          el.style.width = focusW + 'px';
+          el.className = 'panel focused';
+        } else if (offset === -1) {
+          // Left preview
+          el.style.left = '0px';
+          el.style.width = previewW + 'px';
+          el.className = 'panel preview';
+        } else if (offset === 1) {
+          // Right preview
+          const left = previewW + gap + focusW + gap;
+          el.style.left = left + 'px';
+          el.style.width = previewW + 'px';
+          el.className = 'panel preview';
+        } else {
+          // Off-canvas
+          const offLeft = offset < 0 ? -400 : railW + 100;
+          el.style.left = offLeft + 'px';
+          el.style.width = previewW + 'px';
+          el.className = 'panel off-canvas';
+        }
+      });
+    }
+
+    // Update nav arrows
+    const prevBtn = document.getElementById('carousel-prev');
+    const nextBtn = document.getElementById('carousel-next');
+    if (prevBtn) prevBtn.classList.toggle('hidden', fi <= 0 || n <= 1);
+    if (nextBtn) nextBtn.classList.toggle('hidden', fi >= n - 1 || n <= 1);
   },
 
-  applyPanelWidths() {
-    const panels = document.querySelectorAll('.panel');
-    panels.forEach((el, i) => {
-      if (this.state.panelWidths[i]) {
-        el.style.width = this.state.panelWidths[i] + 'px';
-      }
-    });
+  saveCurrentPanelState() {
+    const panelId = this.state.activePanelId;
+    if (!panelId) return;
+    const el = document.querySelector(`.panel[data-panel-id="${panelId}"]`);
+    if (!el) return;
+    const msgs = el.querySelector('.panel-messages');
+    if (msgs) this.state.panelScrollPositions[panelId] = msgs.scrollTop;
+    const textarea = el.querySelector('.panel-textarea');
+    if (textarea) this.state.panelDrafts[panelId] = textarea.value;
   },
 
-  /* ── Resize divider ─────────────────────────────────────────────── */
-  initResizeDivider(dividerEl, leftIndex) {
-    let startX = 0;
-    const onMove = e => {
-      const dx = e.clientX - startX;
-      startX = e.clientX;
-      const ws = this.state.panelWidths;
-      const lw = ws[leftIndex] + dx;
-      const rw = ws[leftIndex + 1] - dx;
-      if (lw >= MIN_PANEL_WIDTH && rw >= MIN_PANEL_WIDTH) {
-        ws[leftIndex] = lw;
-        ws[leftIndex + 1] = rw;
-        this.applyPanelWidths();
-      }
-    };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    dividerEl.addEventListener('mousedown', e => {
-      startX = e.clientX;
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-    });
+  restoreCurrentPanelState() {
+    const panelId = this.state.activePanelId;
+    if (!panelId) return;
+    const el = document.querySelector(`.panel[data-panel-id="${panelId}"]`);
+    if (!el) return;
+    const msgs = el.querySelector('.panel-messages');
+    if (msgs && this.state.panelScrollPositions[panelId] !== undefined) {
+      msgs.scrollTop = this.state.panelScrollPositions[panelId];
+    }
+    const textarea = el.querySelector('.panel-textarea');
+    if (textarea && this.state.panelDrafts[panelId] !== undefined) {
+      textarea.value = this.state.panelDrafts[panelId];
+    }
+  },
+
+  focusPanel(index) {
+    const n = this.state.panels.length;
+    if (index < 0 || index >= n) return;
+    this.saveCurrentPanelState();
+    this.state.focusedIndex = index;
+    this.state.activePanelId = this.state.panels[index].id;
+    this.layoutCarousel();
+    this.restoreCurrentPanelState();
+  },
+
+  focusNext() {
+    if (this.state.focusedIndex < this.state.panels.length - 1) {
+      this.focusPanel(this.state.focusedIndex + 1);
+    }
+  },
+
+  focusPrev() {
+    if (this.state.focusedIndex > 0) {
+      this.focusPanel(this.state.focusedIndex - 1);
+    }
   },
 
   /* ── Chat actions ───────────────────────────────────────────────── */
@@ -1313,8 +1730,7 @@ const App = {
     panel.messages.push({ role: 'assistant', content: '', streaming: true });
     this.renderPanel(panelId);
 
-    // Activity log — open panel and start logging
-    this.toggleActionPanel(true);
+    // Activity log
     this.activitySetStatus(true, `Streaming — ${this.state.selectedProvider}/${this.state.selectedModel}`);
     this.activityLog('info', `<span class="hl">Chat started</span> <span class="dim">provider=${esc(this.state.selectedProvider)} model=${esc(this.state.selectedModel)}${panel.selectedAgent ? ' agent=' + esc(panel.selectedAgent) : ''}</span>`);
     this.activityLog('llm', `<span class="hl">User message</span> <span class="dim">(${text.length} chars)</span>`);
@@ -1634,8 +2050,14 @@ const App = {
   toggleActionPanel(forceState) {
     const open = forceState !== undefined ? forceState : !this.state.actionPanelOpen;
     this.state.actionPanelOpen = open;
-    document.getElementById('action-panel').classList.toggle('open', open);
-    document.getElementById('action-backdrop').classList.toggle('visible', open);
+    const ap = document.getElementById('action-panel');
+    const rail = document.getElementById('carousel-rail');
+    ap.classList.toggle('open', open);
+    if (rail) {
+      rail.classList.toggle('action-open', open);
+      rail.classList.toggle('builder-open', open && ap.classList.contains('builder-mode'));
+    }
+    this.layoutCarousel();
   },
 
   /* ── Activity Log ──────────────────────────────────────────────── */
@@ -1669,12 +2091,34 @@ const App = {
   /* ── Action panel tabs ───────────────────────────────────────────── */
   switchActionTab(tabName) {
     document.querySelectorAll('.action-tab').forEach(t =>
-      t.classList.toggle('active', t.dataset.actionTab === tabName)
+      t.classList.toggle('active', t.dataset.actionTab === tabName || (t.dataset.actionTab === 'agents' && tabName === 'builder'))
     );
     const actionBody = document.getElementById('action-body');
     const browserBody = document.getElementById('browser-body');
+    const agentsBody = document.getElementById('agents-body');
+    const builderBody = document.getElementById('builder-body');
+    const providersBody = document.getElementById('providers-body');
     if (actionBody) actionBody.style.display = tabName === 'activity' ? '' : 'none';
     if (browserBody) browserBody.classList.toggle('active', tabName === 'browser');
+    if (agentsBody) agentsBody.style.display = tabName === 'agents' ? 'block' : 'none';
+    if (builderBody) builderBody.style.display = tabName === 'builder' ? 'flex' : 'none';
+    if (providersBody) providersBody.style.display = tabName === 'providers' ? 'block' : 'none';
+    // Toggle wider panel for builder
+    const panel = document.getElementById('action-panel');
+    if (panel) panel.classList.toggle('builder-mode', tabName === 'builder');
+    // Update rail builder-open class
+    const rail = document.getElementById('carousel-rail');
+    if (rail && this.state.actionPanelOpen) {
+      rail.classList.toggle('builder-open', tabName === 'builder');
+      this.layoutCarousel();
+    }
+    // Auto-render when tab clicked
+    if (tabName === 'agents') {
+      this.renderAgentsTileView();
+    }
+    if (tabName === 'providers') {
+      this.renderProvidersPanel();
+    }
   },
 
   /* ── Open Marketplace in Browser ──────────────────────────────────── */
@@ -1831,7 +2275,6 @@ const App = {
   /* ── Settings ───────────────────────────────────────────────────── */
   openSettings() {
     document.getElementById('settings-overlay').classList.add('visible');
-    this.renderProviderSettings();
     this.renderIntegrations();
   },
   closeSettings() {
@@ -1845,61 +2288,80 @@ const App = {
 
   renderProviderSelect() {
     const s = document.getElementById('provider-select');
+    if (!s) return;
     s.innerHTML = this.state.providers.map(p =>
       `<option value="${p.provider_id}">${esc(p.display_name)}${p.has_key ? '' : ' (no key)'}</option>`
     ).join('');
   },
 
+  modelOptionsHTML() {
+    if (!this.state.models.length) return '<option value="">No models</option>';
+    return this.state.models.map(m => {
+      const val = m.model_id || m.id;
+      const name = m.display_name || val;
+      return `<option value="${val}" ${this.state.selectedModel === val ? 'selected' : ''}>${esc(name)}</option>`;
+    }).join('');
+  },
+
   renderModelSelect() {
+    // Update legacy select if present
     const s = document.getElementById('model-select');
-    s.innerHTML = this.state.models.length
-      ? this.state.models.map(m => {
-          const val = m.model_id || m.id;
-          const name = m.display_name || val;
-          return `<option value="${val}">${esc(name)}</option>`;
-        }).join('')
-      : '<option value="">No models — add in Settings</option>';
+    if (s) {
+      s.innerHTML = this.state.models.length
+        ? this.state.models.map(m => {
+            const val = m.model_id || m.id;
+            const name = m.display_name || val;
+            return `<option value="${val}">${esc(name)}</option>`;
+          }).join('')
+        : '<option value="">No models — add in Settings</option>';
+    }
+    // Update all panel footer model selects
+    document.querySelectorAll('.panel-model-select').forEach(sel => {
+      sel.innerHTML = this.modelOptionsHTML();
+      if (this.state.selectedModel) sel.value = this.state.selectedModel;
+    });
   },
 
   renderWorkspace() {
-    const container = document.getElementById('panels-container');
-    if (!container) return;
+    const rail = document.getElementById('carousel-rail');
+    if (!rail) return;
+    // Remove old panels but keep nav arrows
+    rail.querySelectorAll('.panel').forEach(el => el.remove());
+    // Add panel elements
     let html = '';
-    this.state.panels.forEach((panel, i) => {
-      if (i > 0) html += `<div class="resize-divider" data-divider-index="${i - 1}"></div>`;
+    this.state.panels.forEach(panel => {
       html += this.panelHTML(panel);
     });
-    container.innerHTML = html;
-    container.style.display = 'flex';
-    container.style.flex = '1 1 auto';
-    container.style.minWidth = '0';
-    container.style.height = '100%';
-    if (this.state.panels.length === 1) container.style.justifyContent = 'center';
-    else container.style.justifyContent = 'stretch';
+    // Insert before the nav buttons
+    const prevBtn = document.getElementById('carousel-prev');
+    if (prevBtn) prevBtn.insertAdjacentHTML('beforebegin', html);
+    else rail.insertAdjacentHTML('beforeend', html);
 
     // Bind events
-    this.state.panels.forEach((panel, i) => {
+    this.state.panels.forEach(panel => {
       this.bindPanelEvents(panel.id);
     });
-    // Bind resize dividers
-    container.querySelectorAll('.resize-divider').forEach(el => {
-      this.initResizeDivider(el, parseInt(el.dataset.dividerIndex));
+    // Bind panel click for carousel focus
+    this.state.panels.forEach((panel, i) => {
+      const el = rail.querySelector(`.panel[data-panel-id="${panel.id}"]`);
+      if (el) {
+        el.addEventListener('mousedown', () => {
+          if (i !== this.state.focusedIndex) {
+            this.focusPanel(i);
+          }
+        });
+      }
     });
-    // Apply widths
-    this.recalcPanelWidths();
+    // Layout
+    this.layoutCarousel();
   },
 
   panelHTML(panel) {
-    const isActive = panel.id === this.state.activePanelId;
-    const singleClass = this.state.panels.length === 1 ? ' single' : '';
-    return `<div class="panel${isActive ? ' active' : ''}${singleClass}" data-panel-id="${panel.id}" style="position:relative;">
+    return `<div class="panel" data-panel-id="${panel.id}">
       <div class="panel-header">
         <span class="panel-header-icon">${ICONS.chat}</span>
         <span class="panel-header-title">${esc(panel.name)}</span>
-        <select class="panel-agent-select topbar-select" style="font-size:11px;padding:3px 6px;">
-          <option value="">No Agent</option>
-          ${this.state.agents.map(sk => `<option value="${esc(sk.id)}" ${panel.selectedAgent === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`).join('')}
-        </select>
+        <button class="panel-header-btn create-agent-btn" title="Create Agent" style="font-size:11px;padding:3px 8px;font-weight:600;">+</button>
         <button class="panel-header-btn new-session-btn" title="New Session">${ICONS.newSession}</button>
         <button class="panel-header-btn history-btn" title="History">${ICONS.history}</button>
         <button class="panel-header-btn close-btn" title="Close Panel">${ICONS.close}</button>
@@ -1914,7 +2376,19 @@ const App = {
           <textarea class="panel-textarea" placeholder="Send a message..." rows="1"></textarea>
           <button class="panel-send-btn" title="Send"${panel.isStreaming ? ' disabled' : ''}>${ICONS.send}</button>
         </div>
-        <div class="input-hint">Press Enter to send, Shift+Enter for new line</div>
+        <div class="input-footer">
+          <div class="input-footer-left">
+            <select class="panel-agent-select input-footer-select" title="Select Agent">
+              <option value="">No Agent</option>
+              ${this.state.agents.map(sk => `<option value="${esc(sk.id)}" ${panel.selectedAgent === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="input-footer-right">
+            <select class="panel-model-select input-footer-select" title="Select Model">
+              ${this.modelOptionsHTML()}
+            </select>
+          </div>
+        </div>
       </div>
       <div class="history-popover">${this.historyPopoverHTML(panel.id)}</div>
     </div>`;
@@ -2056,23 +2530,54 @@ const App = {
     // New Session
     const newBtn = el.querySelector('.new-session-btn');
     if (newBtn) newBtn.addEventListener('click', e => { e.stopPropagation(); this.newSession(panelId); });
+    // Create Agent
+    const createAgentBtn = el.querySelector('.create-agent-btn');
+    if (createAgentBtn) createAgentBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      this.toggleActionPanel(true);
+      this.switchActionTab('agents');
+    });
     // Close
     const closeBtn = el.querySelector('.close-btn');
     if (closeBtn) closeBtn.addEventListener('click', e => { e.stopPropagation(); this.closePanel(panelId); });
-    // Agent selector
+    // Agent selector (now in input footer)
     const agentSel = el.querySelector('.panel-agent-select');
-    if (agentSel) agentSel.addEventListener('change', () => {
+    if (agentSel) agentSel.addEventListener('change', async () => {
       const panel = this.getPanel(panelId);
       if (panel) {
         panel.selectedAgent = agentSel.value || null;
-        // Auto-fill project path from agent's default project_path
-        const agent = this.state.agents.find(s => s.id === agentSel.value);
-        if (agent && agent.project_path) {
-          panel.projectPath = agent.project_path;
-          const projInput = el.querySelector('.panel-project-path');
-          if (projInput) projInput.value = agent.project_path;
+        // Load full agent to get preferred_provider/model and project_path
+        if (agentSel.value) {
+          try {
+            const resp = await fetch(`/api/agents/${agentSel.value}`);
+            if (resp.ok) {
+              const agent = await resp.json();
+              // Auto-fill project path
+              if (agent.project_path) {
+                panel.projectPath = agent.project_path;
+                const projInput = el.querySelector('.panel-project-path');
+                if (projInput) projInput.value = agent.project_path;
+              }
+              // Auto-switch to agent's preferred provider/model
+              if (agent.preferred_provider) {
+                this.state.selectedProvider = agent.preferred_provider;
+                await this.loadModels(agent.preferred_provider);
+                if (agent.preferred_model) {
+                  this.state.selectedModel = agent.preferred_model;
+                  this.renderModelSelect();
+                }
+              }
+            }
+          } catch (e) { console.error('Load agent details:', e); }
         }
       }
+    });
+    // Model selector (in input footer)
+    const modelSel = el.querySelector('.panel-model-select');
+    if (modelSel) modelSel.addEventListener('change', () => {
+      this.state.selectedModel = modelSel.value;
+      // Sync all panel model selects
+      document.querySelectorAll('.panel-model-select').forEach(s => { if (s !== modelSel) s.value = modelSel.value; });
     });
     // Project path
     const projInput = el.querySelector('.panel-project-path');
@@ -2147,6 +2652,497 @@ const App = {
     });
   },
 
+  /* ── Providers Panel (Action Panel) ──────────────────────────── */
+  async renderProvidersPanel() {
+    const c = document.getElementById('providers-body');
+    if (!c) return;
+    await this.loadProviders();
+    await this.loadAllUserModels();
+
+    // Check Ollama status
+    let ollamaStatus = { running: false, models: [] };
+    try {
+      const r = await fetch('/api/providers/ollama/status');
+      if (r.ok) ollamaStatus = await r.json();
+    } catch (_) {}
+
+    let html = '';
+
+    /* ─── Cloud Providers ─── */
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">Cloud Providers</div>';
+
+    for (const p of this.state.providers.filter(p => p.provider_id !== 'ollama' && p.provider_id !== 'huggingface')) {
+      const modelCount = this.state.userModels.filter(m => m.provider_id === p.provider_id).length;
+      html += `<div class="provider-card" data-pid="${esc(p.provider_id)}">
+        <div class="provider-card-header">
+          <div class="provider-card-info">
+            <span class="provider-card-status ${p.has_key ? 'ok' : ''}">${p.has_key ? '✓' : '○'}</span>
+            <span class="provider-card-name">${esc(p.display_name)}</span>
+          </div>
+          <div class="provider-card-meta">${modelCount} model${modelCount !== 1 ? 's' : ''}</div>
+        </div>
+        <div class="provider-card-actions">
+          <button class="provider-card-btn key-btn" data-pid="${esc(p.provider_id)}">
+            ${p.has_key ? '🔑 Update Key' : '🔑 Add Key'}
+          </button>
+          <button class="provider-card-btn models-btn" data-pid="${esc(p.provider_id)}" ${!p.has_key ? 'disabled' : ''}>
+            📋 Models
+          </button>
+        </div>
+        <div class="provider-card-key-form" id="key-form-${esc(p.provider_id)}" style="display:none;">
+          <input type="password" class="provider-card-key-input" placeholder="${p.has_key ? 'Enter new key to replace...' : 'Enter API key...'}" data-pid="${esc(p.provider_id)}" />
+          <div style="display:flex;gap:4px;">
+            <button class="provider-card-btn save-key-btn" data-pid="${esc(p.provider_id)}">Save</button>
+            <button class="provider-card-btn cancel-key-btn" data-pid="${esc(p.provider_id)}">Cancel</button>
+          </div>
+        </div>
+        <div class="provider-card-models" id="models-panel-${esc(p.provider_id)}" style="display:none;"></div>
+      </div>`;
+    }
+
+    /* ─── Local Models ─── */
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:20px 0 10px;">Local Models</div>';
+
+    /* Ollama */
+    const ollamaModels = ollamaStatus.models || [];
+    html += `<div class="provider-card local-provider">
+      <div class="provider-card-header">
+        <div class="provider-card-info">
+          <span class="provider-card-status ${ollamaStatus.running ? 'ok' : ''}">${ollamaStatus.running ? '✓' : '○'}</span>
+          <span class="provider-card-name">Ollama</span>
+        </div>
+        <div class="provider-card-meta">${ollamaStatus.running ? ollamaModels.length + ' model' + (ollamaModels.length !== 1 ? 's' : '') + ' loaded' : 'Not running'}</div>
+      </div>`;
+
+    if (ollamaStatus.running) {
+      html += '<div class="local-models-list">';
+      if (ollamaModels.length === 0) {
+        html += '<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">No models installed. Run <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">ollama pull llama3</code> to get started.</div>';
+      }
+      for (const m of ollamaModels) {
+        const size = m.size ? (m.size / (1024*1024*1024)).toFixed(1) + ' GB' : '';
+        html += `<div class="local-model-item">
+          <div class="local-model-info">
+            <div class="local-model-name">${esc(m.name || m.model)}</div>
+            <div class="local-model-meta">${size}${m.details?.quantization_level ? ' • ' + esc(m.details.quantization_level) : ''}${m.details?.parameter_size ? ' • ' + esc(m.details.parameter_size) : ''}</div>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+      html += `<div class="provider-card-actions" style="margin-top:8px;">
+        <button class="provider-card-btn" id="ollama-refresh-btn">↻ Refresh</button>
+        <button class="provider-card-btn" id="ollama-pull-btn">+ Pull Model</button>
+      </div>`;
+      html += `<div id="ollama-pull-form" style="display:none;margin-top:8px;">
+        <div style="display:flex;gap:4px;">
+          <input type="text" id="ollama-pull-input" class="provider-card-key-input" placeholder="Model name (e.g. llama3, mistral, phi3)" />
+          <button class="provider-card-btn" id="ollama-pull-go">Pull</button>
+        </div>
+        <div id="ollama-pull-status" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
+      </div>`;
+    } else {
+      html += `<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">
+        Ollama is not running. <a href="#" style="color:var(--accent);" onclick="event.preventDefault();fetch('/api/providers/ollama/start',{method:'POST'}).then(()=>setTimeout(()=>app.renderProvidersPanel(),2000));">Start Ollama</a>
+        or install from <a href="https://ollama.ai" target="_blank" style="color:var(--accent);">ollama.ai</a>
+      </div>`;
+    }
+    html += '</div>';
+
+    /* HuggingFace / GGUF */
+    html += `<div class="provider-card local-provider">
+      <div class="provider-card-header">
+        <div class="provider-card-info">
+          <span class="provider-card-status" id="sidecar-status-dot">○</span>
+          <span class="provider-card-name">Local Models (GGUF)</span>
+        </div>
+        <div class="provider-card-meta" id="sidecar-status-text">Checking...</div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);padding:8px 0;line-height:1.6;">
+        Load GGUF model files locally via the Python inference sidecar.<br>
+        Models scanned from <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">C:\\LLM Models</code>
+        and <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">~/.chitty-workspace/models/</code>
+      </div>
+      <div class="provider-card-actions" style="flex-wrap:wrap;gap:6px;">
+        <button class="provider-card-btn" id="gguf-scan-btn">🔍 Scan Models</button>
+        <button class="provider-card-btn" id="gguf-sidecar-btn">⚡ Start Sidecar</button>
+        <button class="provider-card-btn" id="gguf-stop-btn" style="display:none;">⏹ Stop Sidecar</button>
+        <button class="provider-card-btn" id="gguf-browse-btn">📂 Browse File</button>
+      </div>
+      <div id="gguf-models-list" style="margin-top:8px;"></div>
+    </div>`;
+
+    /* ─── Runtime Monitoring ─── */
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:20px 0 10px;">Monitoring</div>';
+    html += `<div class="provider-card">
+      <div class="monitor-grid">
+        <div class="monitor-item">
+          <div class="monitor-label">GPU</div>
+          <div class="monitor-value" id="monitor-gpu">—</div>
+        </div>
+        <div class="monitor-item">
+          <div class="monitor-label">VRAM</div>
+          <div class="monitor-value" id="monitor-vram">—</div>
+        </div>
+        <div class="monitor-item">
+          <div class="monitor-label">RAM</div>
+          <div class="monitor-value" id="monitor-ram">—</div>
+        </div>
+        <div class="monitor-item">
+          <div class="monitor-label">Active Model</div>
+          <div class="monitor-value" id="monitor-model">—</div>
+        </div>
+      </div>
+      <button class="provider-card-btn" id="monitor-refresh-btn" style="margin-top:8px;">↻ Refresh Stats</button>
+    </div>`;
+
+    c.innerHTML = html;
+
+    /* ─── Bind Events ─── */
+    // API Key toggle
+    c.querySelectorAll('.key-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const form = document.getElementById('key-form-' + btn.dataset.pid);
+        if (form) form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+      });
+    });
+    // Cancel key
+    c.querySelectorAll('.cancel-key-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const form = document.getElementById('key-form-' + btn.dataset.pid);
+        if (form) form.style.display = 'none';
+      });
+    });
+    // Save key
+    c.querySelectorAll('.save-key-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const input = c.querySelector(`.provider-card-key-input[data-pid="${btn.dataset.pid}"]`);
+        const key = input?.value.trim();
+        if (!key) return;
+        try {
+          const resp = await fetch(`/api/providers/${btn.dataset.pid}/key`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: key }),
+          });
+          if (resp.ok) {
+            await this.loadProviders();
+            this.renderProvidersPanel();
+          }
+        } catch (e) { console.error('saveKey:', e); }
+      });
+    });
+    // Models toggle
+    c.querySelectorAll('.models-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const panel = document.getElementById('models-panel-' + btn.dataset.pid);
+        if (!panel) return;
+        if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+        panel.style.display = 'block';
+        panel.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px;">Loading...</div>';
+        await this.renderProviderModelsInline(btn.dataset.pid, panel);
+      });
+    });
+    // Ollama refresh
+    document.getElementById('ollama-refresh-btn')?.addEventListener('click', () => this.renderProvidersPanel());
+    // Ollama pull
+    document.getElementById('ollama-pull-btn')?.addEventListener('click', () => {
+      const form = document.getElementById('ollama-pull-form');
+      if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    });
+    document.getElementById('ollama-pull-go')?.addEventListener('click', async () => {
+      const input = document.getElementById('ollama-pull-input');
+      const status = document.getElementById('ollama-pull-status');
+      const name = input?.value.trim();
+      if (!name) return;
+      status.textContent = 'Pulling ' + name + '...';
+      try {
+        const r = await fetch('/api/providers/ollama/pull', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: name }),
+        });
+        const data = await r.json();
+        status.textContent = data.error ? 'Error: ' + data.error : 'Pull started — refresh to check progress.';
+        if (!data.error) setTimeout(() => this.renderProvidersPanel(), 3000);
+      } catch (e) { status.textContent = 'Error: ' + e.message; }
+    });
+    // GGUF scan
+    /* ─── Sidecar status check ─── */
+    (async () => {
+      try {
+        const r = await fetch('/api/local/sidecar/status');
+        const s = await r.json();
+        const dot = document.getElementById('sidecar-status-dot');
+        const txt = document.getElementById('sidecar-status-text');
+        const startBtn = document.getElementById('gguf-sidecar-btn');
+        const stopBtn = document.getElementById('gguf-stop-btn');
+        if (s.running) {
+          dot.textContent = '●'; dot.style.color = 'var(--success)';
+          txt.textContent = s.loaded_model ? `Running · ${s.loaded_model}` : `Running · ${s.models_registered || 0} models`;
+          startBtn.style.display = 'none';
+          stopBtn.style.display = '';
+        } else {
+          dot.textContent = '○'; dot.style.color = 'var(--text-muted)';
+          txt.textContent = s.python_found ? 'Not running' : 'Python not found';
+          startBtn.style.display = '';
+          stopBtn.style.display = 'none';
+        }
+      } catch (_) {}
+    })();
+
+    /* ─── Scan models (works without sidecar — direct filesystem scan) ─── */
+    document.getElementById('gguf-scan-btn')?.addEventListener('click', async () => {
+      const list = document.getElementById('gguf-models-list');
+      list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);">Scanning model directories...</div>';
+      try {
+        // Try sidecar first, fall back to direct scan
+        let models = [];
+        const sidecarR = await fetch('/api/local/sidecar/status');
+        const sidecarS = await sidecarR.json();
+        if (sidecarS.running) {
+          const r = await fetch('/api/local/sidecar/models/scan', { method: 'POST' });
+          const data = await r.json();
+          models = data.models || [];
+        } else {
+          const r = await fetch('/api/local/gguf/scan');
+          const data = await r.json();
+          models = data.models || [];
+        }
+        if (!models.length) {
+          list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);">No GGUF files found.</div>';
+        } else {
+          list.innerHTML = models.map(m => {
+            const safeName = (m.name || '').replaceAll('&','&amp;').replaceAll("'","&#39;").replaceAll('"','&quot;');
+            const sizeGb = m.size_gb ? m.size_gb.toFixed(1) : (m.size_bytes ? (m.size_bytes / (1024*1024*1024)).toFixed(1) : '?');
+            const quant = m.quantization ? ` · ${m.quantization}` : '';
+            const loaded = m.loaded ? ' · <span style="color:var(--success);font-weight:600;">LOADED</span>' : '';
+            return `<div class="local-model-item" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--bg-card);border-radius:6px;margin-bottom:4px;">
+              <div>
+                <div style="font-size:12px;font-weight:500;">${safeName}</div>
+                <div style="font-size:10px;color:var(--text-muted);">${sizeGb} GB${quant}${loaded}</div>
+              </div>
+              <div style="display:flex;gap:4px;">
+                ${!m.loaded ? `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="app.loadGgufModel('${safeName}')">Load</button>` : `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="app.unloadGgufModel()">Unload</button>`}
+              </div>
+            </div>`;
+          }).join('');
+        }
+      } catch (e) {
+        list.innerHTML = `<div style="font-size:11px;color:var(--danger);">Scan failed: ${e.message}</div>`;
+      }
+    });
+
+    /* ─── Start sidecar ─── */
+    document.getElementById('gguf-sidecar-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('gguf-sidecar-btn');
+      btn.textContent = '⏳ Starting...';
+      btn.disabled = true;
+      try {
+        const r = await fetch('/api/local/sidecar/start', { method: 'POST' });
+        const data = await r.json();
+        if (data.success) {
+          // Re-render to update status
+          setTimeout(() => app.renderProvidersPanel(), 1000);
+        } else {
+          alert('Failed to start sidecar: ' + (data.error || 'Unknown error'));
+          btn.textContent = '⚡ Start Sidecar';
+          btn.disabled = false;
+        }
+      } catch (e) {
+        alert('Error starting sidecar: ' + e.message);
+        btn.textContent = '⚡ Start Sidecar';
+        btn.disabled = false;
+      }
+    });
+
+    /* ─── Stop sidecar ─── */
+    document.getElementById('gguf-stop-btn')?.addEventListener('click', async () => {
+      await fetch('/api/local/sidecar/stop', { method: 'POST' });
+      setTimeout(() => app.renderProvidersPanel(), 1000);
+    });
+
+    /* ─── Browse for GGUF file ─── */
+    document.getElementById('gguf-browse-btn')?.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.gguf';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        // WebView2 gives us the real path via file.name for local files
+        // For security, we register by name and let the user confirm the path
+        const path = prompt('Enter the full path to the GGUF file:', file.name);
+        if (!path) return;
+        try {
+          const r = await fetch('/api/local/sidecar/models/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+          });
+          const data = await r.json();
+          if (data.success) {
+            document.getElementById('gguf-scan-btn')?.click(); // Refresh list
+          } else {
+            alert('Failed to register: ' + (data.error || data.detail || 'Unknown error'));
+          }
+        } catch (err) {
+          alert('Error: ' + err.message);
+        }
+      };
+      input.click();
+    });
+
+    /* ─── Monitor refresh ─── */
+    document.getElementById('monitor-refresh-btn')?.addEventListener('click', async () => {
+      try {
+        const r = await fetch('/api/local/gpu');
+        if (r.ok) {
+          const data = await r.json();
+          document.getElementById('monitor-gpu').textContent = data.gpu_name || 'No GPU';
+          document.getElementById('monitor-vram').textContent = data.vram_used_mb && data.vram_total_mb
+            ? `${(data.vram_used_mb/1024).toFixed(1)}/${(data.vram_total_mb/1024).toFixed(1)} GB`
+            : '—';
+          document.getElementById('monitor-ram').textContent = '—';
+          // Check sidecar for active model
+          const sr = await fetch('/api/local/sidecar/status');
+          const ss = await sr.json();
+          document.getElementById('monitor-model').textContent = ss.loaded_model || 'None';
+        }
+      } catch (_) {}
+    });
+    // Auto-refresh on panel load
+    document.getElementById('monitor-refresh-btn')?.click();
+  },
+
+  /* ── GGUF model load/unload helpers ──── */
+  async loadGgufModel(name) {
+    const list = document.getElementById('gguf-models-list');
+    if (list) list.innerHTML = `<div style="font-size:11px;color:var(--text-muted);">Loading ${name}... (this may take a minute)</div>`;
+    try {
+      const r = await fetch('/api/local/sidecar/models/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: name }),
+      });
+      const data = await r.json();
+      if (data.success) {
+        // Refresh the model list
+        document.getElementById('gguf-scan-btn')?.click();
+        app.renderProvidersPanel();
+      } else {
+        alert('Failed to load model: ' + (data.error || 'Unknown error'));
+        document.getElementById('gguf-scan-btn')?.click();
+      }
+    } catch (e) {
+      alert('Error loading model: ' + e.message);
+    }
+  },
+
+  async unloadGgufModel() {
+    try {
+      await fetch('/api/local/sidecar/models/unload', { method: 'POST' });
+      document.getElementById('gguf-scan-btn')?.click();
+      app.renderProvidersPanel();
+    } catch (e) {
+      alert('Error unloading model: ' + e.message);
+    }
+  },
+
+  /* ── Inline models for a provider (inside Providers panel) ──── */
+  async renderProviderModelsInline(pid, container) {
+    await this.loadAllUserModels();
+    const myModels = this.state.userModels.filter(m => m.provider_id === pid);
+
+    let html = '';
+    if (myModels.length) {
+      html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;font-weight:600;">YOUR MODELS</div>';
+      for (const m of myModels) {
+        html += `<div class="local-model-item">
+          <div class="local-model-info">
+            <div class="local-model-name">${esc(m.display_name)}</div>
+            <div class="local-model-meta">${esc(m.model_id)}${m.context_window ? ' • ' + (m.context_window/1000) + 'k ctx' : ''}</div>
+          </div>
+          <div style="display:flex;gap:4px;">
+            <button class="provider-card-btn inline-default-btn ${m.is_default ? 'is-default' : ''}" data-mid="${m.id}">${m.is_default ? '★ Default' : 'Set Default'}</button>
+            <button class="provider-card-btn inline-remove-btn" data-mid="${m.id}" style="color:var(--danger);">×</button>
+          </div>
+        </div>`;
+      }
+    }
+    html += `<button class="provider-card-btn" id="inline-discover-${esc(pid)}" style="margin-top:8px;">+ Discover Models</button>`;
+    html += `<div id="inline-discover-results-${esc(pid)}"></div>`;
+
+    container.innerHTML = html;
+
+    // Bind default/remove
+    container.querySelectorAll('.inline-default-btn:not(.is-default)').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await fetch(`/api/models/${btn.dataset.mid}/default`, { method: 'POST' });
+        await this.renderProviderModelsInline(pid, container);
+        await this.loadModels(this.state.selectedProvider);
+        this.renderModelSelect();
+      });
+    });
+    container.querySelectorAll('.inline-remove-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await fetch(`/api/models/${btn.dataset.mid}`, { method: 'DELETE' });
+        await this.renderProviderModelsInline(pid, container);
+        await this.loadModels(this.state.selectedProvider);
+        this.renderModelSelect();
+      });
+    });
+    // Discover
+    document.getElementById('inline-discover-' + pid)?.addEventListener('click', async () => {
+      const results = document.getElementById('inline-discover-results-' + pid);
+      results.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:4px;">Fetching...</div>';
+      try {
+        const resp = await fetch(`/api/providers/${pid}/discover`);
+        const data = await resp.json();
+        const models = data.models || [];
+        const addedIds = new Set(this.state.userModels.filter(m => m.provider_id === pid).map(m => m.model_id));
+        results.innerHTML = models.map(m => {
+          const mid = m.id || m.model_id;
+          const name = m.display_name || mid;
+          const isAdded = addedIds.has(mid);
+          return `<div class="local-model-item">
+            <div class="local-model-info">
+              <div class="local-model-name">${esc(name)}</div>
+              <div class="local-model-meta">${esc(mid)}</div>
+            </div>
+            <button class="provider-card-btn inline-add-btn ${isAdded ? 'is-default' : ''}"
+              data-mid="${esc(mid)}" data-name="${esc(name)}" data-pid="${pid}"
+              data-ctx="${m.context_window || ''}"
+              data-tools="${m.capabilities?.tool_calling || m.supports_tools || false}"
+              data-streaming="${m.capabilities?.streaming || m.supports_streaming || true}"
+              data-vision="${m.capabilities?.vision || m.supports_vision || false}"
+              ${isAdded ? 'disabled' : ''}>${isAdded ? 'Added' : '+ Add'}</button>
+          </div>`;
+        }).join('');
+        results.querySelectorAll('.inline-add-btn:not(.is-default)').forEach(abtn => {
+          abtn.addEventListener('click', async () => {
+            const body = {
+              provider_id: abtn.dataset.pid, model_id: abtn.dataset.mid,
+              display_name: abtn.dataset.name,
+              context_window: abtn.dataset.ctx ? parseInt(abtn.dataset.ctx) : null,
+              supports_tools: abtn.dataset.tools === 'true',
+              supports_streaming: abtn.dataset.streaming !== 'false',
+              supports_vision: abtn.dataset.vision === 'true',
+            };
+            const r = await fetch('/api/models', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            if (r.ok) {
+              abtn.classList.add('is-default'); abtn.textContent = 'Added'; abtn.disabled = true;
+              await this.loadAllUserModels();
+              await this.renderProviderModelsInline(pid, container);
+            }
+          });
+        });
+      } catch (e) {
+        results.innerHTML = `<div style="font-size:11px;color:var(--danger);">Error: ${esc(e.message)}</div>`;
+      }
+    });
+  },
+
   /* ── Integrations (OAuth) ────────────────────────────────────── */
   async renderIntegrations() {
     const c = document.getElementById('integrations-settings');
@@ -2158,7 +3154,12 @@ const App = {
       const integrations = data.integrations || [];
 
       let html = '<div class="model-section">';
-      html += '<div class="model-section-title">Connected Services</div>';
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+      html += '<div class="model-section-title" style="margin-bottom:0;">Connected Services</div>';
+      html += `<button class="discover-btn" style="font-size:11px;padding:5px 14px;display:flex;align-items:center;gap:5px;"
+        onclick="document.querySelector('[data-tab=marketplace]').click();">
+        <span style="font-size:13px;">🛒</span> Browse Marketplace</button>`;
+      html += '</div>';
       html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Connect your accounts to give agents real API access. Tokens are stored securely on your machine — never sent to any server.</div>';
 
       for (const intg of integrations) {
@@ -2186,6 +3187,12 @@ const App = {
 
         html += '</div></div>';
       }
+
+      // Marketplace hint for additional integrations
+      html += `<div style="margin-top:16px;padding:12px;background:var(--bg-card);border:1px dashed var(--border);border-radius:8px;text-align:center;">
+        <div style="font-size:12px;color:var(--text-muted);">Need Microsoft, GitHub, Slack, or other integrations?</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Install them from the <a href="#" style="color:var(--accent);text-decoration:none;font-weight:500;" onclick="event.preventDefault();document.querySelector('[data-tab=marketplace]').click();">Marketplace</a> — each comes with a setup wizard for your own OAuth credentials.</div>
+      </div>`;
 
       html += '</div>';
       c.innerHTML = html;
@@ -2409,7 +3416,7 @@ const App = {
   },
 
   renderAgentSelect() {
-    // Update agent dropdowns in all existing panels
+    // Update agent dropdowns in all panel input footers
     document.querySelectorAll('.panel-agent-select').forEach(sel => {
       const current = sel.value;
       let html = '<option value="">No Agent</option>';
@@ -2418,6 +3425,8 @@ const App = {
       }
       sel.innerHTML = html;
     });
+    // Also update agent form provider/model selects if open
+    this.updateAgentFormProviderModels();
   },
 
   async renderAgentsSettings() {
@@ -2428,7 +3437,6 @@ const App = {
     let html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
     html += '<div class="model-section-title" style="margin:0;">Your Agents</div>';
     html += '<div style="display:flex;gap:6px;">';
-    html += '<button class="discover-btn" id="agent-builder-btn">Agent Builder</button>';
     html += '<button class="discover-btn" id="create-agent-btn" style="background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border);">+ Manual</button>';
     html += '</div></div>';
 
@@ -2438,10 +3446,17 @@ const App = {
 
     for (const sk of this.state.agents) {
       const tools = (sk.tools || []).join(', ') || 'all tools';
+      const providerLabel = sk.preferred_provider ? this.state.providers.find(p => p.provider_id === sk.preferred_provider)?.display_name || sk.preferred_provider : null;
+      const modelLabel = sk.preferred_model || null;
+      const pmLine = providerLabel ? `Provider: ${esc(providerLabel)}${modelLabel ? ' / ' + esc(modelLabel) : ''}` : '';
+      const approvalBadge = sk.approval_mode === 'auto'
+        ? '<span style="display:inline-block;padding:1px 6px;background:#22c55e22;color:#22c55e;border-radius:3px;font-size:10px;font-weight:600;">AUTO-APPROVE</span>'
+        : '<span style="display:inline-block;padding:1px 6px;background:#3b82f622;color:#3b82f6;border-radius:3px;font-size:10px;font-weight:600;">PROMPT</span>';
       html += `<div class="agent-item">
         <div class="agent-item-info">
-          <div class="agent-item-name">${esc(sk.name)}</div>
+          <div class="agent-item-name">${esc(sk.name)} ${approvalBadge}</div>
           <div class="agent-item-desc">${esc(sk.description)}</div>
+          ${pmLine ? `<div class="agent-item-tags" style="color:var(--accent);">${pmLine}</div>` : ''}
           <div class="agent-item-tags">Tools: ${esc(tools)}${sk.max_iterations ? ' &middot; max ' + sk.max_iterations + ' iterations' : ''}</div>
         </div>
         <button class="agent-edit-btn" data-agent-id="${esc(sk.id)}">Edit</button>
@@ -2453,7 +3468,6 @@ const App = {
     c.innerHTML = html;
 
     // Bind buttons
-    document.getElementById('agent-builder-btn')?.addEventListener('click', () => this.showAgentBuilder());
     document.getElementById('create-agent-btn')?.addEventListener('click', () => this.showAgentForm());
     c.querySelectorAll('.agent-edit-btn').forEach(btn => {
       btn.addEventListener('click', () => this.showAgentForm(btn.dataset.agentId));
@@ -2480,18 +3494,39 @@ const App = {
     }
     const container = document.getElementById('agent-form-container');
 
-    let toolChecks = '';
-    let addedMarketplaceSeparator = false;
-    for (const t of this.state.availableTools) {
-      if (!addedMarketplaceSeparator && t.name.startsWith('gcloud_')) {
-        toolChecks += '<div style="width:100%;font-size:11px;color:var(--text-muted);font-weight:600;margin:8px 0 4px;padding-top:8px;border-top:1px solid var(--border);">\u2500\u2500 Google Cloud \u2500\u2500</div>';
-        addedMarketplaceSeparator = true;
-      }
+    // Group tools by category
+    const native = this.state.availableTools.filter(t => t.category === 'native');
+    const integration = this.state.availableTools.filter(t => t.category === 'integration');
+    const marketplace = this.state.availableTools.filter(t => t.category === 'marketplace');
+
+    const toolCheckbox = (t) => {
       const checked = existing ? (existing.tools || []).includes(t.name) : false;
-      toolChecks += `<label class="tool-checkbox${checked ? ' checked' : ''}">
+      return `<label class="tool-checkbox${checked ? ' checked' : ''}">
         <input type="checkbox" value="${esc(t.name)}" ${checked ? 'checked' : ''} />
         ${esc(t.display_name || t.name)}
       </label>`;
+    };
+    const separator = (label) => `<div style="width:100%;font-size:11px;color:var(--text-muted);font-weight:600;margin:8px 0 4px;padding-top:8px;border-top:1px solid var(--border);">\u2500\u2500 ${esc(label)} \u2500\u2500</div>`;
+
+    let toolChecks = '';
+    for (const t of native) toolChecks += toolCheckbox(t);
+    if (integration.length) {
+      toolChecks += separator('Google Integration');
+      for (const t of integration) toolChecks += toolCheckbox(t);
+    }
+    if (marketplace.length) {
+      // Group marketplace tools by vendor
+      const byVendor = {};
+      for (const t of marketplace) {
+        const v = t.vendor || 'other';
+        if (!byVendor[v]) byVendor[v] = [];
+        byVendor[v].push(t);
+      }
+      for (const [vendor, tools] of Object.entries(byVendor)) {
+        const pkg = this.state.availableTools.find(t => t.vendor === vendor);
+        toolChecks += separator(vendor.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+        for (const t of tools) toolChecks += toolCheckbox(t);
+      }
     }
 
     container.innerHTML = `<div class="agent-form">
@@ -2506,9 +3541,40 @@ const App = {
       <label>Tools</label>
       <div class="tool-checkboxes" id="sf-tools">${toolChecks || '<span style="font-size:12px;color:var(--text-muted);">No tools registered</span>'}</div>
       <div class="hint">Leave all unchecked to give access to all tools.</div>
+      <label>Default Provider &amp; Model</label>
+      <div class="exec-config">
+        <div class="config-field">
+          <label>Provider</label>
+          <select id="sf-provider" style="width:100%;padding:6px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;">
+            <option value="">Use default</option>
+            ${this.state.providers.map(p => `<option value="${p.provider_id}" ${existing?.preferred_provider === p.provider_id ? 'selected' : ''}>${esc(p.display_name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="config-field">
+          <label>Model</label>
+          <select id="sf-model" style="width:100%;padding:6px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;">
+            <option value="">Use default</option>
+          </select>
+        </div>
+      </div>
+      <div class="hint">When this agent is selected, these will override the current provider and model.</div>
       <label>Default Project Path</label>
       <input id="sf-project-path" value="${esc(existing?.project_path || '')}" placeholder="C:\\path\\to\\project (optional — auto-fills when agent selected)" />
       <div class="hint">When this agent is selected, this path will be used as the default working directory.</div>
+      <label>Action Approval</label>
+      <div class="exec-config">
+        <div class="config-field" style="flex:1;">
+          <label>Approval Mode</label>
+          <select id="sf-approval-mode" style="width:100%;padding:6px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;">
+            <option value="prompt" ${(!existing || existing.approval_mode === 'prompt') ? 'selected' : ''}>Prompt for approval</option>
+            <option value="auto" ${existing?.approval_mode === 'auto' ? 'selected' : ''}>Auto-approve all actions</option>
+          </select>
+        </div>
+      </div>
+      <div class="hint">
+        <strong>Prompt:</strong> Agent pauses for user approval on sensitive actions (terminal, file writes, browser, package installs).<br>
+        <strong>Auto-approve:</strong> Agent runs fully autonomous — no approval prompts. Use for trusted automation tasks.
+      </div>
       <label>Execution Config</label>
       <div class="exec-config">
         <div class="config-field"><label>Max Iterations</label><input type="number" id="sf-max-iter" value="${existing?.max_iterations || 10}" min="1" max="100" /></div>
@@ -2526,6 +3592,26 @@ const App = {
       cb.addEventListener('change', () => cb.parentElement.classList.toggle('checked', cb.checked));
     });
 
+    // Wire up provider select to load models for the agent form
+    const sfProvider = document.getElementById('sf-provider');
+    const sfModel = document.getElementById('sf-model');
+    const loadAgentFormModels = async (pid, selectedModel) => {
+      if (!pid) { sfModel.innerHTML = '<option value="">Use default</option>'; return; }
+      try {
+        const resp = await fetch(`/api/providers/${pid}/models`);
+        const data = await resp.json();
+        const models = data.models || [];
+        sfModel.innerHTML = '<option value="">Use default</option>' + models.map(m => {
+          const val = m.model_id || m.id;
+          const name = m.display_name || val;
+          return `<option value="${val}" ${selectedModel === val ? 'selected' : ''}>${esc(name)}</option>`;
+        }).join('');
+      } catch (e) { console.error('Load models for agent form:', e); }
+    };
+    sfProvider.addEventListener('change', () => loadAgentFormModels(sfProvider.value, null));
+    // Load models for existing agent's provider
+    if (existing?.preferred_provider) loadAgentFormModels(existing.preferred_provider, existing.preferred_model);
+
     document.getElementById('sf-cancel').addEventListener('click', () => { container.innerHTML = ''; });
     document.getElementById('sf-save').addEventListener('click', async () => {
       const name = document.getElementById('sf-name').value.trim();
@@ -2540,6 +3626,9 @@ const App = {
         instructions: document.getElementById('sf-instructions').value,
         tools: selectedTools,
         project_path: document.getElementById('sf-project-path').value.trim() || null,
+        preferred_provider: document.getElementById('sf-provider').value || null,
+        preferred_model: document.getElementById('sf-model').value || null,
+        approval_mode: document.getElementById('sf-approval-mode').value || 'prompt',
         max_iterations: parseInt(document.getElementById('sf-max-iter').value) || null,
         temperature: parseFloat(document.getElementById('sf-temp').value) || null,
         max_tokens: parseInt(document.getElementById('sf-max-tokens').value) || null,
@@ -2554,8 +3643,12 @@ const App = {
           body: JSON.stringify(body),
         });
         if (resp.ok) {
-          await this.renderAgentsSettings();
           await this.loadAgents();
+          this.renderAgentSelect();
+          // Refresh tile view if action panel is showing agents
+          if (document.getElementById('agents-body')?.style.display !== 'none') {
+            this.renderAgentsTileView();
+          }
         } else {
           alert('Error saving agent: ' + await resp.text());
         }
@@ -2563,70 +3656,351 @@ const App = {
     });
   },
 
-  /* ── Agent Builder (AI-powered) ─────────────────────────────── */
-  showAgentBuilder(prefillDescription) {
-    const container = document.getElementById('agent-form-container');
-    container.innerHTML = `<div class="agent-builder">
-      <div class="model-section-title">Agent Builder</div>
-      <p style="font-size:12px;color:var(--text-secondary);margin:4px 0 12px;line-height:1.5;">
-        Describe what you want your agent to do in plain language. The AI will inspect available tools and design a complete agent definition for you.
-      </p>
-      <textarea class="describe-input" id="sb-description"
-        placeholder="Example: Create an agent that helps me write and refactor Rust code. It should be able to read files, search code, and write changes. It should follow Rust best practices and always handle errors properly.">${esc(prefillDescription || '')}</textarea>
-      <div class="agent-builder-actions">
-        <button class="generate-btn" id="sb-generate">Generate Agent</button>
-        <button class="agent-cancel-btn" id="sb-cancel">Cancel</button>
-      </div>
-    </div>`;
-
-    document.getElementById('sb-cancel').addEventListener('click', () => { container.innerHTML = ''; });
-    document.getElementById('sb-generate').addEventListener('click', () => this.generateAgentFromBuilder());
-    // Focus the textarea
-    document.getElementById('sb-description')?.focus();
+  updateAgentFormProviderModels() {
+    // No-op — only needed if the agent form is dynamically refreshed while open
+    // The provider/model selects are populated when the form is first shown
   },
 
-  async generateAgentFromBuilder() {
-    const description = document.getElementById('sb-description')?.value?.trim();
-    if (!description) return alert('Please describe what you want the agent to do.');
+  /* ── Agents Tile View (Action Panel) ──────────────────────────── */
+  async renderAgentsTileView() {
+    const container = document.getElementById('agents-body');
+    if (!container) return;
+    await this.loadAgents();
+    await this.loadAvailableTools();
 
-    const container = document.getElementById('agent-form-container');
-
-    // Show loading state with progress log
-    container.innerHTML = `<div class="agent-builder">
-      <div class="loading-state">
-        <div class="spinner"></div>
-        <div>Generating agent definition...</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Using default agent</div>
+    let html = '';
+    // Header with Agent Builder button
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary);">Your Agents</div>
+      <div style="display:flex;gap:6px;">
+        <button id="ap-agent-builder-btn" style="padding:6px 14px;background:var(--accent);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Agent Builder</button>
+        <button id="ap-agent-manual-btn" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:12px;cursor:pointer;">+ Manual</button>
       </div>
-      <div class="progress-log" id="sb-progress"></div>
     </div>`;
 
-    const progressLog = document.getElementById('sb-progress');
-    const addProgress = (msg, cls) => {
-      const div = document.createElement('div');
-      if (cls) div.className = cls;
-      div.textContent = msg;
-      progressLog.appendChild(div);
-      progressLog.scrollTop = progressLog.scrollHeight;
+    if (!this.state.agents.length) {
+      html += `<div style="text-align:center;padding:32px 16px;">
+        <div style="font-size:32px;margin-bottom:8px;">🤖</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">No agents yet</div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">Create your first agent with the Agent Builder<br>or add one manually.</div>
+      </div>`;
+    } else {
+      html += '<div class="agent-tiles">';
+      for (const sk of this.state.agents) {
+        const tools = (sk.tools || []).slice(0, 4).join(', ') || 'all tools';
+        const moreTools = (sk.tools || []).length > 4 ? ` +${sk.tools.length - 4} more` : '';
+        const providerLabel = sk.preferred_provider ? (this.state.providers.find(p => p.provider_id === sk.preferred_provider)?.display_name || sk.preferred_provider) : null;
+        const modelLabel = sk.preferred_model || null;
+        const approvalBadge = sk.approval_mode === 'auto'
+          ? '<span style="padding:1px 5px;background:#22c55e22;color:#22c55e;border-radius:3px;font-size:9px;font-weight:600;">AUTO</span>'
+          : '<span style="padding:1px 5px;background:#3b82f622;color:#3b82f6;border-radius:3px;font-size:9px;font-weight:600;">PROMPT</span>';
+
+        html += `<div class="agent-tile" data-agent-id="${esc(sk.id)}">
+          <div class="agent-tile-header">
+            <div class="agent-tile-name">${esc(sk.name)}</div>
+            ${approvalBadge}
+          </div>
+          <div class="agent-tile-desc">${esc(sk.description)}</div>
+          ${providerLabel ? `<div class="agent-tile-meta" style="color:var(--accent);">${esc(providerLabel)}${modelLabel ? ' / ' + esc(modelLabel) : ''}</div>` : ''}
+          <div class="agent-tile-meta">Tools: ${esc(tools)}${moreTools}</div>
+          <div class="agent-tile-actions">
+            <button class="agent-tile-edit" data-agent-id="${esc(sk.id)}">Edit</button>
+            <button class="agent-tile-delete" data-agent-id="${esc(sk.id)}">Delete</button>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    // Form container for inline edit
+    html += '<div id="ap-agent-form-container"></div>';
+    container.innerHTML = html;
+
+    // Bind buttons
+    document.getElementById('ap-agent-builder-btn')?.addEventListener('click', () => {
+      this.switchActionTab('builder');
+      const builderBody = document.getElementById('builder-body');
+      if (builderBody && !builderBody.innerHTML.trim()) this.showAgentBuilder();
+    });
+    document.getElementById('ap-agent-manual-btn')?.addEventListener('click', () => {
+      this.showAgentFormInPanel();
+    });
+    container.querySelectorAll('.agent-tile-edit').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.showAgentFormInPanel(btn.dataset.agentId);
+      });
+    });
+    container.querySelectorAll('.agent-tile-delete').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this agent?')) return;
+        await fetch(`/api/agents/${btn.dataset.agentId}`, { method: 'DELETE' });
+        this.state.panels.forEach(p => { if (p.selectedAgent === btn.dataset.agentId) p.selectedAgent = null; });
+        await this.loadAgents();
+        this.renderAgentSelect();
+        this.renderAgentsTileView();
+      });
+    });
+    // Click tile to select agent in focused panel
+    container.querySelectorAll('.agent-tile').forEach(tile => {
+      tile.addEventListener('click', () => {
+        const agentId = tile.dataset.agentId;
+        const panel = this.getFocusedPanel();
+        if (panel) {
+          panel.selectedAgent = agentId;
+          this.renderAgentSelect();
+          // Update the panel's agent dropdown
+          const sel = document.querySelector(`[data-panel-id="${panel.id}"] .panel-agent-select`);
+          if (sel) sel.value = agentId;
+          // Trigger agent change (load preferred provider/model)
+          sel?.dispatchEvent(new Event('change'));
+        }
+      });
+    });
+  },
+
+  async showAgentFormInPanel(editId) {
+    // Reuse the existing showAgentForm but target the action panel container
+    const origContainer = document.getElementById('agent-form-container');
+    const apContainer = document.getElementById('ap-agent-form-container');
+    if (!apContainer) return;
+
+    // Temporarily swap the container ID so showAgentForm targets action panel
+    if (origContainer) origContainer.id = 'agent-form-container-hidden';
+    apContainer.id = 'agent-form-container';
+
+    await this.showAgentForm(editId);
+
+    // Restore original ID
+    apContainer.id = 'ap-agent-form-container';
+    if (origContainer) origContainer.id = 'agent-form-container';
+  },
+
+  /* ── Agent Builder (AI-powered) ─────────────────────────────── */
+  showAgentBuilder() {
+    const container = document.getElementById('builder-body');
+    if (!container) return;
+    this.builderState = {
+      history: [],
+      draft: { name: '', description: '', instructions: '', tools: [], packages: [], tags: [], max_iterations: 10, temperature: null },
+      packageStatuses: {},
+      sending: false,
     };
+
+    container.innerHTML = `<div class="agent-builder-panel">
+      <div class="builder-chat">
+        <div class="builder-chat-messages" id="builder-messages">
+          <div class="builder-msg system">Describe what you want your agent to do. I'll help you design it.</div>
+        </div>
+        <div class="builder-chat-input">
+          <textarea id="builder-input" placeholder="e.g. Create an agent that queries BigQuery and searches the web..." rows="1"></textarea>
+          <button class="builder-send-btn" id="builder-send">Send</button>
+        </div>
+      </div>
+      <div class="builder-preview" id="builder-preview">
+        <h4>Agent Preview</h4>
+        <div id="builder-preview-content"></div>
+      </div>
+    </div>`;
+
+    this.renderBuilderPreview();
+
+    const input = document.getElementById('builder-input');
+    const sendBtn = document.getElementById('builder-send');
+
+    const doSend = () => { if (!this.builderState.sending) this.sendBuilderMessage(); };
+    sendBtn.addEventListener('click', doSend);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+    });
+    // Auto-resize textarea
+    input.addEventListener('input', () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 80) + 'px';
+    });
+    input.focus();
+  },
+
+  renderBuilderPreview() {
+    const d = this.builderState.draft;
+    const preview = document.getElementById('builder-preview-content');
+    if (!preview) return;
+
+    // Name
+    let html = `<div class="draft-section">
+      <div class="draft-label">Name</div>
+      <div class="draft-value ${d.name ? '' : 'placeholder'}">${esc(d.name || 'Not set yet')}</div>
+    </div>`;
+
+    // Description
+    html += `<div class="draft-section">
+      <div class="draft-label">Description</div>
+      <div class="draft-value ${d.description ? '' : 'placeholder'}">${esc(d.description || 'Not set yet')}</div>
+    </div>`;
+
+    // Instructions
+    html += `<div class="draft-section">
+      <div class="draft-label">Instructions</div>`;
+    if (d.instructions) {
+      html += `<div class="draft-instructions-preview">${esc(d.instructions)}</div>`;
+    } else {
+      html += `<div class="draft-value placeholder">Waiting for builder...</div>`;
+    }
+    html += `</div>`;
+
+    // Native Tools
+    html += `<div class="draft-section">
+      <div class="draft-label">Tools</div>`;
+    if (d.tools.length) {
+      html += `<div class="draft-tools-list">${d.tools.map(t => `<span class="draft-tool-chip">${esc(t)}</span>`).join('')}</div>`;
+    } else {
+      html += `<div class="draft-value placeholder">None added yet</div>`;
+    }
+    html += `</div>`;
+
+    // Marketplace Packages
+    html += `<div class="draft-section">
+      <div class="draft-label">Marketplace Packages</div>`;
+    if (d.packages.length) {
+      for (const pkg of d.packages) {
+        const status = this.builderState.packageStatuses[pkg];
+        let badgeHtml = '<span class="status-badge needs-setup">Checking...</span>';
+        if (status) {
+          if (status.authenticated) {
+            badgeHtml = '<span class="status-badge ready">Ready</span>';
+          } else {
+            badgeHtml = `<span class="status-badge not-auth" onclick="app.openPackageSetup('${esc(pkg)}')" title="Click to complete setup">Setup Required</span>`;
+          }
+        }
+        // Fetch status if not yet checked
+        if (!status && !this.builderState.packageStatuses[pkg + '_loading']) {
+          this.builderState.packageStatuses[pkg + '_loading'] = true;
+          fetch('/api/marketplace/packages/' + encodeURIComponent(pkg) + '/auth-status')
+            .then(r => r.json())
+            .then(data => {
+              this.builderState.packageStatuses[pkg] = data;
+              delete this.builderState.packageStatuses[pkg + '_loading'];
+              this.renderBuilderPreview();
+            })
+            .catch(() => {
+              this.builderState.packageStatuses[pkg] = { authenticated: false, error: 'Failed to check' };
+              delete this.builderState.packageStatuses[pkg + '_loading'];
+              this.renderBuilderPreview();
+            });
+        }
+        html += `<div class="draft-package-card">
+          <div class="draft-package-info">
+            <div class="pkg-name">${esc(pkg)}</div>
+          </div>
+          ${badgeHtml}
+        </div>`;
+      }
+    } else {
+      html += `<div class="draft-value placeholder">None added yet</div>`;
+    }
+    html += `</div>`;
+
+    // Config
+    html += `<div class="draft-section">
+      <div class="draft-label">Config</div>
+      <div class="draft-value" style="font-size:11px;">
+        Iterations: ${d.max_iterations || 10}
+        ${d.temperature != null ? ' &middot; Temp: ' + d.temperature : ''}
+      </div>
+    </div>`;
+
+    // Save + Cancel buttons
+    const canSave = d.name && d.instructions;
+    html += `<button class="builder-save-btn" id="builder-save" ${canSave ? '' : 'disabled'}>Save Agent</button>`;
+    html += `<button class="builder-cancel-btn" id="builder-cancel">Cancel</button>`;
+
+    preview.innerHTML = html;
+
+    document.getElementById('builder-save')?.addEventListener('click', () => this.saveBuilderAgent());
+    document.getElementById('builder-cancel')?.addEventListener('click', () => {
+      this.closeAgentBuilder();
+    });
+  },
+
+  updateBuilderDraft(field, value) {
+    const d = this.builderState.draft;
+    switch (field) {
+      case 'name': d.name = value; break;
+      case 'description': d.description = value; break;
+      case 'instructions': d.instructions = value; break;
+      case 'add_tool':
+        if (!d.tools.includes(value)) d.tools.push(value);
+        break;
+      case 'remove_tool':
+        d.tools = d.tools.filter(t => t !== value);
+        break;
+      case 'add_package':
+        if (!d.packages.includes(value)) d.packages.push(value);
+        break;
+      case 'remove_package':
+        d.packages = d.packages.filter(p => p !== value);
+        break;
+      case 'tags':
+        d.tags = value.split(',').map(t => t.trim()).filter(Boolean);
+        break;
+      case 'max_iterations':
+        d.max_iterations = parseInt(value) || 10;
+        break;
+      case 'temperature':
+        d.temperature = parseFloat(value) || null;
+        break;
+    }
+    this.renderBuilderPreview();
+  },
+
+  async sendBuilderMessage() {
+    const input = document.getElementById('builder-input');
+    const msg = input?.value?.trim();
+    if (!msg) return;
+
+    this.builderState.sending = true;
+    input.value = '';
+    input.style.height = 'auto';
+    document.getElementById('builder-send').disabled = true;
+
+    // Add user message to chat
+    const messagesDiv = document.getElementById('builder-messages');
+    const userBubble = document.createElement('div');
+    userBubble.className = 'builder-msg user';
+    userBubble.textContent = msg;
+    messagesDiv.appendChild(userBubble);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+    // Add typing indicator
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'builder-msg assistant';
+    typingDiv.id = 'builder-typing';
+    typingDiv.innerHTML = '<span class="builder-typing"></span>';
+    messagesDiv.appendChild(typingDiv);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
     try {
       const resp = await fetch('/api/agent-builder/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description }),
+        body: JSON.stringify({
+          message: msg,
+          history: this.builderState.history,
+        }),
       });
 
-      if (!resp.ok) {
-        const err = await resp.text();
-        throw new Error(err);
-      }
+      if (!resp.ok) throw new Error(await resp.text());
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      let suggestion = null;
-      let fullText = '';
+      let assistantText = '';
+      let currentEvent = null;
+
+      // Replace typing indicator with streaming bubble
+      typingDiv.innerHTML = '';
+      typingDiv.id = 'builder-streaming';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -2638,180 +4012,126 @@ const App = {
 
         for (const line of lines) {
           if (line.startsWith('event:')) {
-            var currentEvent = line.slice(6).trim();
+            currentEvent = line.slice(6).trim();
           } else if (line.startsWith('data:') && currentEvent) {
             try {
               const data = JSON.parse(line.slice(5).trim());
               if (currentEvent === 'text' && data.content) {
-                // Check if this is a result event embedded in text
-                try {
-                  const parsed = JSON.parse(data.content);
-                  if (parsed.type === 'result' && parsed.suggestion) {
-                    suggestion = parsed.suggestion;
-                    addProgress('Agent definition generated successfully!', 'tool-event');
-                  }
-                } catch {
-                  // Regular text chunk — accumulate
-                  fullText += data.content;
-                }
+                assistantText += data.content;
+                typingDiv.textContent = assistantText;
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
               } else if (currentEvent === 'tool_call_start' && data.tool_name) {
-                addProgress(`Calling ${data.tool_name}...`, 'tool-event');
-              } else if (currentEvent === 'tool_result' && data.tool_name) {
-                addProgress(`${data.tool_name} returned results`, 'tool-event');
-              } else if (currentEvent === 'error' && data.error) {
-                addProgress(`Error: ${data.error}`);
-                throw new Error(data.error);
-              } else if (currentEvent === 'done') {
-                // If we didn't get a structured result, try parsing accumulated text
-                if (!suggestion && fullText) {
-                  try {
-                    suggestion = JSON.parse(fullText.trim());
-                  } catch {
-                    // Try extracting JSON from code fences
-                    const match = fullText.match(/```(?:json)?\s*([\s\S]*?)```/);
-                    if (match) {
-                      try { suggestion = JSON.parse(match[1].trim()); } catch {}
-                    }
-                    // Try first { to last }
-                    if (!suggestion) {
-                      const start = fullText.indexOf('{');
-                      const end = fullText.lastIndexOf('}');
-                      if (start !== -1 && end > start) {
-                        try { suggestion = JSON.parse(fullText.substring(start, end + 1)); } catch {}
-                      }
-                    }
-                  }
+                if (data.tool_name !== 'update_agent_draft') {
+                  // Show activity in chat for non-draft tools
+                  const sysMsg = document.createElement('div');
+                  sysMsg.className = 'builder-msg system';
+                  const labels = {
+                    'list_system_tools': 'Checking available tools...',
+                    'list_marketplace_packages': 'Checking marketplace packages...',
+                    'check_package_status': 'Checking package status...',
+                  };
+                  sysMsg.textContent = labels[data.tool_name] || `Calling ${data.tool_name}...`;
+                  messagesDiv.insertBefore(sysMsg, typingDiv);
                 }
+              } else if (currentEvent === 'tool_result' && data.tool_name) {
+                if (data.tool_name === 'update_agent_draft' && data.content) {
+                  // Parse field/value from tool result JSON
+                  try {
+                    const result = JSON.parse(data.content);
+                    if (result.field && result.value !== undefined) {
+                      this.updateBuilderDraft(result.field, result.value);
+                    }
+                  } catch {}
+                }
+              } else if (currentEvent === 'error' && data.error) {
+                throw new Error(data.error);
               }
             } catch (parseErr) {
-              // Skip unparseable SSE data
+              if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr;
             }
             currentEvent = null;
           }
         }
       }
 
-      if (suggestion) {
-        this.showAgentFormFromSuggestion(suggestion, description);
-      } else {
-        alert('Could not parse agent definition from AI response. Please try again.');
-        this.showAgentBuilder(description);
+      // Finalize: add to history
+      this.builderState.history.push({ role: 'user', content: msg });
+      if (assistantText) {
+        this.builderState.history.push({ role: 'assistant', content: assistantText });
       }
     } catch (e) {
-      alert('Error generating agent: ' + e.message);
-      this.showAgentBuilder(description);
+      // Show error
+      const errDiv = document.createElement('div');
+      errDiv.className = 'builder-msg system';
+      errDiv.textContent = 'Error: ' + e.message;
+      errDiv.style.color = '#ef4444';
+      messagesDiv.appendChild(errDiv);
+      // Remove typing indicator if still there
+      document.getElementById('builder-typing')?.remove();
     }
+
+    this.builderState.sending = false;
+    document.getElementById('builder-send').disabled = false;
+    document.getElementById('builder-input')?.focus();
   },
 
-  showAgentFormFromSuggestion(suggestion, originalDescription) {
-    const container = document.getElementById('agent-form-container');
+  openPackageSetup(vendor) {
+    // Navigate to marketplace settings for this package
+    this.renderPackageDetail(vendor);
+  },
 
-    // Build tool checkboxes, pre-checking AI-recommended tools
-    let toolChecks = '';
-    let addedMarketplaceSeparator = false;
-    for (const t of this.state.availableTools) {
-      if (!addedMarketplaceSeparator && t.name.startsWith('gcloud_')) {
-        toolChecks += '<div style="width:100%;font-size:11px;color:var(--text-muted);font-weight:600;margin:8px 0 4px;padding-top:8px;border-top:1px solid var(--border);">\u2500\u2500 Google Cloud \u2500\u2500</div>';
-        addedMarketplaceSeparator = true;
-      }
-      const checked = (suggestion.tools || []).includes(t.name);
-      toolChecks += `<label class="tool-checkbox${checked ? ' checked' : ''}">
-        <input type="checkbox" value="${esc(t.name)}" ${checked ? 'checked' : ''} />
-        ${esc(t.display_name || t.name)}
-      </label>`;
-    }
+  async saveBuilderAgent() {
+    const d = this.builderState.draft;
+    if (!d.name) return alert('Agent name is required');
+    if (!d.instructions) return alert('Agent instructions are required');
 
-    // AI notes
-    let notesHtml = '';
-    if (suggestion.notes) {
-      notesHtml = `<div class="ai-notes"><strong>AI Notes:</strong> ${esc(suggestion.notes)}</div>`;
-    }
+    // Merge package tool names into tools array
+    const allTools = [...d.tools];
 
-    // Marketplace tools
-    let marketplaceHtml = '';
-    if (suggestion.marketplace_tools && suggestion.marketplace_tools.length) {
-      marketplaceHtml = `<div class="marketplace-note">
-        <div class="section-label">Suggested Marketplace Tools</div>
-        <div>These additional tools would enhance this agent when available:</div>
-        <div style="margin-top:4px;">${suggestion.marketplace_tools.map(t => `<span class="mp-tool">${esc(t)}</span>`).join('')}</div>
-      </div>`;
-    }
-
-    container.innerHTML = `<div class="agent-form">
-      <div class="model-section-title">Review AI-Generated Agent</div>
-      ${notesHtml}
-      ${marketplaceHtml}
-      <label>Name</label>
-      <input id="sf-name" value="${esc(suggestion.name || '')}" />
-      <label>Description</label>
-      <input id="sf-desc" value="${esc(suggestion.description || '')}" />
-      <label>Instructions (System Prompt)</label>
-      <textarea id="sf-instructions">${esc(suggestion.instructions || '')}</textarea>
-      <div class="hint">Tool usage instructions are automatically included from the tools themselves.</div>
-      <label>Tools</label>
-      <div class="tool-checkboxes" id="sf-tools">${toolChecks || '<span style="font-size:12px;color:var(--text-muted);">No tools registered</span>'}</div>
-      <div class="hint">Leave all unchecked to give access to all tools.</div>
-      <label>Default Project Path</label>
-      <input id="sf-project-path" value="" placeholder="e.g. C:\\projects\\myapp (optional)" />
-      <div class="hint">When this agent is selected, this path will be used as the default working directory.</div>
-      <label>Execution Config</label>
-      <div class="exec-config">
-        <div class="config-field"><label>Max Iterations</label><input type="number" id="sf-max-iter" value="${suggestion.max_iterations || 10}" min="1" max="100" /></div>
-        <div class="config-field"><label>Temperature</label><input type="number" id="sf-temp" value="${suggestion.temperature ?? ''}" min="0" max="2" step="0.1" placeholder="default" /></div>
-        <div class="config-field"><label>Max Tokens</label><input type="number" id="sf-max-tokens" value="${suggestion.max_tokens ?? ''}" placeholder="default" /></div>
-      </div>
-      <div class="agent-form-actions">
-        <button class="agent-save-btn" id="sf-save">Save Agent</button>
-        <button class="agent-cancel-btn" id="sf-regenerate">Regenerate</button>
-        <button class="agent-cancel-btn" id="sf-cancel">Cancel</button>
-      </div>
-    </div>`;
-
-    // Toggle checked class on checkboxes
-    container.querySelectorAll('.tool-checkbox input').forEach(cb => {
-      cb.addEventListener('change', () => cb.parentElement.classList.toggle('checked', cb.checked));
-    });
-
-    document.getElementById('sf-cancel').addEventListener('click', () => { container.innerHTML = ''; });
-
-    // Regenerate — go back to builder with original description
-    document.getElementById('sf-regenerate').addEventListener('click', () => {
-      this.showAgentBuilder(originalDescription);
-    });
-
-    // Save — POST to /api/agents
-    document.getElementById('sf-save').addEventListener('click', async () => {
-      const name = document.getElementById('sf-name').value.trim();
-      if (!name) return alert('Name is required');
-
-      const selectedTools = [];
-      container.querySelectorAll('.tool-checkbox input:checked').forEach(cb => selectedTools.push(cb.value));
-
-      const body = {
-        name,
-        description: document.getElementById('sf-desc').value.trim(),
-        instructions: document.getElementById('sf-instructions').value,
-        tools: selectedTools,
-        project_path: document.getElementById('sf-project-path').value.trim() || null,
-        max_iterations: parseInt(document.getElementById('sf-max-iter').value) || null,
-        temperature: parseFloat(document.getElementById('sf-temp').value) || null,
-        max_tokens: parseInt(document.getElementById('sf-max-tokens').value) || null,
-      };
-
+    // Fetch each package's tool names from marketplace
+    for (const pkg of d.packages) {
       try {
-        const resp = await fetch('/api/agents', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (resp.ok) {
-          await this.renderAgentsSettings();
-          await this.loadAgents();
-        } else {
-          alert('Error saving agent: ' + await resp.text());
+        const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(pkg) + '/details');
+        const data = await resp.json();
+        if (data.tools) {
+          for (const t of data.tools) {
+            const toolName = t.name || t;
+            if (!allTools.includes(toolName)) allTools.push(toolName);
+          }
         }
-      } catch (e) { alert('Error: ' + e.message); }
-    });
+      } catch {}
+    }
+
+    const body = {
+      name: d.name,
+      description: d.description,
+      instructions: d.instructions,
+      tools: allTools,
+      tags: d.tags,
+      max_iterations: d.max_iterations || 10,
+      temperature: d.temperature,
+    };
+
+    try {
+      const resp = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (resp.ok) {
+        this.closeAgentBuilder();
+        await this.loadAgents();
+      } else {
+        alert('Error saving agent: ' + await resp.text());
+      }
+    } catch (e) { alert('Error: ' + e.message); }
+  },
+
+  closeAgentBuilder() {
+    const body = document.getElementById('builder-body');
+    if (body) body.innerHTML = '';
+    this.switchActionTab('agents');
+    this.builderState = null;
   },
 
   /* ── Token usage ─────────────────────────────────────────────── */
@@ -2866,70 +4186,144 @@ const App = {
     container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px;">Loading marketplace...</div>';
 
     try {
-      const resp = await fetch('/api/marketplace/packages');
-      const data = await resp.json();
-      const packages = data.packages || [];
+      // Fetch both installed packages and registry catalog in parallel
+      const [installedResp, registryResp] = await Promise.all([
+        fetch('/api/marketplace/packages'),
+        fetch('/api/marketplace/registry/packages').catch(() => null),
+      ]);
+      const installedData = await installedResp.json();
+      const installedPackages = installedData.packages || [];
+      const installedNames = new Set(installedPackages.map(p => p.name));
 
-      if (packages.length === 0) {
-        container.innerHTML = `
-          <div class="model-section-title">Marketplace</div>
-          <div style="font-size:12px;color:var(--text-muted);padding:16px 0;">
-            No marketplace packages installed.<br>
-            Packages will be available for download from datavisions.io.
-          </div>`;
-        return;
+      let registryPackages = [];
+      if (registryResp && registryResp.ok) {
+        const registryData = await registryResp.json();
+        registryPackages = registryData.packages || [];
       }
 
-      let html = '<div class="model-section-title">Installed Packages</div>';
+      let html = '';
 
-      for (const pkg of packages) {
-        // Check auth status
-        let authHtml = '';
-        try {
-          const authResp = await fetch('/api/marketplace/packages/' + encodeURIComponent(pkg.name) + '/auth-status');
-          const authData = await authResp.json();
-          if (authData.authenticated) {
-            const projectInfo = authData.project ? ' \u00b7 Project: ' + esc(authData.project) : '';
-            authHtml = '<span class="marketplace-auth-status connected">\u2713 Connected' + projectInfo + '</span>';
-          } else {
-            authHtml = '<span class="marketplace-auth-status disconnected">\u2717 Not authenticated</span>';
+      // ── Installed Packages ──
+      if (installedPackages.length) {
+        html += '<div class="model-section-title">Installed Packages</div>';
+        for (const pkg of installedPackages) {
+          let authHtml = '';
+          try {
+            const authResp = await fetch('/api/marketplace/packages/' + encodeURIComponent(pkg.name) + '/auth-status');
+            const authData = await authResp.json();
+            if (authData.authenticated) {
+              const projectInfo = authData.project ? ' \u00b7 Project: ' + esc(authData.project) : '';
+              authHtml = '<span class="marketplace-auth-status connected">\u2713 Connected' + projectInfo + '</span>';
+            } else {
+              authHtml = '<span class="marketplace-auth-status disconnected">\u2717 Not authenticated</span>';
+            }
+          } catch (e) {
+            authHtml = '<span class="marketplace-auth-status disconnected">\u2717 Status unknown</span>';
           }
-        } catch (e) {
-          authHtml = '<span class="marketplace-auth-status disconnected">\u2717 Status unknown</span>';
-        }
 
-        const toolChips = (pkg.tools || []).map(t =>
-          '<span class="marketplace-tool-chip">' + esc(t.display_name || t.name) + '</span>'
-        ).join('');
+          const toolChips = (pkg.tools || []).map(t =>
+            '<span class="marketplace-tool-chip">' + esc(t.display_name || t.name) + '</span>'
+          ).join('');
 
-        const requirements = (pkg.requirements || []).map(r => '\u2022 ' + esc(r)).join('<br>');
-        const reqHtml = requirements ? '<div class="marketplace-requirements">' + requirements + '</div>' : '';
+          const configBadge = pkg.has_config
+            ? '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(59,130,246,0.1);color:var(--accent);margin-left:6px;">Configurable</span>'
+            : '';
 
-        const authInstructions = pkg.auth ? esc(pkg.auth.instructions) : '';
-
-        html += '<div class="marketplace-tile">' +
-          '<div class="marketplace-tile-header">' +
-            '<div class="marketplace-tile-icon" style="background:' + esc(pkg.color || '#666') + ';">\u2601</div>' +
-            '<div class="marketplace-tile-info">' +
-              '<div class="marketplace-tile-name">' + esc(pkg.display_name) + '</div>' +
-              '<div class="marketplace-tile-vendor">by ' + esc(pkg.vendor) + ' \u00b7 v' + esc(pkg.version) + '</div>' +
+          html += '<div class="marketplace-tile">' +
+            '<div class="marketplace-tile-header">' +
+              '<div class="marketplace-tile-icon" style="background:' + esc(pkg.color || '#666') + ';">\u2601</div>' +
+              '<div class="marketplace-tile-info">' +
+                '<div class="marketplace-tile-name">' + esc(pkg.display_name) + configBadge + '</div>' +
+                '<div class="marketplace-tile-vendor">by ' + esc(pkg.vendor) + ' \u00b7 v' + esc(pkg.version) + ' \u00b7 ' + (pkg.tool_count || pkg.tools.length) + ' tools</div>' +
+              '</div>' +
             '</div>' +
-          '</div>' +
-          '<div class="marketplace-tile-desc">' + esc(pkg.description) + '</div>' +
-          authHtml +
-          '<div class="marketplace-tool-list">' + toolChips + '</div>' +
-          reqHtml +
-          '<div class="marketplace-tile-actions">' +
-            '<button class="primary" data-setup-pkg="' + esc(pkg.name) + '">Set Up</button>' +
-          '</div>' +
-          '<div class="setup-progress" id="setup-' + esc(pkg.name) + '" style="display:none;margin-top:12px;"></div>' +
-        '</div>';
+            '<div class="marketplace-tile-desc">' + esc(pkg.description) + '</div>' +
+            authHtml +
+            '<div class="marketplace-tool-list">' + toolChips + '</div>' +
+            '<div class="marketplace-tile-actions">' +
+              '<button data-detail-pkg="' + esc(pkg.name) + '">Details & Configure</button>' +
+              '<button class="primary" data-setup-pkg="' + esc(pkg.name) + '">Set Up</button>' +
+            '</div>' +
+            '<div class="setup-progress" id="setup-' + esc(pkg.name) + '" style="display:none;margin-top:12px;"></div>' +
+          '</div>';
+        }
+      }
+
+      // ── Available from Registry (not installed) ──
+      const availablePackages = registryPackages.filter(p => !installedNames.has(p.name));
+      if (availablePackages.length) {
+        html += '<div class="model-section-title" style="margin-top:20px;">Available Packages</div>';
+        for (const pkg of availablePackages) {
+          html += '<div class="marketplace-tile">' +
+            '<div class="marketplace-tile-header">' +
+              '<div class="marketplace-tile-icon" style="background:' + esc(pkg.color || '#666') + ';">\u2601</div>' +
+              '<div class="marketplace-tile-info">' +
+                '<div class="marketplace-tile-name">' + esc(pkg.display_name) + '</div>' +
+                '<div class="marketplace-tile-vendor">by ' + esc(pkg.vendor) + ' \u00b7 v' + esc(pkg.latest_version || '1.0') + ' \u00b7 ' + (pkg.tools_count || 0) + ' tools' +
+                  (pkg.downloads ? ' \u00b7 ' + pkg.downloads + ' downloads' : '') +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="marketplace-tile-desc">' + esc(pkg.description) + '</div>' +
+            '<div class="marketplace-tile-actions">' +
+              '<button class="primary" data-install-pkg="' + esc(pkg.name) + '">Install</button>' +
+            '</div>' +
+            '<div class="install-progress" id="install-' + esc(pkg.name) + '" style="display:none;margin-top:8px;"></div>' +
+          '</div>';
+        }
+      }
+
+      if (!installedPackages.length && !availablePackages.length) {
+        html += '<div class="model-section-title">Marketplace</div>' +
+          '<div style="font-size:12px;color:var(--text-muted);padding:16px 0;">No packages available. Check your connection to the marketplace registry.</div>';
       }
 
       container.innerHTML = html;
 
-      // Bind setup buttons
+      // Bind detail buttons
       const self = this;
+      container.querySelectorAll('[data-detail-pkg]').forEach(btn => {
+        btn.addEventListener('click', () => self.renderPackageDetail(btn.dataset.detailPkg));
+      });
+
+      // Bind install buttons (registry packages)
+      container.querySelectorAll('[data-install-pkg]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const name = btn.dataset.installPkg;
+          const progressDiv = document.getElementById('install-' + name);
+          btn.disabled = true;
+          btn.textContent = 'Installing...';
+          if (progressDiv) {
+            progressDiv.style.display = 'block';
+            progressDiv.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Downloading package...</div>';
+          }
+          try {
+            const resp = await fetch('/api/marketplace/registry/install', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name, version: 'latest' }),
+            });
+            const data = await resp.json();
+            if (data.success) {
+              btn.textContent = '\u2713 Installed';
+              btn.style.background = '#22c55e'; btn.style.borderColor = '#22c55e';
+              if (progressDiv) progressDiv.innerHTML = '<div style="font-size:12px;color:#22c55e;">' + esc(data.message) + '</div>';
+              await new Promise(r => setTimeout(r, 1500));
+              self.renderMarketplaceSettings();
+            } else {
+              btn.textContent = 'Retry';
+              btn.disabled = false;
+              if (progressDiv) progressDiv.innerHTML = '<div style="font-size:12px;color:#ef4444;">Error: ' + esc(data.error) + '</div>';
+            }
+          } catch (e) {
+            btn.textContent = 'Retry';
+            btn.disabled = false;
+            if (progressDiv) progressDiv.innerHTML = '<div style="font-size:12px;color:#ef4444;">Error: ' + esc(e.message) + '</div>';
+          }
+        });
+      });
+
+      // Bind setup buttons (installed packages)
       container.querySelectorAll('[data-setup-pkg]').forEach(btn => {
         btn.addEventListener('click', async () => {
           const vendor = btn.dataset.setupPkg;
@@ -2941,7 +4335,6 @@ const App = {
           progressDiv.style.display = 'block';
           progressDiv.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">Checking requirements...</div>';
 
-          // First run without user values to see what's needed
           let userValues = {};
           let maxAttempts = 3;
 
@@ -2954,62 +4347,39 @@ const App = {
               });
               const data = await resp.json();
 
-              // Render step results
               let stepsHtml = '';
               let needsInput = false;
               let inputStepId = null;
 
               for (const step of (data.steps || [])) {
-                let icon = '';
-                let statusClass = '';
-                let extra = '';
-
+                let icon = '', statusClass = '', extra = '';
                 switch (step.status) {
-                  case 'already_done':
-                    icon = '\u2713';
-                    statusClass = 'color:#22c55e;';
-                    break;
-                  case 'completed':
-                    icon = '\u2713';
-                    statusClass = 'color:#22c55e;';
-                    break;
+                  case 'already_done': case 'completed':
+                    icon = '\u2713'; statusClass = 'color:#22c55e;'; break;
                   case 'failed':
-                    icon = '\u2717';
-                    statusClass = 'color:#ef4444;';
+                    icon = '\u2717'; statusClass = 'color:#ef4444;';
                     extra = '<div style="font-size:11px;color:#ef4444;margin:2px 0 0 24px;">' + esc(step.message || '') + '</div>';
-                    if (step.help_url) {
-                      extra += '<div style="font-size:11px;margin:2px 0 0 24px;"><a href="' + esc(step.help_url) + '" target="_blank" style="color:var(--accent);">Help: ' + esc(step.help_url) + '</a></div>';
-                    }
+                    if (step.help_url) extra += '<div style="font-size:11px;margin:2px 0 0 24px;"><a href="' + esc(step.help_url) + '" target="_blank" style="color:var(--accent);">Help</a></div>';
                     break;
                   case 'needs_input':
-                    icon = '?';
-                    statusClass = 'color:var(--accent);';
-                    needsInput = true;
-                    inputStepId = step.step_id;
+                    icon = '?'; statusClass = 'color:var(--accent);';
+                    needsInput = true; inputStepId = step.step_id;
                     extra = '<div style="margin:8px 0 0 24px;">' +
                       '<label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:4px;">' + esc(step.prompt_label || 'Enter value') + '</label>' +
                       '<input type="text" id="setup-input-' + esc(step.step_id) + '" placeholder="' + esc(step.prompt_placeholder || '') + '" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text-primary);font-size:12px;width:100%;box-sizing:border-box;" />' +
                       (step.prompt_help ? '<div style="font-size:10px;color:var(--text-muted);margin-top:3px;">' + esc(step.prompt_help) + '</div>' : '') +
-                      '<button class="primary" id="setup-submit-' + esc(step.step_id) + '" style="margin-top:6px;padding:5px 14px;font-size:11px;">Continue</button>' +
-                      '</div>';
+                      '<button class="primary" id="setup-submit-' + esc(step.step_id) + '" style="margin-top:6px;padding:5px 14px;font-size:11px;">Continue</button></div>';
                     break;
-                  default:
-                    icon = '\u25CB';
-                    statusClass = 'color:var(--text-muted);';
+                  default: icon = '\u25CB'; statusClass = 'color:var(--text-muted);';
                 }
-
-                stepsHtml += '<div style="display:flex;align-items:flex-start;gap:8px;margin:6px 0;font-size:12px;">' +
-                  '<span style="' + statusClass + 'font-weight:600;width:16px;flex-shrink:0;">' + icon + '</span>' +
-                  '<span style="color:var(--text-primary);">' + esc(step.label) + '</span>' +
-                  '</div>' + extra;
+                stepsHtml += '<div style="display:flex;align-items:flex-start;gap:8px;margin:6px 0;font-size:12px;"><span style="' + statusClass + 'font-weight:600;width:16px;flex-shrink:0;">' + icon + '</span><span style="color:var(--text-primary);">' + esc(step.label) + '</span></div>' + extra;
               }
 
               if (data.success) {
                 stepsHtml += '<div style="margin-top:10px;font-size:12px;color:#22c55e;font-weight:600;">\u2713 Package ready!</div>';
                 progressDiv.innerHTML = stepsHtml;
                 btn.textContent = '\u2713 Installed';
-                btn.style.background = '#22c55e';
-                btn.style.borderColor = '#22c55e';
+                btn.style.background = '#22c55e'; btn.style.borderColor = '#22c55e';
                 await new Promise(r => setTimeout(r, 2000));
                 self.renderMarketplaceSettings();
                 return;
@@ -3018,7 +4388,6 @@ const App = {
               progressDiv.innerHTML = stepsHtml;
 
               if (needsInput && inputStepId) {
-                // Wait for user to fill in input and click Continue
                 btn.textContent = 'Waiting for input...';
                 await new Promise((resolve) => {
                   const submitBtn = document.getElementById('setup-submit-' + inputStepId);
@@ -3033,14 +4402,12 @@ const App = {
                     });
                   }
                 });
-                continue; // Re-run setup with the new value
+                continue;
               }
 
-              // Failed and no input needed — stop
               btn.textContent = 'Setup incomplete';
               btn.disabled = false;
               return;
-
             } catch (e) {
               progressDiv.innerHTML = '<div style="font-size:12px;color:#ef4444;">Error: ' + esc(e.message) + '</div>';
               btn.textContent = 'Retry Setup';
@@ -3052,6 +4419,267 @@ const App = {
       });
     } catch (e) {
       container.innerHTML = '<div style="color:var(--danger);font-size:12px;">Error loading marketplace: ' + e.message + '</div>';
+    }
+  },
+
+  // ── Package Detail & Configuration Page ─────────────────────────
+  async renderPackageDetail(vendor) {
+    const container = document.getElementById('marketplace-settings');
+    if (!container) return;
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px;">Loading package details...</div>';
+
+    try {
+      const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/details');
+      const data = await resp.json();
+      if (data.error) { container.innerHTML = '<div style="color:var(--danger);font-size:12px;">' + esc(data.error) + '</div>'; return; }
+
+      const pkg = data.package || {};
+      const tools = data.tools || [];
+      const config = data.config || { resources: {}, features: {} };
+      const configurableResources = pkg.configurable_resources || [];
+      const featureFlags = pkg.feature_flags || [];
+      const agentConfig = pkg.agent_config || {};
+
+      let html = '<div class="pkg-detail">';
+
+      // Back button
+      html += '<button class="pkg-detail-back" id="pkg-back">\u2190 Back to packages</button>';
+
+      // Header
+      html += '<div class="pkg-detail-header">' +
+        '<div class="pkg-detail-icon" style="background:' + esc(pkg.color || '#666') + ';">\u2601</div>' +
+        '<div>' +
+          '<div class="pkg-detail-title">' + esc(pkg.display_name || pkg.name) + '</div>' +
+          '<div class="pkg-detail-meta">by ' + esc(pkg.vendor) + ' \u00b7 v' + esc(pkg.version) +
+            (pkg.categories && pkg.categories.length ? ' \u00b7 ' + pkg.categories.map(c => esc(c)).join(', ') : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+      // Description
+      const desc = pkg.long_description || pkg.description || '';
+      html += '<div class="pkg-detail-section">' +
+        '<div class="pkg-detail-section-title">About</div>' +
+        '<div class="pkg-detail-desc">' + esc(desc) + '</div>' +
+      '</div>';
+
+      // Capabilities
+      if (agentConfig.capabilities && agentConfig.capabilities.length) {
+        html += '<div class="pkg-detail-section">' +
+          '<div class="pkg-detail-section-title">Capabilities</div>' +
+          '<ul class="pkg-detail-capabilities">' +
+          agentConfig.capabilities.map(c => '<li>' + esc(c) + '</li>').join('') +
+          '</ul></div>';
+      }
+
+      // Tools
+      html += '<div class="pkg-detail-section">' +
+        '<div class="pkg-detail-section-title">Tools (' + tools.length + ')</div>';
+      for (const tool of tools) {
+        const actions = tool.parameters && tool.parameters.action
+          ? (tool.parameters.action.description || '').replace(/^.*?:\s*/, '').split(',').map(a => a.trim()).filter(Boolean)
+          : [];
+        html += '<div class="pkg-tool-card">' +
+          '<div class="pkg-tool-card-name">' + esc(tool.display_name || tool.name) + '</div>' +
+          '<div class="pkg-tool-card-desc">' + esc(tool.description || '') + '</div>' +
+          (actions.length ? '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">' + actions.map(a => '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);">' + esc(a) + '</span>').join('') + '</div>' : '') +
+        '</div>';
+      }
+      html += '</div>';
+
+      // ── Configuration: Allowed Resources ──────────────────────────
+      if (configurableResources.length) {
+        html += '<div class="pkg-detail-section">' +
+          '<div class="pkg-detail-section-title">Allowed Resources</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Configure which resources the agent can access. The agent will only operate on resources listed here.</div>';
+
+        for (const res of configurableResources) {
+          const savedItems = (config.resources[res.id] || []).map(r => r.id);
+          html += '<div class="pkg-resource-section" data-resource-type="' + esc(res.id) + '">' +
+            '<div class="pkg-resource-label">' + esc(res.label) + '</div>' +
+            (res.description ? '<div class="pkg-resource-desc">' + esc(res.description) + '</div>' : '') +
+            '<div class="pkg-resource-list" id="res-list-' + esc(res.id) + '">' +
+              savedItems.map(id => '<span class="pkg-resource-tag" data-id="' + esc(id) + '">' + esc(id) + ' <button class="remove-btn" title="Remove">\u00d7</button></span>').join('') +
+            '</div>' +
+            '<div class="pkg-resource-add">' +
+              '<input type="text" id="res-input-' + esc(res.id) + '" placeholder="' + esc(res.placeholder || 'Enter name...') + '" />' +
+              '<button onclick="settingsPanel.addResource(\'' + esc(vendor) + '\', \'' + esc(res.id) + '\')">Add</button>' +
+              (res.discover_command ? '<button class="discover-btn" onclick="settingsPanel.discoverResources(\'' + esc(vendor) + '\', \'' + esc(res.id) + '\')">Discover</button>' : '') +
+            '</div>' +
+          '</div>';
+        }
+        html += '</div>';
+      }
+
+      // ── Configuration: Feature Flags ──────────────────────────────
+      if (featureFlags.length) {
+        html += '<div class="pkg-detail-section">' +
+          '<div class="pkg-detail-section-title">Feature Flags</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Enable or disable specific capabilities. Disabled features cannot be used by the agent.</div>';
+
+        for (const flag of featureFlags) {
+          const isEnabled = config.features.hasOwnProperty(flag.id)
+            ? config.features[flag.id]
+            : flag.default_enabled;
+          html += '<div class="pkg-feature-row">' +
+            '<div class="pkg-feature-info">' +
+              '<div class="pkg-feature-label">' + esc(flag.label) + '</div>' +
+              (flag.description ? '<div class="pkg-feature-desc">' + esc(flag.description) + '</div>' : '') +
+            '</div>' +
+            '<label class="pkg-feature-toggle">' +
+              '<input type="checkbox" data-feature="' + esc(flag.id) + '" data-vendor="' + esc(vendor) + '"' +
+              (flag.enable_warning ? ' data-warning="' + esc(flag.enable_warning) + '"' : '') +
+              (isEnabled ? ' checked' : '') + ' />' +
+              '<span class="slider"></span>' +
+            '</label>' +
+          '</div>';
+        }
+        html += '</div>';
+      }
+
+      // ── Save Configuration Button ─────────────────────────────────
+      if (configurableResources.length || featureFlags.length) {
+        html += '<div style="display:flex;gap:8px;margin-top:8px;">' +
+          '<button class="primary" id="pkg-save-config" style="padding:8px 20px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:#fff;">Save Configuration</button>' +
+          '<span id="pkg-save-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>' +
+        '</div>';
+      }
+
+      // ── Suggested Prompts ─────────────────────────────────────────
+      if (agentConfig.suggested_prompts && agentConfig.suggested_prompts.length) {
+        html += '<div class="pkg-detail-section" style="margin-top:20px;">' +
+          '<div class="pkg-detail-section-title">Try These Prompts</div>' +
+          '<div>' + agentConfig.suggested_prompts.map(p => '<span class="pkg-prompt-chip">' + esc(p) + '</span>').join('') + '</div>' +
+        '</div>';
+      }
+
+      html += '</div>'; // close .pkg-detail
+      container.innerHTML = html;
+
+      // ── Bind Events ───────────────────────────────────────────────
+      const self = this;
+
+      // Back button
+      document.getElementById('pkg-back').addEventListener('click', () => self.renderMarketplaceSettings());
+
+      // Remove resource tags
+      container.querySelectorAll('.pkg-resource-tag .remove-btn').forEach(btn => {
+        btn.addEventListener('click', () => btn.parentElement.remove());
+      });
+
+      // Feature flag warnings
+      container.querySelectorAll('.pkg-feature-toggle input[data-warning]').forEach(cb => {
+        cb.addEventListener('change', (e) => {
+          if (e.target.checked && e.target.dataset.warning) {
+            if (!confirm(e.target.dataset.warning)) {
+              e.target.checked = false;
+            }
+          }
+        });
+      });
+
+      // Save button
+      const saveBtn = document.getElementById('pkg-save-config');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+          const statusEl = document.getElementById('pkg-save-status');
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving...';
+
+          // Collect resources
+          const resources = {};
+          container.querySelectorAll('.pkg-resource-section').forEach(section => {
+            const rType = section.dataset.resourceType;
+            const tags = section.querySelectorAll('.pkg-resource-tag');
+            resources[rType] = Array.from(tags).map(tag => ({ id: tag.dataset.id }));
+          });
+
+          // Collect features
+          const features = {};
+          container.querySelectorAll('.pkg-feature-toggle input[data-feature]').forEach(cb => {
+            features[cb.dataset.feature] = cb.checked;
+          });
+
+          try {
+            const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/config', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ resources, features }),
+            });
+            const result = await resp.json();
+            if (result.success) {
+              statusEl.textContent = '\u2713 Saved';
+              statusEl.style.color = '#22c55e';
+            } else {
+              statusEl.textContent = 'Error: ' + (result.error || 'Unknown');
+              statusEl.style.color = '#ef4444';
+            }
+          } catch (e) {
+            statusEl.textContent = 'Error: ' + e.message;
+            statusEl.style.color = '#ef4444';
+          }
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save Configuration';
+        });
+      }
+    } catch (e) {
+      container.innerHTML = '<div style="color:var(--danger);font-size:12px;">Error: ' + e.message + '</div>';
+    }
+  },
+
+  // Add a resource tag to the list
+  addResource(vendor, resourceType) {
+    const input = document.getElementById('res-input-' + resourceType);
+    const list = document.getElementById('res-list-' + resourceType);
+    if (!input || !list || !input.value.trim()) return;
+
+    const id = input.value.trim();
+    // Check for duplicates
+    if (list.querySelector('[data-id="' + id + '"]')) { input.value = ''; return; }
+
+    const tag = document.createElement('span');
+    tag.className = 'pkg-resource-tag';
+    tag.dataset.id = id;
+    tag.innerHTML = esc(id) + ' <button class="remove-btn" title="Remove">\u00d7</button>';
+    tag.querySelector('.remove-btn').addEventListener('click', () => tag.remove());
+    list.appendChild(tag);
+    input.value = '';
+    input.focus();
+  },
+
+  // Discover available resources from the backend
+  async discoverResources(vendor, resourceType) {
+    const list = document.getElementById('res-list-' + resourceType);
+    if (!list) return;
+
+    try {
+      const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/resources/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resource_type: resourceType }),
+      });
+      const data = await resp.json();
+
+      if (data.success && data.resources) {
+        for (const res of data.resources) {
+          const id = res.id || res.name || res;
+          if (typeof id !== 'string' || !id) continue;
+          if (list.querySelector('[data-id="' + id + '"]')) continue; // skip dupes
+
+          const tag = document.createElement('span');
+          tag.className = 'pkg-resource-tag';
+          tag.dataset.id = id;
+          tag.innerHTML = esc(id) + ' <button class="remove-btn" title="Remove">\u00d7</button>';
+          tag.querySelector('.remove-btn').addEventListener('click', () => tag.remove());
+          list.appendChild(tag);
+        }
+      } else if (data.message) {
+        alert(data.message);
+      } else if (data.error) {
+        alert('Discovery failed: ' + data.error);
+      }
+    } catch (e) {
+      alert('Discovery error: ' + e.message);
     }
   },
 };

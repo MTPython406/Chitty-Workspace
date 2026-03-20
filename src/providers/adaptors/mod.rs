@@ -10,6 +10,7 @@
 //! - (future) `anthropic` — Anthropic Messages API (currently in cloud.rs)
 //! - (future) `google` — Google Gemini API
 
+pub mod openai_compat;
 pub mod xai;
 
 use serde::{Deserialize, Serialize};

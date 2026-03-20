@@ -1,0 +1,4 @@
+# Base tier — GGUF chat inference only
+fastapi
+uvicorn[standard]
+pydantic

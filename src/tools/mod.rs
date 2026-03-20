@@ -53,6 +53,9 @@ pub struct ToolDefinition {
     pub instructions: Option<String>,
     /// Tool category
     pub category: ToolCategory,
+    /// Package vendor name (for marketplace tools)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,8 +65,10 @@ pub enum ToolCategory {
     Native,
     /// User-created or AI-generated custom tools
     Custom,
-    /// Integration-provided tools
+    /// Integration-provided tools (Google OAuth, etc.)
     Integration,
+    /// Marketplace package tools
+    Marketplace,
 }
 
 /// Result of executing a tool
@@ -335,6 +340,7 @@ impl NativeTool for FileReaderTool {
                     .to_string(),
             ),
             category: ToolCategory::Native,
+            vendor: None,
         }
     }
 
@@ -419,6 +425,7 @@ impl NativeTool for FileWriterTool {
                     .to_string(),
             ),
             category: ToolCategory::Native,
+            vendor: None,
         }
     }
 
@@ -494,6 +501,7 @@ impl NativeTool for TerminalTool {
                     .to_string(),
             ),
             category: ToolCategory::Native,
+            vendor: None,
         }
     }
 
@@ -621,6 +629,7 @@ impl NativeTool for CodeSearchTool {
                     .to_string(),
             ),
             category: ToolCategory::Native,
+            vendor: None,
         }
     }
 
@@ -816,6 +825,7 @@ impl NativeTool for SaveMemoryTool {
                     .to_string(),
             ),
             category: ToolCategory::Native,
+            vendor: None,
         }
     }
 
@@ -932,6 +942,7 @@ impl NativeTool for CreateToolTool {
                     .to_string(),
             ),
             category: ToolCategory::Native,
+            vendor: None,
         }
     }
 
@@ -1088,6 +1099,7 @@ impl NativeTool for InstallPackageTool {
                     .to_string(),
             ),
             category: ToolCategory::Native,
+            vendor: None,
         }
     }
 
@@ -1271,6 +1283,7 @@ impl NativeTool for BrowserTool {
                     .to_string(),
             ),
             category: ToolCategory::Native,
+            vendor: None,
         }
     }
 

@@ -643,6 +643,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
+ "which",
  "wry",
 ]
 

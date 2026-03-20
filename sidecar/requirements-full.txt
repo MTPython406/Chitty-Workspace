@@ -1,0 +1,11 @@
+# Full tier — GGUF + image generation + audio
+fastapi
+uvicorn[standard]
+pydantic
+llama-cpp-python
+torch
+diffusers
+transformers
+accelerate
+safetensors
+# openai-whisper  # Phase 3

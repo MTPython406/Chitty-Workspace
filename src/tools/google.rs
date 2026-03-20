@@ -55,7 +55,8 @@ impl NativeTool for GmailReadTool {
                  The response includes: subject, from, date, snippet, and labels."
                     .to_string(),
             ),
-            category: ToolCategory::Native,
+            category: ToolCategory::Integration,
+            vendor: None,
         }
     }
 
@@ -254,7 +255,8 @@ impl NativeTool for GmailSendTool {
                  IMPORTANT: Always confirm with the user before sending. Show them the to/subject/body first."
                     .to_string(),
             ),
-            category: ToolCategory::Native,
+            category: ToolCategory::Integration,
+            vendor: None,
         }
     }
 
@@ -331,7 +333,8 @@ impl NativeTool for CalendarListTool {
                  Returns event title, start/end time, location, and attendees."
                     .to_string(),
             ),
-            category: ToolCategory::Native,
+            category: ToolCategory::Integration,
+            vendor: None,
         }
     }
 
@@ -416,7 +419,8 @@ impl NativeTool for DriveSearchTool {
                  Returns file name, type, last modified date, and sharing status."
                     .to_string(),
             ),
-            category: ToolCategory::Native,
+            category: ToolCategory::Integration,
+            vendor: None,
         }
     }
 

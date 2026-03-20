@@ -11,6 +11,10 @@ use anyhow::Result;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+fn default_approval_mode() -> String {
+    "prompt".to_string()
+}
+
 /// An agent definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
@@ -42,6 +46,9 @@ pub struct Agent {
     pub temperature: Option<f64>,
     /// Max output tokens override (None = use model default)
     pub max_tokens: Option<u32>,
+    /// Approval mode: "prompt" (default) = ask user, "auto" = auto-approve all actions
+    #[serde(default = "default_approval_mode")]
+    pub approval_mode: String,
 }
 
 /// Summary for listing agents (lightweight)
@@ -54,6 +61,10 @@ pub struct AgentSummary {
     pub tags: Vec<String>,
     pub max_iterations: Option<u32>,
     pub project_path: Option<String>,
+    pub preferred_provider: Option<String>,
+    pub preferred_model: Option<String>,
+    #[serde(default = "default_approval_mode")]
+    pub approval_mode: String,
 }
 
 /// Agents CRUD manager
@@ -66,8 +77,8 @@ impl AgentsManager {
         let tags_json = serde_json::to_string(&agent.tags)?;
 
         conn.execute(
-            "INSERT INTO agents (id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            "INSERT INTO agents (id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
@@ -82,6 +93,7 @@ impl AgentsManager {
                 max_iterations = excluded.max_iterations,
                 temperature = excluded.temperature,
                 max_tokens = excluded.max_tokens,
+                approval_mode = excluded.approval_mode,
                 updated_at = datetime('now')",
             rusqlite::params![
                 agent.id,
@@ -98,6 +110,7 @@ impl AgentsManager {
                 agent.max_iterations.map(|v| v as i32),
                 agent.temperature,
                 agent.max_tokens.map(|v| v as i32),
+                agent.approval_mode,
             ],
         )?;
         Ok(())
@@ -106,7 +119,7 @@ impl AgentsManager {
     /// Load an agent by ID
     pub fn load(conn: &Connection, id: &str) -> Result<Option<Agent>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens
+            "SELECT id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode
              FROM agents WHERE id = ?1",
         )?;
 
@@ -129,6 +142,7 @@ impl AgentsManager {
                     max_iterations: row.get::<_, Option<i32>>(11)?.map(|v| v as u32),
                     temperature: row.get(12)?,
                     max_tokens: row.get::<_, Option<i32>>(13)?.map(|v| v as u32),
+                    approval_mode: row.get::<_, Option<String>>(14)?.unwrap_or_else(|| "prompt".to_string()),
                 })
             })
             .ok();
@@ -139,7 +153,7 @@ impl AgentsManager {
     /// List all agents (summaries)
     pub fn list(conn: &Connection) -> Result<Vec<AgentSummary>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, tools, tags, max_iterations, project_path FROM agents ORDER BY name",
+            "SELECT id, name, description, tools, tags, max_iterations, project_path, preferred_provider, preferred_model, approval_mode FROM agents ORDER BY name",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -153,6 +167,9 @@ impl AgentsManager {
                 tags: serde_json::from_str(&tags_str).unwrap_or_default(),
                 max_iterations: row.get::<_, Option<i32>>(5)?.map(|v| v as u32),
                 project_path: row.get(6)?,
+                preferred_provider: row.get(7)?,
+                preferred_model: row.get(8)?,
+                approval_mode: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "prompt".to_string()),
             })
         })?;
 

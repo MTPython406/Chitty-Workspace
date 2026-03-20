@@ -346,10 +346,12 @@ pub fn is_configured(provider: &str) -> bool {
         .is_some()
 }
 
-/// Get integration status for all known providers
+/// Get integration status for first-party providers only (Google).
+/// Marketplace integrations (Microsoft, GitHub, Slack) are shown in the Marketplace tab.
 pub fn get_all_status() -> Vec<IntegrationStatus> {
     providers::ALL_TEMPLATES
         .iter()
+        .filter(|t| t.provider == "google") // Only first-party integrations
         .map(|t| {
             let configured = is_configured(t.provider);
             IntegrationStatus {
