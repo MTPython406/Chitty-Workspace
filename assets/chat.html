@@ -938,6 +938,7 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <div class="settings-tabs">
       <button class="settings-tab active" data-tab="keys">API Keys</button>
       <button class="settings-tab" data-tab="models">Models</button>
+      <button class="settings-tab" data-tab="integrations">Integrations</button>
       <button class="settings-tab" data-tab="agents">Agents</button>
       <button class="settings-tab" data-tab="tokens">Usage</button>
       <button class="settings-tab" data-tab="marketplace">Marketplace</button>
@@ -947,6 +948,9 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     </div>
     <div id="tab-models" class="settings-tab-content">
       <div id="models-settings"></div>
+    </div>
+    <div id="tab-integrations" class="settings-tab-content">
+      <div id="integrations-settings"></div>
     </div>
     <div id="tab-agents" class="settings-tab-content">
       <div id="agents-settings"></div>
@@ -1828,6 +1832,7 @@ const App = {
   openSettings() {
     document.getElementById('settings-overlay').classList.add('visible');
     this.renderProviderSettings();
+    this.renderIntegrations();
   },
   closeSettings() {
     document.getElementById('settings-overlay').classList.remove('visible');
@@ -2140,6 +2145,82 @@ const App = {
         } catch (e) { console.error('saveKey:', e); }
       });
     });
+  },
+
+  /* ── Integrations (OAuth) ────────────────────────────────────── */
+  async renderIntegrations() {
+    const c = document.getElementById('integrations-settings');
+    if (!c) return;
+
+    try {
+      const resp = await fetch('/api/oauth/status');
+      const data = await resp.json();
+      const integrations = data.integrations || [];
+
+      let html = '<div class="model-section">';
+      html += '<div class="model-section-title">Connected Services</div>';
+      html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Connect your accounts to give agents real API access. Tokens are stored securely on your machine — never sent to any server.</div>';
+
+      for (const intg of integrations) {
+        const statusColor = intg.connected ? '#10b981' : 'var(--text-muted)';
+        const statusText = intg.connected ? 'Connected' : 'Not Connected';
+        const statusIcon = intg.connected ? '✓' : '○';
+
+        html += `<div class="user-model-item" style="margin-bottom:8px;">
+          <div style="flex:1;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:13px;font-weight:600;color:var(--text-primary);">${esc(intg.display_name)}</span>
+              <span style="font-size:11px;color:${statusColor};font-weight:500;">${statusIcon} ${statusText}</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${esc(intg.description)}</div>
+          </div>
+          <div style="display:flex;gap:6px;">`;
+
+        if (intg.connected) {
+          html += `<button class="discover-btn" style="background:var(--bg-card);color:var(--danger);border:1px solid var(--border);font-size:11px;padding:4px 12px;"
+            onclick="App.disconnectIntegration('${esc(intg.provider)}')">Disconnect</button>`;
+        } else {
+          html += `<button class="discover-btn" style="font-size:11px;padding:4px 12px;"
+            onclick="App.connectIntegration('${esc(intg.provider)}')">Connect ${esc(intg.display_name)}</button>`;
+        }
+
+        html += '</div></div>';
+      }
+
+      html += '</div>';
+      c.innerHTML = html;
+    } catch (e) {
+      c.innerHTML = '<div style="color:var(--danger);padding:12px;">Failed to load integration status.</div>';
+      console.error('renderIntegrations:', e);
+    }
+  },
+
+  async connectIntegration(provider) {
+    // Open the OAuth flow in a new browser tab
+    window.open(`/oauth/start/${provider}`, '_blank');
+    // Poll for connection status
+    const check = setInterval(async () => {
+      try {
+        const resp = await fetch(`/api/oauth/status/${provider}`);
+        const data = await resp.json();
+        if (data.connected) {
+          clearInterval(check);
+          this.renderIntegrations();
+        }
+      } catch (_) {}
+    }, 2000);
+    // Stop polling after 2 minutes
+    setTimeout(() => clearInterval(check), 120000);
+  },
+
+  async disconnectIntegration(provider) {
+    if (!confirm(`Disconnect ${provider}? This will remove your saved credentials.`)) return;
+    try {
+      await fetch(`/api/oauth/disconnect/${provider}`, { method: 'POST' });
+      this.renderIntegrations();
+    } catch (e) {
+      console.error('disconnect:', e);
+    }
   },
 
   /* ── Model management ────────────────────────────────────────── */

@@ -13,6 +13,7 @@
 
 pub mod manifest;
 pub mod executor;
+pub mod google;
 pub mod runtime;
 pub mod marketplace_client;
 #[cfg(feature = "cdp-browser")]
@@ -148,6 +149,12 @@ impl ToolRegistry {
         registry.register(Box::new(CreateToolTool));
         registry.register(Box::new(InstallPackageTool));
         registry.register(Box::new(BrowserTool { bridge: browser_bridge }));
+
+        // Google API tools (require OAuth integration)
+        registry.register(Box::new(google::GmailReadTool));
+        registry.register(Box::new(google::GmailSendTool));
+        registry.register(Box::new(google::CalendarListTool));
+        registry.register(Box::new(google::DriveSearchTool));
 
         registry
     }
@@ -1232,32 +1239,35 @@ impl NativeTool for BrowserTool {
                 "required": ["action"]
             }),
             instructions: Some(
-                "Control the user's actual browser via the Chitty Browser Extension.\n\
-                 The user sees everything — pages open in their browser, they can watch and intervene.\n\
+                "Control the user's actual Chrome browser via the Chitty Browser Extension.\n\
+                 The user sees everything — pages open in real Chrome tabs they can interact with.\n\
+                 \n\
+                 **IMPORTANT: Always try the action first.** Don't ask about setup or check connection \
+                 status. Just call the browser tool. If it fails, THEN tell the user to check the extension.\n\
                  \n\
                  **Actions:**\n\
-                 - `open` — Navigate to any URL. Opens a tab in the user's browser.\n\
-                 - `screenshot` — Capture the visible page as a screenshot.\n\
+                 - `open` — Navigate to any URL. Opens a tab in Chrome.\n\
+                 - `screenshot` — Capture the visible page as a screenshot (shown in chat).\n\
                  - `click` — Click an element by CSS `selector`.\n\
-                 - `type` — Type `text` into a field targeted by `selector`. Works with contenteditable too.\n\
+                 - `type` — Type `text` into a field targeted by `selector`. Works with contenteditable.\n\
                  - `read_text` — Extract text content. Pass `selector` for specific element, or omit for full page.\n\
                  - `execute_js` — Run JavaScript in the page context.\n\
                  - `wait_for` — Wait for element matching `selector` to appear (default 10s timeout).\n\
                  - `page_info` — Get current URL, title, and text snippet.\n\
                  - `close` — Close the current tab.\n\
                  \n\
-                 **Full access:** Works on ANY site — LinkedIn, X.com, Gmail, etc.\n\
-                 The user's login sessions and saved passwords are available (it's their browser).\n\
+                 **Full access:** Works on ANY site — Gmail, LinkedIn, X.com, banks, etc.\n\
+                 The user's login sessions are available because it's their own browser.\n\
+                 If a site requires login, just open it — the user will see the login page in Chrome \
+                 and can log in themselves. Then continue with the task.\n\
                  \n\
-                 **If not connected:** Ask the user to install the Chitty Browser Extension.\n\
+                 **For Gmail:** Just `open` https://mail.google.com — the user is likely already logged in.\n\
+                 Then use `read_text` to read emails, `click` to open messages, etc.\n\
                  \n\
-                 **Workflow for posting on LinkedIn:**\n\
-                 1. `open` https://www.linkedin.com\n\
-                 2. `page_info` to check if logged in (look for 'Feed' in title)\n\
-                 3. If login page: tell user to log in, then `wait_for` the feed\n\
-                 4. `click` the 'Start a post' button (selector: `button.share-box-feed-entry__trigger`)\n\
-                 5. `type` the post content into the compose box\n\
-                 6. Tell user to review and click Post"
+                 **For LinkedIn:** `open` https://www.linkedin.com then navigate normally.\n\
+                 \n\
+                 **Never tell users to set up OAuth, API credentials, or go to Google Cloud Console.** \
+                 The browser tool gives you direct access to any website the user is logged into."
                     .to_string(),
             ),
             category: ToolCategory::Native,
