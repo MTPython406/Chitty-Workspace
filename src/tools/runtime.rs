@@ -48,6 +48,10 @@ pub struct ToolRuntime {
     connections: HashMap<String, LoadedConnection>,
     /// Marketplace packages (vendor bundles)
     pub marketplace_packages: Vec<MarketplacePackage>,
+    /// Maps marketplace tool name → package vendor name (for categorization)
+    marketplace_tool_vendors: HashMap<String, String>,
+    /// Cached package configs (allowed resources + feature flags) keyed by tool name → config JSON
+    package_configs: HashMap<String, String>,
     /// Root tools directory
     tools_dir: PathBuf,
     /// Sandbox temp directory for custom tool execution
@@ -75,6 +79,8 @@ impl ToolRuntime {
             custom_tools: HashMap::new(),
             connections: HashMap::new(),
             marketplace_packages: Vec::new(),
+            marketplace_tool_vendors: HashMap::new(),
+            package_configs: HashMap::new(),
             tools_dir,
             sandbox_dir,
             packages_dir,
@@ -105,6 +111,7 @@ impl ToolRuntime {
 
         // Scan marketplace packages
         self.marketplace_packages.clear();
+        self.marketplace_tool_vendors.clear();
         let marketplace_dir = self.tools_dir.join("marketplace");
         if marketplace_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&marketplace_dir) {
@@ -131,6 +138,10 @@ impl ToolRuntime {
                                                 Ok(content) => match serde_json::from_str::<ToolManifest>(&content) {
                                                     Ok(manifest) => {
                                                         tracing::info!("Loaded marketplace tool: {} ({})", manifest.display_name, manifest.name);
+                                                        self.marketplace_tool_vendors.insert(
+                                                            manifest.name.clone(),
+                                                            pkg_manifest.vendor.clone(),
+                                                        );
                                                         self.custom_tools.insert(
                                                             manifest.name.clone(),
                                                             LoadedCustomTool {
@@ -242,15 +253,22 @@ impl ToolRuntime {
     pub fn list_definitions(&self) -> Vec<ToolDefinition> {
         let mut defs = self.native_registry.list_definitions();
 
-        // Add custom tools
+        // Add custom tools (distinguish marketplace vs user-created)
         for (_, tool) in &self.custom_tools {
+            let vendor = self.marketplace_tool_vendors.get(&tool.manifest.name).cloned();
+            let category = if vendor.is_some() {
+                ToolCategory::Marketplace
+            } else {
+                ToolCategory::Custom
+            };
             defs.push(ToolDefinition {
                 name: tool.manifest.name.clone(),
                 display_name: tool.manifest.display_name.clone(),
                 description: tool.manifest.description.clone(),
                 parameters: tool.manifest.to_json_schema(),
                 instructions: tool.manifest.instructions.clone(),
-                category: ToolCategory::Custom,
+                category,
+                vendor,
             });
         }
 
@@ -287,6 +305,7 @@ impl ToolRuntime {
                         }),
                         instructions: conn.manifest.instructions.clone(),
                         category: ToolCategory::Integration,
+                        vendor: None,
                     });
                 }
             }
@@ -363,12 +382,14 @@ impl ToolRuntime {
         } else if let Some(tool) = self.custom_tools.get(name) {
             // Custom tool — execute script
             tracing::info!("Executing custom tool: {}", name);
+            let pkg_config = self.package_configs.get(name).map(|s| s.as_str());
             executor::execute_custom(
                 &tool.manifest,
                 &tool.dir,
                 args,
                 &self.sandbox_dir,
                 &self.packages_dir,
+                pkg_config,
             )
             .await
         } else if name.contains('.') {
@@ -444,6 +465,7 @@ impl ToolRuntime {
                 &enhanced_args,
                 &self.sandbox_dir,
                 &self.packages_dir,
+                None, // Connection tools don't use package config
             )
             .await
         } else {
@@ -484,6 +506,66 @@ impl ToolRuntime {
     /// Get the packages directory path
     pub fn packages_dir(&self) -> &Path {
         &self.packages_dir
+    }
+
+    /// Load package configs from the database and cache them by tool name.
+    /// Call this after saving config from the UI.
+    pub fn load_package_configs(&mut self, db: &crate::storage::Database) {
+        self.package_configs.clear();
+        if let Ok(conn) = db.connect() {
+            for pkg in &self.marketplace_packages {
+                let pkg_id = &pkg.manifest.name;
+
+                // Load resources
+                let mut resources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+                if let Ok(mut stmt) = conn.prepare(
+                    "SELECT resource_type, resource_id FROM package_resources WHERE package_id = ?1"
+                ) {
+                    if let Ok(rows) = stmt.query_map(rusqlite::params![pkg_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    }) {
+                        for row in rows.flatten() {
+                            resources.entry(row.0).or_default().push(serde_json::json!(row.1));
+                        }
+                    }
+                }
+
+                // Load features
+                let mut features: HashMap<String, bool> = HashMap::new();
+                if let Ok(mut stmt) = conn.prepare(
+                    "SELECT feature_id, enabled FROM package_features WHERE package_id = ?1"
+                ) {
+                    if let Ok(rows) = stmt.query_map(rusqlite::params![pkg_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+                    }) {
+                        for row in rows.flatten() {
+                            features.insert(row.0, row.1 != 0);
+                        }
+                    }
+                }
+
+                if !resources.is_empty() || !features.is_empty() {
+                    let config_json = serde_json::json!({
+                        "package_id": pkg_id,
+                        "resources": resources,
+                        "features": features,
+                    });
+                    let config_str = serde_json::to_string(&config_json).unwrap_or_default();
+
+                    // Map each tool in this package to the config
+                    for tool_name in &pkg.manifest.tools {
+                        let tool_dir = pkg.dir.join(tool_name);
+                        let manifest_path = tool_dir.join("manifest.json");
+                        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+                            if let Ok(tm) = serde_json::from_str::<crate::tools::manifest::ToolManifest>(&content) {
+                                self.package_configs.insert(tm.name.clone(), config_str.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            tracing::info!("Loaded package configs for {} tools", self.package_configs.len());
+        }
     }
 
     /// Create a new custom tool from agent-provided definition

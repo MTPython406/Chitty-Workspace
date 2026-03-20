@@ -30,6 +30,7 @@ use crate::chat::ChatEngine;
 use crate::config;
 use crate::providers::adaptors::xai::XaiProvider;
 use crate::providers::cloud::AnthropicProvider;
+use crate::providers::ollama::OllamaProvider;
 use crate::providers::{ChatMessage, Provider, ProviderId, StreamChunk, ToolCall};
 use crate::agents::{Agent, AgentsManager};
 use crate::storage::Database;
@@ -174,6 +175,9 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         tool_runtime.write().await.scan_and_load();
     }
 
+    // Load package configs (allowed resources, feature flags) from DB
+    tool_runtime.write().await.load_package_configs(&db);
+
     let oauth_pending = crate::oauth::PendingFlows::default();
     let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge, oauth_pending });
 
@@ -241,14 +245,56 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/marketplace/packages/:vendor/auth-status", get(check_package_auth))
         .route("/api/marketplace/packages/:vendor/auth", post(trigger_package_auth))
         .route("/api/marketplace/packages/:vendor/setup", post(run_package_setup))
+        .route("/api/marketplace/packages/:vendor/details", get(get_package_details))
+        .route("/api/marketplace/packages/:vendor/config", get(get_package_config))
+        .route("/api/marketplace/packages/:vendor/config", put(save_package_config))
+        .route("/api/marketplace/packages/:vendor/resources/discover", post(discover_package_resources))
         // Marketplace registry (remote — browse/search/install from chitty.ai)
         .route("/api/marketplace/registry/packages", get(registry_list_packages))
         .route("/api/marketplace/registry/search", get(registry_search))
         .route("/api/marketplace/registry/install", post(registry_install_package))
+        // Local models — GPU, Ollama, sidecar management
+        .route("/api/local/gpu", get(local_gpu_handler))
+        .route("/api/local/status", get(local_status_handler))
+        .route("/api/local/ollama/status", get(ollama_status_handler))
+        .route("/api/local/ollama/models", get(ollama_models_handler))
+        .route("/api/local/ollama/running", get(ollama_running_handler))
+        .route("/api/local/ollama/pull", post(ollama_pull_handler))
+        .route("/api/local/ollama/unload", post(ollama_unload_handler))
+        .route("/api/local/ollama/models/:name", delete(ollama_delete_model_handler))
+        // HuggingFace sidecar management
+        .route("/api/local/sidecar/status", get(sidecar_status_handler))
+        .route("/api/local/sidecar/start", post(sidecar_start_handler))
+        .route("/api/local/sidecar/stop", post(sidecar_stop_handler))
+        .route("/api/local/sidecar/models", get(sidecar_models_handler))
+        .route("/api/local/sidecar/models/scan", post(sidecar_scan_handler))
+        .route("/api/local/sidecar/models/register", post(sidecar_register_handler))
+        .route("/api/local/sidecar/models/load", post(sidecar_load_handler))
+        .route("/api/local/sidecar/models/unload", post(sidecar_unload_handler))
+        // Direct GGUF scanning (no sidecar needed)
+        .route("/api/local/gguf/scan", get(gguf_scan_local_handler))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-    tracing::info!("Server listening on http://127.0.0.1:{}", port);
+    // Try the requested port first, then fall back to nearby ports
+    let mut bound_port = port;
+    let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+        Ok(l) => l,
+        Err(_) => {
+            // Port in use — try fallback ports
+            let mut fallback_listener = None;
+            for offset in 1..=10 {
+                let try_port = port + offset;
+                if let Ok(l) = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", try_port)).await {
+                    bound_port = try_port;
+                    tracing::warn!("Port {} in use, using fallback port {}", port, try_port);
+                    fallback_listener = Some(l);
+                    break;
+                }
+            }
+            fallback_listener.ok_or_else(|| anyhow::anyhow!("Could not bind to any port {}-{}", port, port + 10))?
+        }
+    };
+    tracing::info!("Server listening on http://127.0.0.1:{}", bound_port);
     axum::serve(listener, app).await?;
 
     Ok(())
@@ -511,10 +557,17 @@ async fn approval_response_handler(
     StatusCode::OK
 }
 
-/// Actions that require user approval before executing
-fn action_requires_approval(tool_name: &str, action: &str) -> bool {
+/// Actions that require user approval before executing.
+/// When `auto_approve` is true (agent configured for autonomous mode), all actions are skipped.
+fn action_requires_approval(tool_name: &str, action: &str, auto_approve: bool) -> bool {
+    if auto_approve {
+        return false;
+    }
     match tool_name {
         "browser" => matches!(action, "click" | "type" | "execute_js" | "open"),
+        "terminal" => true,
+        "file_writer" => true,
+        "install_package" => true,
         _ => false,
     }
 }
@@ -552,6 +605,31 @@ fn describe_action(tool_name: &str, args: &serde_json::Value) -> (String, serde_
             (
                 format!("Execute JavaScript on page"),
                 serde_json::json!({ "action": "execute_js", "script_preview": preview, "icon": "⚡" })
+            )
+        }
+        ("terminal", _) => {
+            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("?");
+            let preview = if cmd.len() > 120 { format!("{}...", &cmd[..120]) } else { cmd.to_string() };
+            (
+                format!("Run terminal command: {}", preview),
+                serde_json::json!({ "action": "terminal", "command": preview, "icon": "💻" })
+            )
+        }
+        ("file_writer", _) => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+            (
+                format!("Write file: {}", path),
+                serde_json::json!({ "action": "write", "path": path, "icon": "📝" })
+            )
+        }
+        ("install_package", _) => {
+            let runtime = args.get("runtime").and_then(|v| v.as_str()).unwrap_or("?");
+            let packages = args.get("packages").and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(", "))
+                .unwrap_or_else(|| "?".to_string());
+            (
+                format!("Install {} packages: {}", runtime, packages),
+                serde_json::json!({ "action": "install", "runtime": runtime, "packages": packages, "icon": "📦" })
             )
         }
         _ => (
@@ -927,8 +1005,8 @@ async fn create_provider(
     state: &Arc<AppState>,
     provider_str: &str,
 ) -> anyhow::Result<Box<dyn Provider>> {
-    let api_key = config::get_api_key(provider_str)?
-        .ok_or_else(|| anyhow::anyhow!("No API key configured for {}", provider_str))?;
+    // Local providers don't need API keys
+    let provider_id = provider_str.parse::<ProviderId>()?;
 
     let db = state.db.clone();
     let prov_id = provider_str.to_string();
@@ -943,16 +1021,33 @@ async fn create_provider(
         })
         .await?;
 
-    match provider_str.parse::<ProviderId>()? {
-        ProviderId::Anthropic => Ok(Box::new(AnthropicProvider::new(api_key, base_url))),
-        ProviderId::Xai => Ok(Box::new(XaiProvider::new(api_key, base_url))),
-        ProviderId::Openai => {
-            Ok(Box::new(XaiProvider::new(
-                api_key,
-                base_url.or_else(|| Some("https://api.openai.com/v1".to_string())),
-            )))
+    match provider_id {
+        ProviderId::Ollama => {
+            let url = base_url.unwrap_or_else(|| "http://localhost:11434".to_string());
+            Ok(Box::new(OllamaProvider::new(url)))
         }
-        other => anyhow::bail!("Provider '{}' not yet implemented", other),
+        ProviderId::Huggingface => {
+            let _url = base_url.unwrap_or_else(|| "http://localhost:8766".to_string());
+            // LocalProvider will be added in Phase 2 — for now, use the sidecar URL
+            anyhow::bail!("Local sidecar provider not yet implemented. Use Ollama for local models.")
+        }
+        _ => {
+            // Cloud providers require API keys
+            let api_key = config::get_api_key(provider_str)?
+                .ok_or_else(|| anyhow::anyhow!("No API key configured for {}", provider_str))?;
+
+            match provider_id {
+                ProviderId::Anthropic => Ok(Box::new(AnthropicProvider::new(api_key, base_url))),
+                ProviderId::Xai => Ok(Box::new(XaiProvider::new(api_key, base_url))),
+                ProviderId::Openai => {
+                    Ok(Box::new(XaiProvider::new(
+                        api_key,
+                        base_url.or_else(|| Some("https://api.openai.com/v1".to_string())),
+                    )))
+                }
+                other => anyhow::bail!("Provider '{}' not yet implemented", other),
+            }
+        }
     }
 }
 
@@ -1327,7 +1422,7 @@ async fn process_chat(
             // For sensitive tool actions (browser click/type/open/js), pause and
             // ask the user for approval before executing.
             let action_str = tc.arguments.get("action").and_then(|v| v.as_str()).unwrap_or("");
-            if action_requires_approval(&tc.name, action_str) {
+            if action_requires_approval(&tc.name, action_str, exec_config.auto_approve) {
                 let approval_id = uuid::Uuid::new_v4().to_string();
                 let (description, details) = describe_action(&tc.name, &tc.arguments);
 
@@ -1937,6 +2032,43 @@ async fn discover_models_handler(
     State(state): State<Arc<AppState>>,
     Path(provider_id): Path<String>,
 ) -> impl IntoResponse {
+    // ── Ollama: local provider, no API key needed ──
+    if provider_id == "ollama" {
+        let data_dir = crate::storage::default_data_dir();
+        let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+        let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+        match ollama.list_ollama_models().await {
+            Ok(models) => {
+                let discovered: Vec<serde_json::Value> = models
+                    .iter()
+                    .map(|m| {
+                        let supports_tools = OllamaProvider::model_supports_tools_static(&m.name, &m.details);
+                        serde_json::json!({
+                            "id": m.name,
+                            "display_name": m.name,
+                            "context_window": null,
+                            "supports_tools": supports_tools,
+                            "supports_streaming": true,
+                            "supports_vision": false,
+                            "size": m.size,
+                            "family": m.details.as_ref().and_then(|d| d.family.clone()),
+                            "parameter_size": m.details.as_ref().and_then(|d| d.parameter_size.clone()),
+                            "quantization": m.details.as_ref().and_then(|d| d.quantization_level.clone()),
+                        })
+                    })
+                    .collect();
+                return Json(serde_json::json!({"models": discovered})).into_response();
+            }
+            Err(e) => {
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("Cannot connect to Ollama: {}", e)})),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let has_key = config::get_api_key(&provider_id)
         .ok()
         .flatten()
@@ -1964,9 +2096,11 @@ async fn discover_models_handler(
 
     if provider_id == "google" {
         return Json(serde_json::json!({"models": [
+            {"id": "gemini-3.1-pro-preview", "display_name": "Gemini 3.1 Pro (Preview)", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+            {"id": "gemini-3-flash-preview", "display_name": "Gemini 3 Flash (Preview)", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
             {"id": "gemini-2.5-pro", "display_name": "Gemini 2.5 Pro", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
             {"id": "gemini-2.5-flash", "display_name": "Gemini 2.5 Flash", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
-            {"id": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
+            {"id": "gemini-2.5-flash-lite", "display_name": "Gemini 2.5 Flash Lite (Budget)", "context_window": 1000000, "supports_tools": true, "supports_streaming": true, "supports_vision": true},
         ]})).into_response();
     }
 
@@ -2248,13 +2382,17 @@ async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let tools: Vec<serde_json::Value> = defs
         .into_iter()
         .map(|d| {
-            serde_json::json!({
+            let mut obj = serde_json::json!({
                 "name": d.name,
                 "display_name": d.display_name,
                 "description": d.description,
                 "category": d.category,
                 "has_instructions": d.instructions.is_some(),
-            })
+            });
+            if let Some(ref v) = d.vendor {
+                obj["vendor"] = serde_json::json!(v);
+            }
+            obj
         })
         .collect();
 
@@ -2302,11 +2440,21 @@ struct CreateAgentRequest {
     #[serde(default)]
     project_path: Option<String>,
     #[serde(default)]
+    preferred_provider: Option<String>,
+    #[serde(default)]
+    preferred_model: Option<String>,
+    #[serde(default)]
     max_iterations: Option<u32>,
     #[serde(default)]
     temperature: Option<f64>,
     #[serde(default)]
     max_tokens: Option<u32>,
+    #[serde(default = "default_approval_mode_req")]
+    approval_mode: String,
+}
+
+fn default_approval_mode_req() -> String {
+    "prompt".to_string()
 }
 
 async fn create_agent(
@@ -2320,14 +2468,15 @@ async fn create_agent(
         instructions: req.instructions,
         tools: req.tools,
         project_path: req.project_path,
-        preferred_provider: None,
-        preferred_model: None,
+        preferred_provider: req.preferred_provider,
+        preferred_model: req.preferred_model,
         tags: Vec::new(),
         version: "1.0".to_string(),
         ai_generated: false,
         max_iterations: req.max_iterations,
         temperature: req.temperature,
         max_tokens: req.max_tokens,
+        approval_mode: req.approval_mode,
     };
 
     let db = state.db.clone();
@@ -2357,14 +2506,15 @@ async fn update_agent(
         instructions: req.instructions,
         tools: req.tools,
         project_path: req.project_path,
-        preferred_provider: None,
-        preferred_model: None,
+        preferred_provider: req.preferred_provider,
+        preferred_model: req.preferred_model,
         tags: Vec::new(),
         version: "1.0".to_string(),
         ai_generated: false,
         max_iterations: req.max_iterations,
         temperature: req.temperature,
         max_tokens: req.max_tokens,
+        approval_mode: req.approval_mode,
     };
 
     let db = state.db.clone();
@@ -2463,31 +2613,15 @@ fn compact_context(messages: &mut Vec<ChatMessage>, target_chars: usize) {
 
 #[derive(Deserialize)]
 struct AgentBuilderRequest {
-    description: String,
+    message: String,
+    #[serde(default)]
+    history: Vec<BuilderMessage>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct AgentBuilderSuggestion {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    instructions: String,
-    #[serde(default)]
-    tools: Vec<String>,
-    #[serde(default)]
-    marketplace_tools: Vec<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(default)]
-    max_iterations: Option<u32>,
-    #[serde(default)]
-    temperature: Option<f64>,
-    #[serde(default)]
-    max_tokens: Option<u32>,
-    #[serde(default)]
-    notes: String,
+#[derive(Deserialize, Serialize, Clone, Debug)]
+struct BuilderMessage {
+    role: String,
+    content: String,
 }
 
 async fn agent_builder_handler(
@@ -2591,7 +2725,7 @@ fn agent_builder_tools() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "list_system_tools",
-                "description": "List all tools currently available in the Chitty Workspace system (native + custom + connections). Returns name, display name, description, and category for each tool.",
+                "description": "List all native tools currently available in Chitty Workspace (file_reader, file_writer, terminal, code_search, code_analyzer, etc.). Returns name, display name, description, and category for each tool.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -2602,16 +2736,11 @@ fn agent_builder_tools() -> Vec<serde_json::Value> {
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": "list_marketplace_tools",
-                "description": "List tools available in the Chitty Workspace marketplace. These are additional tools that can be installed to extend capabilities.",
+                "name": "list_marketplace_packages",
+                "description": "List installed marketplace packages with their tools, auth requirements, configuration options, and agent setup hints. These are community-developed, security-reviewed packages.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "description": "Optional filter by category (native, integration, custom)"
-                        }
-                    },
+                    "properties": {},
                     "required": []
                 }
             }
@@ -2619,65 +2748,39 @@ fn agent_builder_tools() -> Vec<serde_json::Value> {
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": "create_tool",
-                "description": "Create a new custom tool. The tool is a script (Python, Node.js, Shell) that receives JSON on stdin and returns JSON on stdout. Use this when the agent needs a capability that doesn't exist yet.",
+                "name": "check_package_status",
+                "description": "Check the authentication and configuration status of a specific marketplace package. Returns whether it is authenticated, configured, and what setup steps remain.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "name": {
+                        "package_name": {
                             "type": "string",
-                            "description": "Unique tool name (snake_case, e.g., 'pdf_generator')"
-                        },
-                        "display_name": {
-                            "type": "string",
-                            "description": "Human-readable name (e.g., 'PDF Generator')"
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": "What the tool does"
-                        },
-                        "runtime": {
-                            "type": "string",
-                            "enum": ["python", "node", "powershell", "shell"],
-                            "description": "Script runtime"
-                        },
-                        "script": {
-                            "type": "string",
-                            "description": "The script source code. Must read JSON from stdin, write JSON to stdout: {\"success\": true, \"output\": \"...\"}"
-                        },
-                        "parameters": {
-                            "type": "object",
-                            "description": "Tool parameters. Each key is param name, value is {\"type\": \"string\", \"description\": \"...\", \"required\": true/false}"
+                            "description": "The package name (e.g., 'google-cloud', 'web-tools')"
                         }
                     },
-                    "required": ["name", "display_name", "description", "runtime", "script", "parameters"]
+                    "required": ["package_name"]
                 }
             }
         }),
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": "install_package",
-                "description": "Install Python or Node.js packages for use by a custom tool. Packages are installed in an isolated directory per tool.",
+                "name": "update_agent_draft",
+                "description": "Update a field on the agent being built. The user sees changes in real-time on the preview panel. Call this incrementally as you discuss and agree on parts of the agent with the user.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "runtime": {
+                        "field": {
                             "type": "string",
-                            "enum": ["python", "node"],
-                            "description": "Package manager"
+                            "enum": ["name", "description", "instructions", "add_tool", "remove_tool", "add_package", "remove_package", "tags", "max_iterations", "temperature"],
+                            "description": "Which field to update"
                         },
-                        "packages": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Package names to install"
-                        },
-                        "tool_name": {
+                        "value": {
                             "type": "string",
-                            "description": "Name of the custom tool these packages are for"
+                            "description": "The value to set. For add_tool/remove_tool: tool name. For add_package/remove_package: package name. For tags: comma-separated. For max_iterations/temperature: numeric string."
                         }
                     },
-                    "required": ["runtime", "packages", "tool_name"]
+                    "required": ["field", "value"]
                 }
             }
         }),
@@ -2685,7 +2788,6 @@ fn agent_builder_tools() -> Vec<serde_json::Value> {
 }
 
 /// Execute an agent-builder tool call and return the result string.
-/// For create_tool and install_package, delegates to the actual native tool implementations.
 async fn execute_builder_tool(
     tool_name: &str,
     args: &serde_json::Value,
@@ -2708,94 +2810,150 @@ async fn execute_builder_tool(
                 .collect();
             serde_json::to_string_pretty(&catalog).unwrap_or_default()
         }
-        "list_marketplace_tools" => {
-            let marketplace = serde_json::json!([
-                {
-                    "name": "web_scraper",
-                    "display_name": "Web Scraper",
-                    "description": "Advanced web scraping with CSS selectors, pagination, and JavaScript rendering. Extract structured data from any website.",
-                    "status": "available",
-                    "category": "integration"
-                },
-                {
-                    "name": "email_sender",
-                    "display_name": "Email Sender",
-                    "description": "Send emails via SMTP or API services (SendGrid, Mailgun). Supports templates, attachments, and bulk sending.",
-                    "status": "coming_soon",
-                    "category": "integration"
-                },
-                {
-                    "name": "social_media",
-                    "display_name": "Social Media Manager",
-                    "description": "Post, read, and manage content across social platforms (LinkedIn, Twitter/X, Facebook). Search profiles and send messages.",
-                    "status": "coming_soon",
-                    "category": "integration"
-                },
-                {
-                    "name": "pdf_generator",
-                    "display_name": "PDF Generator",
-                    "description": "Create, merge, split, and manipulate PDF documents. Supports templates and data-driven generation.",
-                    "status": "available",
-                    "category": "native"
-                },
-                {
-                    "name": "database_query",
-                    "display_name": "Database Query",
-                    "description": "Query SQL databases (PostgreSQL, MySQL, SQLite) and NoSQL stores (MongoDB). Read-only by default with optional write mode.",
-                    "status": "available",
-                    "category": "integration"
-                },
-                {
-                    "name": "api_connector",
-                    "display_name": "API Connector",
-                    "description": "Make HTTP requests to REST and GraphQL APIs. Supports authentication, headers, and response parsing.",
-                    "status": "available",
-                    "category": "integration"
-                },
-                {
-                    "name": "image_analyzer",
-                    "display_name": "Image Analyzer",
-                    "description": "Analyze images using vision models. Extract text (OCR), describe content, detect objects, and compare images.",
-                    "status": "coming_soon",
-                    "category": "native"
-                },
-                {
-                    "name": "spreadsheet",
-                    "display_name": "Spreadsheet Manager",
-                    "description": "Read, write, and manipulate Excel (.xlsx) and CSV files. Supports formulas, formatting, and data analysis.",
-                    "status": "coming_soon",
-                    "category": "native"
+        "list_marketplace_packages" => {
+            let rt = state.tool_runtime.read().await;
+            let packages: Vec<serde_json::Value> = rt.list_marketplace_packages()
+                .iter()
+                .map(|pkg| {
+                    // Load tool details from each tool's manifest.json
+                    let tools: Vec<serde_json::Value> = pkg.manifest.tools.iter().map(|tool_name| {
+                        let tool_dir = pkg.dir.join(tool_name);
+                        let manifest_path = tool_dir.join("manifest.json");
+                        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+                            if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) {
+                                return serde_json::json!({
+                                    "name": manifest.get("name").and_then(|n| n.as_str()).unwrap_or(tool_name),
+                                    "display_name": manifest.get("display_name").and_then(|n| n.as_str()).unwrap_or(tool_name),
+                                    "description": manifest.get("description").and_then(|n| n.as_str()).unwrap_or(""),
+                                });
+                            }
+                        }
+                        serde_json::json!({ "name": tool_name, "display_name": tool_name, "description": "" })
+                    }).collect();
+
+                    // Build configurable_resources summary
+                    let resources: Vec<serde_json::Value> = pkg.manifest.configurable_resources.iter().map(|r| {
+                        serde_json::json!({ "id": r.id, "label": r.label, "description": r.description })
+                    }).collect();
+
+                    // Build feature_flags summary
+                    let features: Vec<serde_json::Value> = pkg.manifest.feature_flags.iter().map(|f| {
+                        serde_json::json!({ "id": f.id, "label": f.label, "default_enabled": f.default_enabled })
+                    }).collect();
+
+                    // Build agent_config if present
+                    let agent_config = pkg.manifest.agent_config.as_ref().map(|ac| {
+                        serde_json::json!({
+                            "default_instructions": ac.default_instructions,
+                            "suggested_prompts": ac.suggested_prompts,
+                            "recommended_model": ac.recommended_model,
+                            "capabilities": ac.capabilities,
+                        })
+                    });
+
+                    serde_json::json!({
+                        "name": pkg.manifest.name,
+                        "display_name": pkg.manifest.display_name,
+                        "description": pkg.manifest.description,
+                        "version": pkg.manifest.version,
+                        "auth_type": pkg.manifest.auth.as_ref().map(|a| a.auth_type.as_str()).unwrap_or("none"),
+                        "tools": tools,
+                        "has_config": !pkg.manifest.configurable_resources.is_empty() || !pkg.manifest.feature_flags.is_empty(),
+                        "configurable_resources": resources,
+                        "feature_flags": features,
+                        "agent_config": agent_config,
+                        "setup_steps_count": pkg.manifest.setup_steps.len(),
+                    })
+                })
+                .collect();
+            drop(rt);
+            serde_json::to_string_pretty(&packages).unwrap_or_default()
+        }
+        "check_package_status" => {
+            let package_name = args.get("package_name").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Clone the package data we need while the lock is held
+            let pkg_data = {
+                let rt = state.tool_runtime.read().await;
+                rt.list_marketplace_packages()
+                    .into_iter()
+                    .find(|p| p.manifest.name == package_name)
+                    .map(|p| (
+                        p.manifest.setup_steps.clone(),
+                        p.manifest.configurable_resources.len(),
+                        p.manifest.feature_flags.len(),
+                    ))
+            };
+
+            match pkg_data {
+                Some((setup_steps, resource_count, flag_count)) => {
+                    // Check setup steps (auth status)
+                    let mut all_ok = true;
+                    let mut step_results = Vec::new();
+                    for step in &setup_steps {
+                        if let Some(check_cmd) = &step.check_command {
+                            let result = run_shell_command(check_cmd).await;
+                            step_results.push(serde_json::json!({
+                                "step_id": step.id,
+                                "label": step.label,
+                                "ok": result.success,
+                                "help_text": step.help_text,
+                            }));
+                            if !result.success && step.required {
+                                all_ok = false;
+                            }
+                        }
+                    }
+
+                    // Check if config exists in DB
+                    let db = state.db.clone();
+                    let pkg_name = package_name.to_string();
+                    let config = db.with_conn(move |conn| {
+                        Ok(load_package_config(conn, &pkg_name))
+                    }).await.unwrap_or_else(|_| serde_json::json!({ "resources": {}, "features": {} }));
+                    let has_saved_config = config.get("resources")
+                        .and_then(|r| r.as_object())
+                        .map(|r| !r.is_empty())
+                        .unwrap_or(false);
+
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "package": package_name,
+                        "authenticated": all_ok,
+                        "configured": has_saved_config,
+                        "has_config": resource_count > 0 || flag_count > 0,
+                        "steps": step_results,
+                    })).unwrap_or_default()
                 }
-            ]);
-            serde_json::to_string_pretty(&marketplace).unwrap_or_default()
-        }
-        "create_tool" => {
-            // Delegate to the actual native create_tool implementation
-            let ctx = ToolContext {
-                working_dir: std::path::PathBuf::from("."),
-                db: state.db.clone(),
-                conversation_id: String::new(),
-            };
-            let (result, _) = state.tool_runtime.read().await.execute("create_tool", args, &ctx).await;
-
-            // After creating a tool, reload the runtime so it's immediately available
-            if result.success {
-                let mut runtime = state.tool_runtime.write().await;
-                runtime.scan_and_load();
-                tracing::info!("Agent Builder: tool created and runtime reloaded");
+                None => {
+                    serde_json::json!({
+                        "package": package_name,
+                        "error": format!("Package '{}' not found", package_name)
+                    }).to_string()
+                }
             }
-
-            result.as_content_string()
         }
-        "install_package" => {
-            // Delegate to the actual native install_package implementation
-            let ctx = ToolContext {
-                working_dir: std::path::PathBuf::from("."),
-                db: state.db.clone(),
-                conversation_id: String::new(),
+        "update_agent_draft" => {
+            let field = args.get("field").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            // Return JSON so the client can parse field/value and update the preview panel.
+            let msg = match field {
+                "name" => format!("Updated agent name to '{}'", value),
+                "description" => "Updated agent description".to_string(),
+                "instructions" => format!("Updated agent instructions ({} chars)", value.len()),
+                "add_tool" => format!("Added tool '{}' to agent", value),
+                "remove_tool" => format!("Removed tool '{}' from agent", value),
+                "add_package" => format!("Added marketplace package '{}' to agent", value),
+                "remove_package" => format!("Removed marketplace package '{}' from agent", value),
+                "tags" => format!("Updated tags to: {}", value),
+                "max_iterations" => format!("Set max iterations to {}", value),
+                "temperature" => format!("Set temperature to {}", value),
+                _ => format!("Updated {} = {}", field, value),
             };
-            let (result, _) = state.tool_runtime.read().await.execute("install_package", args, &ctx).await;
-            result.as_content_string()
+            serde_json::json!({
+                "message": msg,
+                "field": field,
+                "value": value,
+            }).to_string()
         }
         _ => format!("Unknown tool: {}", tool_name),
     }
@@ -2803,154 +2961,48 @@ async fn execute_builder_tool(
 
 /// Build the system prompt for the agent builder agent.
 fn build_agent_builder_prompt() -> String {
-    r#"You are the Agent Builder agent for Chitty Workspace, a local-first AI assistant.
+    r#"You are the Agent Builder for Chitty Workspace, a local-first AI assistant.
 
-Your job is to take a user's free-text description of what they want an AI agent to do, and design a complete agent definition. You can also BUILD custom tools when the agent needs capabilities that don't exist yet.
+Your job is to have a conversation with the user to understand what they need, then collaboratively design an agent. You build the agent incrementally by calling `update_agent_draft` as you discuss and agree on parts of the design.
 
 ## Your Process
 
-1. FIRST, call `list_system_tools` to see what tools are currently available in the system.
-2. THEN, call `list_marketplace_tools` to see what additional tools could be installed.
-3. If the agent needs a capability that doesn't exist, use `install_package` and `create_tool` to BUILD it.
-4. Based on the available tools (including any you just created), design a complete agent.
+1. FIRST, call `list_system_tools` and `list_marketplace_packages` to see what is available.
+2. Discuss the design with the user — ask clarifying questions, explain what tools are available, recommend packages, and discuss trade-offs.
+3. When recommending a marketplace package, call `check_package_status` to verify it is set up. Warn the user if authentication or configuration is needed (they can complete setup from the preview panel).
+4. Use `update_agent_draft` to incrementally set the agent's name, description, instructions, tools, and packages as you agree on them with the user.
+5. Continue the conversation — refine the agent based on user feedback.
 
-## Creating Custom Tools
+## Important Rules
 
-When the user needs a tool that doesn't exist (e.g., PDF generator, chart builder, data converter):
+- NEVER try to create custom tools. All tools come from native system tools or installed marketplace packages.
+- Tools from marketplace packages are real, community-developed, security-reviewed integrations.
+- Be conversational — explain your reasoning, ask follow-up questions, and discuss alternatives.
+- Do NOT output raw JSON. Respond with natural language and use `update_agent_draft` tool calls to build the agent.
 
-1. Call `install_package` first if the tool needs external libraries (e.g., markdown2, matplotlib, openpyxl)
-2. Call `create_tool` with a working script that follows this pattern:
+## update_agent_draft Fields
 
-**Python tool template:**
-```python
-import json, sys
-args = json.load(sys.stdin)
-# Do work with args...
-result = {"success": True, "output": "result here"}
-print(json.dumps(result))
-```
+Call `update_agent_draft` with these field values:
+- `name` — Short agent name (2-5 words)
+- `description` — One-sentence summary
+- `instructions` — Detailed system prompt defining the agent's role, approach, constraints, and quality standards. Do NOT include tool documentation — that is injected automatically.
+- `add_tool` / `remove_tool` — Add or remove a native system tool by name
+- `add_package` / `remove_package` — Add or remove a marketplace package by name (this includes all its tools)
+- `tags` — Comma-separated categorization tags
+- `max_iterations` — Tool call rounds: 5 for simple Q&A, 10 for standard, 20-25 for complex multi-step
+- `temperature` — 0.0-0.3 for precise/coding, 0.7-1.0 for creative
 
-The script MUST: read JSON from stdin, write JSON to stdout with {"success": bool, "output": ...}.
-The tool will be saved to disk and available immediately for the agent and all future sessions.
+## Conversation Guidelines
 
-## What is an Agent?
-
-An agent in Chitty Workspace consists of:
-- **name**: Short, clear name (2-5 words)
-- **description**: One-sentence summary
-- **instructions**: A detailed system prompt for the AI agent. This should describe the agent's role, approach, constraints, and quality standards. Do NOT include tool usage documentation — that is injected automatically.
-- **tools**: Array of system tool names this agent needs (from `list_system_tools` results)
-- **marketplace_tools**: Array of marketplace tool names that would enhance this agent (from `list_marketplace_tools` results)
-- **tags**: Categorization tags (e.g., "coding", "writing", "analysis", "automation")
-- **max_iterations**: Tool call rounds allowed (5 for simple Q&A, 10 for standard tasks, 20-25 for complex multi-step tasks)
-- **temperature**: null for default, 0.0-0.3 for precise/coding, 0.7-1.0 for creative
-- **max_tokens**: null for default
-- **notes**: Your observations — what works well with current tools, what marketplace tools would add, any limitations or future recommendations
-
-## Output Format
-
-After calling both tools, respond with ONLY a JSON object (no markdown, no code fences, no explanation):
-
-{
-  "name": "...",
-  "description": "...",
-  "instructions": "...",
-  "tools": ["tool_name_1", "tool_name_2"],
-  "marketplace_tools": ["marketplace_tool_1"],
-  "tags": ["tag1", "tag2"],
-  "max_iterations": 10,
-  "temperature": null,
-  "max_tokens": null,
-  "notes": "..."
+1. On the first message, call `list_system_tools` and `list_marketplace_packages` to understand what's available. Then respond conversationally.
+2. Recommend specific tools and packages based on the user's needs. Explain what each one does and why you're including it.
+3. When adding a marketplace package, always call `check_package_status` first so you can tell the user if setup is needed.
+4. Write thorough instructions — be specific about the agent's persona, approach, constraints, and quality standards.
+5. After setting up the initial draft, ask the user if they want any changes before they save.
+6. Keep responses concise and focused. The user can see the agent being built in real-time on the preview panel."#.to_string()
 }
 
-## Guidelines
-
-1. Write the instructions field as if briefing a capable AI assistant. Be specific about persona, approach, and quality standards.
-2. Only include tools the agent actually needs. If purely conversational, use an empty tools array.
-3. If the user's request needs capabilities beyond current system tools, recommend marketplace tools and explain in notes.
-4. Be honest about limitations — if something isn't possible yet, say so in notes and suggest the best available approach.
-5. The instructions should be thorough but focused. Include specific guidance on how to handle edge cases relevant to the agent's domain."#.to_string()
-}
-
-/// Parse an agent suggestion from LLM text output.
-fn parse_agent_suggestion(content: &str) -> anyhow::Result<AgentBuilderSuggestion> {
-    // Try direct parse
-    if let Ok(s) = serde_json::from_str::<AgentBuilderSuggestion>(content.trim()) {
-        return Ok(s);
-    }
-    // Try extracting from ```json code fences
-    if let Some(start) = content.find("```json") {
-        let json_start = start + 7;
-        if let Some(end) = content[json_start..].find("```") {
-            let json_str = content[json_start..json_start + end].trim();
-            if let Ok(s) = serde_json::from_str(json_str) {
-                return Ok(s);
-            }
-        }
-    }
-    // Try extracting from plain ``` code fences
-    if let Some(start) = content.find("```") {
-        let json_start = start + 3;
-        // Skip optional language tag on same line
-        let json_start = content[json_start..]
-            .find('\n')
-            .map(|n| json_start + n + 1)
-            .unwrap_or(json_start);
-        if let Some(end) = content[json_start..].find("```") {
-            let json_str = content[json_start..json_start + end].trim();
-            if let Ok(s) = serde_json::from_str(json_str) {
-                return Ok(s);
-            }
-        }
-    }
-    // Try finding first { to last }
-    if let Some(start) = content.find('{') {
-        if let Some(end) = content.rfind('}') {
-            let json_str = &content[start..=end];
-            if let Ok(s) = serde_json::from_str::<AgentBuilderSuggestion>(json_str) {
-                return Ok(s);
-            }
-            // Try as generic Value and manually map fields
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let get_str = |keys: &[&str]| -> String {
-                    for k in keys {
-                        if let Some(s) = v.get(k).and_then(|v| v.as_str()) {
-                            return s.to_string();
-                        }
-                    }
-                    String::new()
-                };
-                let get_vec = |keys: &[&str]| -> Vec<String> {
-                    for k in keys {
-                        if let Some(arr) = v.get(k).and_then(|v| v.as_array()) {
-                            return arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-                        }
-                    }
-                    Vec::new()
-                };
-                let name = get_str(&["name", "agent_name", "title"]);
-                if !name.is_empty() {
-                    return Ok(AgentBuilderSuggestion {
-                        name,
-                        description: get_str(&["description", "desc", "summary"]),
-                        instructions: get_str(&["instructions", "system_prompt", "prompt", "system_message"]),
-                        tools: get_vec(&["tools", "tool_list", "enabled_tools", "system_tools"]),
-                        marketplace_tools: get_vec(&["marketplace_tools", "marketplace", "external_tools"]),
-                        tags: get_vec(&["tags", "categories"]),
-                        max_iterations: v.get("max_iterations").and_then(|v| v.as_u64()).map(|v| v as u32),
-                        temperature: v.get("temperature").and_then(|v| v.as_f64()),
-                        max_tokens: v.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
-                        notes: get_str(&["notes", "observations", "comments", "limitations"]),
-                    });
-                }
-            }
-        }
-    }
-    anyhow::bail!("Could not extract valid JSON agent definition from AI response")
-}
-
-/// Core agent builder processing — agent loop with tool calls.
+/// Core agent builder processing — conversational agent loop with tool calls.
 async fn process_agent_builder(
     state: Arc<AppState>,
     req: AgentBuilderRequest,
@@ -2962,7 +3014,7 @@ async fn process_agent_builder(
     let system_prompt = build_agent_builder_prompt();
     let builder_tools = agent_builder_tools();
 
-    // 2. Build messages
+    // 2. Build messages from conversation history
     let mut current_messages = vec![
         ChatMessage {
             role: "system".to_string(),
@@ -2970,17 +3022,29 @@ async fn process_agent_builder(
             tool_calls: None,
             tool_call_id: None,
         },
-        ChatMessage {
-            role: "user".to_string(),
-            content: req.description,
-            tool_calls: None,
-            tool_call_id: None,
-        },
     ];
 
-    let max_iterations: u32 = 10; // allow enough iterations for tool creation + agent definition
+    // Add conversation history from previous turns
+    for msg in &req.history {
+        current_messages.push(ChatMessage {
+            role: msg.role.clone(),
+            content: msg.content.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
 
-    // 3. Agent loop
+    // Add the current user message
+    current_messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: req.message,
+        tool_calls: None,
+        tool_call_id: None,
+    });
+
+    let max_iterations: u32 = 10;
+
+    // 3. Agent loop — process tool calls within this turn
     for iteration in 1..=max_iterations {
         let tools_for_call = if iteration == max_iterations {
             None // force text-only on last iteration
@@ -2991,7 +3055,6 @@ async fn process_agent_builder(
         // Stream from LLM — use interceptor to also capture reasoning/thinking text
         let (intercept_tx, mut intercept_rx) = mpsc::channel::<StreamChunk>(64);
         let sse_tx_clone = sse_tx.clone();
-        let mut reasoning_text = String::new();
 
         // Spawn a task that forwards chunks to sse_tx while also capturing thinking text
         let interceptor = tokio::spawn(async move {
@@ -3013,47 +3076,14 @@ async fn process_agent_builder(
             &intercept_tx,
         )
         .await?;
-        drop(intercept_tx); // close the channel so interceptor finishes
-        reasoning_text = interceptor.await.unwrap_or_default();
+        drop(intercept_tx);
+        let _reasoning_text = interceptor.await.unwrap_or_default();
 
-        // No tool calls → final response
+        // No tool calls → conversational response (end of this turn)
         if tool_calls.is_empty() {
-            // If content is empty but we have reasoning text, use that instead
-            // (reasoning models like Grok may put the JSON in reasoning_content)
-            let response_text = if full_text.trim().is_empty() && !reasoning_text.trim().is_empty() {
-                tracing::info!("Agent builder: content empty, using reasoning_text ({} chars)", reasoning_text.len());
-                &reasoning_text
-            } else {
-                &full_text
-            };
-            tracing::info!("Agent builder final response ({} chars): {}", response_text.len(), &response_text[..response_text.len().min(500)]);
-            if response_text.len() > 500 {
-                tracing::info!("... (truncated, full length: {})", response_text.len());
-            }
-            // Try to parse as agent suggestion
-            match parse_agent_suggestion(response_text) {
-                Ok(suggestion) => {
-                    let _ = sse_tx
-                        .send(StreamChunk::Text(
-                            serde_json::to_string(&serde_json::json!({
-                                "type": "result",
-                                "suggestion": suggestion
-                            }))
-                            .unwrap_or_default(),
-                        ))
-                        .await;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse agent suggestion: {}", e);
-                    tracing::warn!("Raw content text ({} chars):\n{}", full_text.len(), full_text);
-                    tracing::warn!("Raw reasoning text ({} chars):\n{}", reasoning_text.len(), reasoning_text);
-                    let _ = sse_tx
-                        .send(StreamChunk::Error(format!(
-                            "Could not parse agent definition from AI response. Please try again."
-                        )))
-                        .await;
-                }
-            }
+            // Text was already streamed to client via SSE text events.
+            // No JSON parsing needed — the builder is conversational.
+            tracing::info!("Agent builder response ({} chars)", full_text.len());
             break;
         }
 
@@ -3144,8 +3174,12 @@ async fn list_marketplace_packages(
                 "icon": pkg.manifest.icon,
                 "color": pkg.manifest.color,
                 "status": pkg.manifest.status,
+                "categories": pkg.manifest.categories,
+                "long_description": pkg.manifest.long_description,
                 "setup_steps": setup_steps,
                 "tools": tools,
+                "has_config": !pkg.manifest.configurable_resources.is_empty() || !pkg.manifest.feature_flags.is_empty(),
+                "tool_count": pkg.manifest.tools.len(),
             })
         })
         .collect();
@@ -3379,6 +3413,252 @@ async fn run_shell_command(cmd: &str) -> CommandResult {
 }
 
 // ---------------------------------------------------------------------------
+// Package Details & Configuration handlers
+// ---------------------------------------------------------------------------
+
+/// Full package details — manifest + tools + config + auth status
+async fn get_package_details(
+    Path(vendor): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let rt = state.tool_runtime.read().await;
+    let pkg = rt.list_marketplace_packages()
+        .into_iter()
+        .find(|p| p.manifest.name == vendor)
+        .cloned();
+    drop(rt);
+
+    let pkg = match pkg {
+        Some(p) => p,
+        None => return Json(serde_json::json!({ "error": format!("Package '{}' not found", vendor) })),
+    };
+
+    // Read tool manifests
+    let tools: Vec<serde_json::Value> = pkg.manifest.tools.iter().map(|tool_name| {
+        let tool_dir = pkg.dir.join(tool_name);
+        let manifest_path = tool_dir.join("manifest.json");
+        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) {
+                return manifest;
+            }
+        }
+        serde_json::json!({ "name": tool_name, "display_name": tool_name })
+    }).collect();
+
+    // Load saved config from DB
+    let db = state.db.clone();
+    let vendor_clone = vendor.clone();
+    let config = db.with_conn(move |conn| {
+        Ok(load_package_config(conn, &vendor_clone))
+    }).await.unwrap_or_else(|_| serde_json::json!({ "resources": {}, "features": {} }));
+
+    // Serialize the full manifest (includes new fields)
+    let manifest_json = serde_json::to_value(&pkg.manifest).unwrap_or_default();
+
+    Json(serde_json::json!({
+        "package": manifest_json,
+        "tools": tools,
+        "config": config,
+    }))
+}
+
+/// Get saved configuration for a package (allowed resources + feature flags)
+async fn get_package_config(
+    Path(vendor): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let config = db.with_conn(move |conn| {
+        Ok(load_package_config(conn, &vendor))
+    }).await.unwrap_or_else(|_| serde_json::json!({ "resources": {}, "features": {} }));
+    Json(config)
+}
+
+/// Save configuration for a package
+async fn save_package_config(
+    Path(vendor): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let result = db.with_conn(move |conn| {
+        // Ensure the package record exists
+        conn.execute(
+            "INSERT OR IGNORE INTO marketplace_packages (id, name, display_name, vendor, version, status)
+             VALUES (?1, ?1, ?1, '', '', 'installed')",
+            rusqlite::params![vendor],
+        )?;
+
+        // Save resources
+        if let Some(resources) = body.get("resources").and_then(|r| r.as_object()) {
+            for (resource_type, items) in resources {
+                // Clear existing resources of this type
+                conn.execute(
+                    "DELETE FROM package_resources WHERE package_id = ?1 AND resource_type = ?2",
+                    rusqlite::params![vendor, resource_type],
+                )?;
+
+                // Insert new ones
+                if let Some(arr) = items.as_array() {
+                    for item in arr {
+                        let resource_id = item.get("id").and_then(|v| v.as_str())
+                            .or_else(|| item.as_str())
+                            .unwrap_or_default();
+                        let display_name = item.get("display_name").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let config_str = item.get("config").map(|v| v.to_string()).unwrap_or_else(|| "{}".to_string());
+
+                        if !resource_id.is_empty() {
+                            let id = format!("res-{}-{}-{}", vendor, resource_type, resource_id);
+                            conn.execute(
+                                "INSERT OR REPLACE INTO package_resources (id, package_id, resource_type, resource_id, display_name, config)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                rusqlite::params![id, vendor, resource_type, resource_id, display_name, config_str],
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Save feature flags
+        if let Some(features) = body.get("features").and_then(|f| f.as_object()) {
+            for (feature_id, enabled) in features {
+                let enabled_int: i32 = if enabled.as_bool().unwrap_or(false) { 1 } else { 0 };
+                let id = format!("feat-{}-{}", vendor, feature_id);
+                conn.execute(
+                    "INSERT OR REPLACE INTO package_features (id, package_id, feature_id, enabled, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+                    rusqlite::params![id, vendor, feature_id, enabled_int],
+                )?;
+            }
+        }
+
+        Ok(serde_json::json!({ "success": true }))
+    }).await;
+
+    // Refresh cached package configs in the tool runtime
+    if let Ok(ref v) = result {
+        if v.get("success").and_then(|s| s.as_bool()).unwrap_or(false) {
+            state.tool_runtime.write().await.load_package_configs(&state.db);
+        }
+    }
+
+    match result {
+        Ok(v) => Json(v),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": format!("{}", e) })),
+    }
+}
+
+/// Discover available resources for a configurable resource type
+async fn discover_package_resources(
+    Path(vendor): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let resource_type = body.get("resource_type").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+
+    let rt = state.tool_runtime.read().await;
+    let pkg = rt.list_marketplace_packages()
+        .into_iter()
+        .find(|p| p.manifest.name == vendor)
+        .cloned();
+    drop(rt);
+
+    let pkg = match pkg {
+        Some(p) => p,
+        None => return Json(serde_json::json!({ "success": false, "error": "Package not found" })),
+    };
+
+    // Find the configurable resource definition
+    let resource_def = pkg.manifest.configurable_resources.iter()
+        .find(|r| r.id == resource_type);
+
+    let discover_cmd = match resource_def.and_then(|r| r.discover_command.as_deref()) {
+        Some(cmd) => cmd.to_string(),
+        None => return Json(serde_json::json!({
+            "success": true,
+            "resources": [],
+            "message": "No discover command configured — enter resource names manually"
+        })),
+    };
+
+    let result = run_shell_command(&discover_cmd).await;
+
+    if !result.success {
+        return Json(serde_json::json!({
+            "success": false,
+            "error": format!("Discovery failed: {}", result.stderr.chars().take(300).collect::<String>()),
+        }));
+    }
+
+    // Try to parse as JSON array, fallback to line-separated
+    let resources: Vec<serde_json::Value> = if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&result.stdout) {
+        parsed
+    } else {
+        // Parse line-by-line (e.g., gsutil ls output like "gs://bucket-name/")
+        result.stdout.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let name = l.trim().trim_start_matches("gs://").trim_end_matches('/');
+                serde_json::json!({ "id": name, "name": name })
+            })
+            .collect()
+    };
+
+    Json(serde_json::json!({
+        "success": true,
+        "resources": resources,
+    }))
+}
+
+/// Load package config (resources + features) from the database
+fn load_package_config(conn: &rusqlite::Connection, package_id: &str) -> serde_json::Value {
+    // Load resources
+    let mut resources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT resource_type, resource_id, display_name, config FROM package_resources WHERE package_id = ?1"
+    ) {
+        if let Ok(rows) = stmt.query_map(rusqlite::params![package_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                let (rtype, rid, display_name, config_str) = row;
+                let config: serde_json::Value = serde_json::from_str(&config_str).unwrap_or_default();
+                resources.entry(rtype).or_default().push(serde_json::json!({
+                    "id": rid,
+                    "display_name": display_name,
+                    "config": config,
+                }));
+            }
+        }
+    }
+
+    // Load features
+    let mut features: HashMap<String, bool> = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT feature_id, enabled FROM package_features WHERE package_id = ?1"
+    ) {
+        if let Ok(rows) = stmt.query_map(rusqlite::params![package_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+        }) {
+            for row in rows.flatten() {
+                features.insert(row.0, row.1 != 0);
+            }
+        }
+    }
+
+    serde_json::json!({
+        "resources": resources,
+        "features": features,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -3471,6 +3751,373 @@ async fn registry_install_package(
             }))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Local models — GPU, Ollama, sidecar
+// ---------------------------------------------------------------------------
+
+/// GET /api/local/gpu — GPU statistics
+async fn local_gpu_handler() -> impl IntoResponse {
+    let stats = crate::gpu::get_gpu_stats().await;
+    Json(serde_json::json!(stats))
+}
+
+/// GET /api/local/status — Combined local status (GPU + Ollama)
+async fn local_status_handler(
+    State(_state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let gpu = crate::gpu::get_gpu_stats().await;
+
+    // Check Ollama status
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+    let ollama_status = ollama.check_status().await;
+
+    let ollama_model_count = if ollama_status.running {
+        ollama.list_ollama_models().await.map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+
+    Json(serde_json::json!({
+        "gpu": gpu,
+        "ollama": {
+            "available": ollama_status.running,
+            "version": ollama_status.version,
+            "model_count": ollama_model_count,
+            "error": ollama_status.error,
+        },
+        "sidecar": {
+            "running": false,
+            "loaded_model": null,
+        }
+    }))
+}
+
+/// GET /api/local/ollama/status
+async fn ollama_status_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+    let status = ollama.check_status().await;
+    Json(serde_json::json!(status))
+}
+
+/// GET /api/local/ollama/models
+async fn ollama_models_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+
+    match ollama.list_ollama_models().await {
+        Ok(models) => Json(serde_json::json!({ "models": models })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string(), "models": [] })),
+    }
+}
+
+/// GET /api/local/ollama/running
+async fn ollama_running_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+
+    match ollama.running_models().await {
+        Ok(models) => Json(serde_json::json!({ "models": models })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string(), "models": [] })),
+    }
+}
+
+/// POST /api/local/ollama/pull — Pull/download a model (streaming progress)
+async fn ollama_pull_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let model_name = match body.get("name").and_then(|n| n.as_str()) {
+        Some(n) => n.to_string(),
+        None => {
+            return Json(serde_json::json!({ "success": false, "error": "Missing 'name'" }))
+        }
+    };
+
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+
+    match ollama.pull_model(&model_name).await {
+        Ok(result) => Json(serde_json::json!({
+            "success": true,
+            "result": result,
+        })),
+        Err(e) => Json(serde_json::json!({
+            "success": false,
+            "error": e.to_string(),
+        })),
+    }
+}
+
+/// POST /api/local/ollama/unload — Unload a model from VRAM
+async fn ollama_unload_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let model_name = match body.get("name").and_then(|n| n.as_str()) {
+        Some(n) => n.to_string(),
+        None => {
+            return Json(serde_json::json!({ "success": false, "error": "Missing 'name'" }))
+        }
+    };
+
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+
+    match ollama.unload_model(&model_name).await {
+        Ok(()) => Json(serde_json::json!({ "success": true })),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// DELETE /api/local/ollama/models/:name — Delete a model
+async fn ollama_delete_model_handler(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+
+    match ollama.delete_model(&name).await {
+        Ok(()) => Json(serde_json::json!({ "success": true })),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HuggingFace Sidecar handlers
+// ---------------------------------------------------------------------------
+
+/// GET /api/local/sidecar/status
+async fn sidecar_status_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    let status = crate::huggingface::check_status(&base_url).await;
+
+    // Also check if sidecar script is installed
+    let installed = crate::huggingface::is_sidecar_installed(&data_dir);
+    let python_found = crate::huggingface::find_python(&data_dir).is_some();
+
+    Json(serde_json::json!({
+        "running": status.running,
+        "loaded_model": status.loaded_model,
+        "models_registered": status.models_registered,
+        "vram_free_mb": status.vram_free_mb,
+        "sidecar_installed": installed,
+        "python_found": python_found,
+        "error": status.error,
+    }))
+}
+
+/// POST /api/local/sidecar/start — Start the Python sidecar process
+async fn sidecar_start_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+
+    // Find Python
+    let python = match crate::huggingface::find_python(&data_dir) {
+        Some(p) => p,
+        None => {
+            return Json(serde_json::json!({
+                "success": false,
+                "error": "Python not found. Install Python 3.10+ and ensure it's on PATH."
+            }));
+        }
+    };
+
+    // Find sidecar script
+    let script = match crate::huggingface::find_sidecar_script(&data_dir) {
+        Some(s) => s,
+        None => {
+            return Json(serde_json::json!({
+                "success": false,
+                "error": "Sidecar script not found. Ensure inference_server.py is in the sidecar directory."
+            }));
+        }
+    };
+
+    // Collect model directories
+    let mut extra_dirs: Vec<String> = Vec::new();
+    if let Some(ref dir) = config.huggingface.models_dir {
+        extra_dirs.push(dir.clone());
+    }
+
+    // Start sidecar
+    match crate::huggingface::start_sidecar(
+        &python,
+        &script,
+        config.huggingface.sidecar_port,
+        &extra_dirs,
+    )
+    .await
+    {
+        Ok(_child) => {
+            // Note: we don't store the child handle here — in production,
+            // store it in AppState for clean shutdown. For now, it runs detached.
+            Json(serde_json::json!({
+                "success": true,
+                "port": config.huggingface.sidecar_port,
+                "python": python.display().to_string(),
+            }))
+        }
+        Err(e) => Json(serde_json::json!({
+            "success": false,
+            "error": e.to_string(),
+        })),
+    }
+}
+
+/// POST /api/local/sidecar/stop — Stop the sidecar (kill process on port)
+async fn sidecar_stop_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let port = config.huggingface.sidecar_port;
+
+    // Kill process on the sidecar port
+    #[cfg(target_os = "windows")]
+    {
+        let _ = tokio::process::Command::new("cmd")
+            .args(["/C", &format!("for /f \"tokens=5\" %a in ('netstat -aon ^| findstr :{port}') do taskkill /PID %a /F")])
+            .output()
+            .await;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = tokio::process::Command::new("sh")
+            .args(["-c", &format!("lsof -ti:{port} | xargs kill -9")])
+            .output()
+            .await;
+    }
+
+    Json(serde_json::json!({ "success": true }))
+}
+
+/// GET /api/local/sidecar/models — List models from running sidecar
+async fn sidecar_models_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::list_models(&base_url).await {
+        Ok(models) => Json(serde_json::json!({ "models": models })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string(), "models": [] })),
+    }
+}
+
+/// POST /api/local/sidecar/models/scan — Re-scan model directories
+async fn sidecar_scan_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::scan_models(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/sidecar/models/register — Register a GGUF file
+async fn sidecar_register_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let path = match body.get("path").and_then(|p| p.as_str()) {
+        Some(p) => p.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'path'" })),
+    };
+    let name = body.get("name").and_then(|n| n.as_str());
+
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::register_model(&base_url, &path, name).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/sidecar/models/load — Load a model into GPU
+async fn sidecar_load_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let model = match body.get("model").and_then(|m| m.as_str()) {
+        Some(m) => m.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'model'" })),
+    };
+    let gpu_layers = body.get("gpu_layers").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let context_length = body.get("context_length").and_then(|v| v.as_u64()).map(|v| v as u32);
+
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::load_model(&base_url, &model, gpu_layers, context_length).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/sidecar/models/unload — Unload model from GPU
+async fn sidecar_unload_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::unload_model(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// GET /api/local/gguf/scan — Scan for GGUF files locally (no sidecar needed)
+/// Scans ~/.chitty-workspace/models/ and configured extra directories
+async fn gguf_scan_local_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+
+    let mut dirs_to_scan: Vec<std::path::PathBuf> = vec![data_dir.join("models")];
+    if let Some(ref dir) = config.huggingface.models_dir {
+        dirs_to_scan.push(std::path::PathBuf::from(dir));
+    }
+
+    let mut models: Vec<serde_json::Value> = Vec::new();
+    for dir in &dirs_to_scan {
+        if !dir.exists() {
+            let _ = std::fs::create_dir_all(dir);
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
+                    let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    models.push(serde_json::json!({
+                        "name": name,
+                        "path": path.display().to_string(),
+                        "filename": path.file_name().unwrap_or_default().to_string_lossy(),
+                        "size_bytes": size,
+                        "size_gb": (size as f64) / (1024.0 * 1024.0 * 1024.0),
+                        "directory": dir.display().to_string(),
+                    }));
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "models": models,
+        "directories_scanned": dirs_to_scan.iter().map(|d| d.display().to_string()).collect::<Vec<_>>(),
+    }))
 }
 
 // ---------------------------------------------------------------------------

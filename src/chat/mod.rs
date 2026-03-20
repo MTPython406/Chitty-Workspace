@@ -67,6 +67,8 @@ pub struct ExecutionConfig {
     pub max_iterations: u32,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
+    /// If true, skip approval prompts — agent auto-approves all sensitive actions
+    pub auto_approve: bool,
 }
 
 impl Default for ExecutionConfig {
@@ -75,6 +77,7 @@ impl Default for ExecutionConfig {
             max_iterations: 10,
             temperature: None,
             max_tokens: None,
+            auto_approve: false,
         }
     }
 }
@@ -272,6 +275,7 @@ impl ChatEngine {
                             max_iterations: agent.max_iterations.unwrap_or(default_iters),
                             temperature: agent.temperature,
                             max_tokens: agent.max_tokens,
+                            auto_approve: agent.approval_mode == "auto",
                         },
                         agent.project_path,
                     )

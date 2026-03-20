@@ -1,5 +1,7 @@
 mod chat;
 mod config;
+mod gpu;
+mod huggingface;
 mod integrations;
 mod oauth;
 mod providers;

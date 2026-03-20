@@ -217,23 +217,155 @@ pub struct ActionDef {
 }
 
 /// Marketplace package manifest (package.json)
+///
+/// Standard integration framework for community-contributed packages.
+/// A package bundles tools, authentication, resource configuration,
+/// and agent setup into a single installable unit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageManifest {
+    /// Unique package identifier (kebab-case, e.g., "google-cloud")
     pub name: String,
+    /// Human-readable name (e.g., "Google Cloud Platform")
     pub display_name: String,
+    /// Package author or organization
     pub vendor: String,
+    /// Short description shown in marketplace cards
     pub description: String,
+    /// Semver version string
     pub version: String,
+
+    // ── Display ──────────────────────────────────────────────────
     #[serde(default)]
     pub icon: String,
     #[serde(default)]
     pub color: String,
     #[serde(default)]
     pub status: String,
+    /// Long-form markdown description for the detail page
+    #[serde(default)]
+    pub long_description: Option<String>,
+    /// Category tags for marketplace filtering (e.g., ["cloud", "data"])
+    #[serde(default)]
+    pub categories: Vec<String>,
+    /// Link to documentation / source repo
+    #[serde(default)]
+    pub docs_url: Option<String>,
+    /// Link to source repository
+    #[serde(default)]
+    pub repo_url: Option<String>,
+
+    // ── Tools ────────────────────────────────────────────────────
+    /// List of tool directory names included in this package
     #[serde(default)]
     pub tools: Vec<String>,
+
+    // ── Authentication ───────────────────────────────────────────
+    /// How this package authenticates (cli, oauth, api_key, none)
+    #[serde(default)]
+    pub auth: Option<PackageAuth>,
+
+    // ── Setup ────────────────────────────────────────────────────
+    /// Step-by-step setup wizard for initial installation
     #[serde(default)]
     pub setup_steps: Vec<SetupStep>,
+
+    // ── Configurable Resources ───────────────────────────────────
+    /// Resource types the user can configure (datasets, buckets, etc.)
+    /// These define what the user can allow/restrict for the agent.
+    #[serde(default)]
+    pub configurable_resources: Vec<ConfigurableResource>,
+
+    // ── Feature Flags ────────────────────────────────────────────
+    /// Optional features the user can enable/disable
+    #[serde(default)]
+    pub feature_flags: Vec<FeatureFlag>,
+
+    // ── Agent Configuration ──────────────────────────────────────
+    /// Getting-started guide for first-time users
+    #[serde(default)]
+    pub agent_config: Option<AgentConfig>,
+}
+
+/// How a package authenticates with external services
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageAuth {
+    /// Auth method: "cli" (gcloud/az), "oauth", "api_key", "service_account", "none"
+    #[serde(rename = "type")]
+    pub auth_type: String,
+    /// Human-readable instructions for authentication
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// For OAuth: the provider name (e.g., "google")
+    #[serde(default)]
+    pub oauth_provider: Option<String>,
+    /// For OAuth: required scopes
+    #[serde(default)]
+    pub oauth_scopes: Vec<String>,
+    /// For API key: the keyring key name
+    #[serde(default)]
+    pub credentials_key: Option<String>,
+}
+
+/// A configurable resource type that users can scope for the agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigurableResource {
+    /// Resource type identifier (e.g., "datasets", "buckets", "repos")
+    pub id: String,
+    /// Human-readable label (e.g., "BigQuery Datasets")
+    pub label: String,
+    /// Description shown in config UI
+    #[serde(default)]
+    pub description: Option<String>,
+    /// How to discover existing resources (shell command that returns JSON array)
+    #[serde(default)]
+    pub discover_command: Option<String>,
+    /// Placeholder text for manual entry
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    /// Whether multiple resources can be allowed (default true)
+    #[serde(default = "default_true")]
+    pub multi: bool,
+    /// Which tool actions require this resource
+    #[serde(default)]
+    pub required_by_actions: Vec<String>,
+}
+
+/// An optional feature the user can toggle on/off
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureFlag {
+    /// Feature identifier (e.g., "allow_create_dataset")
+    pub id: String,
+    /// Human-readable label
+    pub label: String,
+    /// Description shown in config UI
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Default state (on or off)
+    #[serde(default)]
+    pub default_enabled: bool,
+    /// Which tool actions this gates
+    #[serde(default)]
+    pub gates_actions: Vec<String>,
+    /// Warning text shown when enabling (e.g., "This allows creating billable resources")
+    #[serde(default)]
+    pub enable_warning: Option<String>,
+}
+
+/// Agent configuration for ease of first use
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// Default system instructions injected when package tools are active
+    #[serde(default)]
+    pub default_instructions: Option<String>,
+    /// Suggested first prompts for new users ("Try asking...")
+    #[serde(default)]
+    pub suggested_prompts: Vec<String>,
+    /// Recommended provider/model for best results
+    #[serde(default)]
+    pub recommended_model: Option<String>,
+    /// Capabilities summary shown on detail page
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 /// A single step in a marketplace package setup wizard

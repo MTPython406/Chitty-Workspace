@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 6;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -32,6 +32,12 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if current < 4 {
         migrate_v4(conn)?;
+    }
+    if current < 5 {
+        migrate_v5(conn)?;
+    }
+    if current < 6 {
+        migrate_v6(conn)?;
     }
 
     conn.execute(
@@ -301,5 +307,78 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
     }
 
     tracing::info!("Database migrated to v4 (skills → agents rename)");
+    Ok(())
+}
+
+/// V5: Marketplace package configuration — allowed resources, feature flags, install state
+fn migrate_v5(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- ============================================================
+        -- MARKETPLACE PACKAGES (installed state + metadata)
+        -- Tracks which packages are installed and their configuration.
+        -- ============================================================
+        CREATE TABLE IF NOT EXISTS marketplace_packages (
+            id              TEXT PRIMARY KEY,          -- same as package name (e.g. 'google-cloud')
+            name            TEXT NOT NULL UNIQUE,
+            display_name    TEXT NOT NULL,
+            vendor          TEXT NOT NULL,
+            version         TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'installed',  -- installed, setup_required, disabled
+            installed_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- ============================================================
+        -- PACKAGE ALLOWED RESOURCES
+        -- Per-package resource scoping (e.g. allowed datasets, buckets).
+        -- The agent can only use resources listed here.
+        -- ============================================================
+        CREATE TABLE IF NOT EXISTS package_resources (
+            id              TEXT PRIMARY KEY,
+            package_id      TEXT NOT NULL REFERENCES marketplace_packages(id) ON DELETE CASCADE,
+            resource_type   TEXT NOT NULL,             -- e.g. 'datasets', 'buckets', 'repos'
+            resource_id     TEXT NOT NULL,             -- e.g. 'my_dataset', 'my-bucket-123'
+            display_name    TEXT,                      -- human label (optional)
+            config          TEXT DEFAULT '{}',         -- JSON — extra config per resource
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(package_id, resource_type, resource_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_package_resources_pkg
+            ON package_resources(package_id, resource_type);
+
+        -- ============================================================
+        -- PACKAGE FEATURE FLAGS
+        -- Per-package feature toggles (e.g. allow_create_dataset).
+        -- ============================================================
+        CREATE TABLE IF NOT EXISTS package_features (
+            id              TEXT PRIMARY KEY,
+            package_id      TEXT NOT NULL REFERENCES marketplace_packages(id) ON DELETE CASCADE,
+            feature_id      TEXT NOT NULL,             -- e.g. 'allow_create_dataset'
+            enabled         INTEGER NOT NULL DEFAULT 0,
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(package_id, feature_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_package_features_pkg
+            ON package_features(package_id);
+        ",
+    )?;
+
+    tracing::info!("Database migrated to v5 (marketplace package configuration)");
+    Ok(())
+}
+
+/// V6: Agent approval mode
+fn migrate_v6(conn: &Connection) -> Result<()> {
+    // Add approval_mode column to agents table
+    // "prompt" = ask user before sensitive actions (default)
+    // "auto"   = auto-approve all actions (fully autonomous)
+    conn.execute_batch(
+        "ALTER TABLE agents ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'prompt';",
+    )?;
+
+    tracing::info!("Database migrated to v6 (agent approval mode)");
     Ok(())
 }

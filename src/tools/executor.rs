@@ -18,12 +18,17 @@ use crate::tools::manifest::{RuntimeType, ToolManifest};
 use crate::tools::ToolResult;
 
 /// Execute a custom tool script
+///
+/// If `package_config` is provided (JSON string), it will be passed to the tool
+/// as the `CHITTY_PACKAGE_CONFIG` environment variable so the tool can enforce
+/// allowed resources and feature flags.
 pub async fn execute_custom(
     manifest: &ToolManifest,
     tool_dir: &Path,
     args: &serde_json::Value,
     sandbox_dir: &Path,
     packages_dir: &Path,
+    package_config: Option<&str>,
 ) -> ToolResult {
     // Validate manifest
     if let Err(e) = manifest.validate() {
@@ -60,6 +65,7 @@ pub async fn execute_custom(
         packages_dir,
         &manifest.name,
         timeout,
+        package_config,
     ).await {
         Ok(output) => parse_tool_output(&output.stdout, &output.stderr, output.success),
         Err(e) => ToolResult::err(e),
@@ -86,6 +92,7 @@ async fn build_and_run_command(
     packages_dir: &Path,
     tool_name: &str,
     timeout: Duration,
+    package_config: Option<&str>,
 ) -> Result<ProcessOutput, String> {
     let (cmd, cmd_args) = match runtime {
         RuntimeType::Python => {
@@ -131,6 +138,11 @@ async fn build_and_run_command(
     command.env("CHITTY_SANDBOX_DIR", sandbox_dir);
     command.env("CHITTY_TOOL_DIR", tool_dir);
     command.env("PYTHONIOENCODING", "utf-8");
+
+    // Inject package configuration (allowed resources + feature flags) if available
+    if let Some(config_json) = package_config {
+        command.env("CHITTY_PACKAGE_CONFIG", config_json);
+    }
 
     // Add package paths to runtime search paths
     let python_packages = packages_dir.join("python").join(tool_name);

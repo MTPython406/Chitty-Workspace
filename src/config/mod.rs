@@ -62,9 +62,9 @@ impl Default for AppConfig {
                 base_url: "http://localhost:11434".to_string(),
             },
             huggingface: HuggingFaceConfig {
-                enabled: false,
+                enabled: true,
                 sidecar_port: 8766,
-                models_dir: None,
+                models_dir: Some("C:\\LLM Models".to_string()),
             },
         }
     }
