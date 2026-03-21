@@ -140,7 +140,7 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     /// Create a registry with all native tools registered
-    pub fn new(browser_bridge: Arc<BrowserBridge>) -> Self {
+    pub fn new(browser_bridge: Arc<BrowserBridge>, skill_registry: Arc<crate::skills::SkillRegistry>) -> Self {
         let mut registry = Self {
             tools: HashMap::new(),
             order: Vec::new(),
@@ -154,6 +154,7 @@ impl ToolRegistry {
         registry.register(Box::new(CreateToolTool));
         registry.register(Box::new(InstallPackageTool));
         registry.register(Box::new(BrowserTool { bridge: browser_bridge }));
+        registry.register(Box::new(LoadSkillTool { skill_registry }));
 
         // Google API tools (require OAuth integration)
         registry.register(Box::new(google::GmailReadTool));
@@ -1331,6 +1332,63 @@ impl NativeTool for BrowserTool {
             Ok(resp) if resp.success => ToolResult::ok(resp.data),
             Ok(resp) => ToolResult::err(resp.error.unwrap_or_else(|| "Browser action failed".into())),
             Err(e) => ToolResult::err(format!("Browser command failed: {}", e)),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// load_skill — Load a skill's full instructions into context
+// ---------------------------------------------------------------------------
+
+struct LoadSkillTool {
+    skill_registry: Arc<crate::skills::SkillRegistry>,
+}
+
+#[async_trait]
+impl NativeTool for LoadSkillTool {
+    fn definition(&self) -> ToolDefinition {
+        // Build enum of valid skill names for the parameter constraint
+        let skill_names = self.skill_registry.names();
+        let enum_value = if skill_names.is_empty() {
+            serde_json::json!([])
+        } else {
+            serde_json::json!(skill_names)
+        };
+
+        ToolDefinition {
+            name: "load_skill".to_string(),
+            display_name: "Load Skill".to_string(),
+            description: "Load a skill's full instructions into context. Call this when a task matches a skill's description to get specialized guidance.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "skill_name": {
+                        "type": "string",
+                        "description": "Name of the skill to load",
+                        "enum": enum_value
+                    }
+                },
+                "required": ["skill_name"]
+            }),
+            instructions: None, // Instructions come from the skill catalog in the system prompt
+            category: ToolCategory::Native,
+            vendor: None,
+        }
+    }
+
+    async fn execute(&self, args: &serde_json::Value, _ctx: &ToolContext) -> ToolResult {
+        let skill_name = match args.get("skill_name").and_then(|v| v.as_str()) {
+            Some(n) => n,
+            None => return ToolResult::err("Missing required parameter: skill_name"),
+        };
+
+        match self.skill_registry.load_skill_content(skill_name) {
+            Some(content) => ToolResult::ok(content),
+            None => ToolResult::err(format!(
+                "Skill '{}' not found. Available skills: {}",
+                skill_name,
+                self.skill_registry.names().join(", ")
+            )),
         }
     }
 }

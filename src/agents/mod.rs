@@ -1,9 +1,10 @@
 //! Agents system
 //!
-//! An Agent = System Prompt + Tool Selection + Execution Config
+//! An Agent = Persona + Skills + Execution Config
 //!
-//! Agents are simple: the user picks which tools the agent has access to
-//! and writes a system prompt describing the agent's role/task.
+//! Agents are simple: the user picks which skills the agent has access to
+//! and writes a short persona describing the agent's identity/role.
+//! Skills bundle domain expertise + tool requirements together.
 //! Tool usage instructions come FROM the tools themselves (agent instructions),
 //! so the user never has to describe how to use tools.
 
@@ -24,10 +25,14 @@ pub struct Agent {
     pub name: String,
     /// Short description of what this agent does
     pub description: String,
-    /// System prompt / instructions for the agent (persona/task only — NOT tool usage docs)
-    pub instructions: String,
-    /// Tool names this agent uses (empty = all tools)
-    pub tools: Vec<String>,
+    /// Agent persona — who the agent IS (short identity/role text)
+    /// Stored as "persona" in DB (V8+), reads "instructions" for backward compat
+    #[serde(alias = "instructions")]
+    pub persona: String,
+    /// Skills this agent uses (empty = all available skills)
+    /// Stored as "skills" in DB (V8+), reads "tools" for backward compat
+    #[serde(alias = "tools")]
+    pub skills: Vec<String>,
     /// Optional project directory scope (None = global)
     pub project_path: Option<String>,
     /// Provider/model preference (None = use default)
@@ -49,6 +54,16 @@ pub struct Agent {
     /// Approval mode: "prompt" (default) = ask user, "auto" = auto-approve all actions
     #[serde(default = "default_approval_mode")]
     pub approval_mode: String,
+    // Context management
+    /// Context budget: percentage of model's context window before compacting (default 75, range 25-95)
+    #[serde(default)]
+    pub context_budget_pct: Option<u32>,
+    /// Compaction strategy: "truncate" (fast, default) or "summarize" (uses LLM for summary)
+    #[serde(default)]
+    pub compaction_strategy: Option<String>,
+    /// Max conversation turns before forcing compaction (None = unlimited)
+    #[serde(default)]
+    pub max_conversation_turns: Option<u32>,
 }
 
 /// Summary for listing agents (lightweight)
@@ -57,7 +72,8 @@ pub struct AgentSummary {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub tools: Vec<String>,
+    #[serde(alias = "tools")]
+    pub skills: Vec<String>,
     pub tags: Vec<String>,
     pub max_iterations: Option<u32>,
     pub project_path: Option<String>,
@@ -73,17 +89,17 @@ pub struct AgentsManager;
 impl AgentsManager {
     /// Save an agent (insert or update)
     pub fn save(conn: &Connection, agent: &Agent) -> Result<()> {
-        let tools_json = serde_json::to_string(&agent.tools)?;
+        let skills_json = serde_json::to_string(&agent.skills)?;
         let tags_json = serde_json::to_string(&agent.tags)?;
 
         conn.execute(
-            "INSERT INTO agents (id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            "INSERT INTO agents (id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
-                instructions = excluded.instructions,
-                tools = excluded.tools,
+                persona = excluded.persona,
+                skills = excluded.skills,
                 project_path = excluded.project_path,
                 preferred_provider = excluded.preferred_provider,
                 preferred_model = excluded.preferred_model,
@@ -94,13 +110,16 @@ impl AgentsManager {
                 temperature = excluded.temperature,
                 max_tokens = excluded.max_tokens,
                 approval_mode = excluded.approval_mode,
+                context_budget_pct = excluded.context_budget_pct,
+                compaction_strategy = excluded.compaction_strategy,
+                max_conversation_turns = excluded.max_conversation_turns,
                 updated_at = datetime('now')",
             rusqlite::params![
                 agent.id,
                 agent.name,
                 agent.description,
-                agent.instructions,
-                tools_json,
+                agent.persona,
+                skills_json,
                 agent.project_path,
                 agent.preferred_provider,
                 agent.preferred_model,
@@ -111,6 +130,9 @@ impl AgentsManager {
                 agent.temperature,
                 agent.max_tokens.map(|v| v as i32),
                 agent.approval_mode,
+                agent.context_budget_pct.map(|v| v as i32),
+                agent.compaction_strategy,
+                agent.max_conversation_turns.map(|v| v as i32),
             ],
         )?;
         Ok(())
@@ -119,20 +141,20 @@ impl AgentsManager {
     /// Load an agent by ID
     pub fn load(conn: &Connection, id: &str) -> Result<Option<Agent>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, instructions, tools, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode
+            "SELECT id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns
              FROM agents WHERE id = ?1",
         )?;
 
         let result = stmt
             .query_row(rusqlite::params![id], |row| {
-                let tools_str: String = row.get(4)?;
+                let skills_str: String = row.get(4)?;
                 let tags_str: String = row.get(8)?;
                 Ok(Agent {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     description: row.get(2)?,
-                    instructions: row.get(3)?,
-                    tools: serde_json::from_str(&tools_str).unwrap_or_default(),
+                    persona: row.get(3)?,
+                    skills: serde_json::from_str(&skills_str).unwrap_or_default(),
                     project_path: row.get(5)?,
                     preferred_provider: row.get(6)?,
                     preferred_model: row.get(7)?,
@@ -143,6 +165,9 @@ impl AgentsManager {
                     temperature: row.get(12)?,
                     max_tokens: row.get::<_, Option<i32>>(13)?.map(|v| v as u32),
                     approval_mode: row.get::<_, Option<String>>(14)?.unwrap_or_else(|| "prompt".to_string()),
+                    context_budget_pct: row.get::<_, Option<i32>>(15)?.map(|v| v as u32),
+                    compaction_strategy: row.get(16)?,
+                    max_conversation_turns: row.get::<_, Option<i32>>(17)?.map(|v| v as u32),
                 })
             })
             .ok();
@@ -153,17 +178,17 @@ impl AgentsManager {
     /// List all agents (summaries)
     pub fn list(conn: &Connection) -> Result<Vec<AgentSummary>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, tools, tags, max_iterations, project_path, preferred_provider, preferred_model, approval_mode FROM agents ORDER BY name",
+            "SELECT id, name, description, skills, tags, max_iterations, project_path, preferred_provider, preferred_model, approval_mode FROM agents ORDER BY name",
         )?;
 
         let rows = stmt.query_map([], |row| {
-            let tools_str: String = row.get(3)?;
+            let skills_str: String = row.get(3)?;
             let tags_str: String = row.get(4)?;
             Ok(AgentSummary {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 description: row.get(2)?,
-                tools: serde_json::from_str(&tools_str).unwrap_or_default(),
+                skills: serde_json::from_str(&skills_str).unwrap_or_default(),
                 tags: serde_json::from_str(&tags_str).unwrap_or_default(),
                 max_iterations: row.get::<_, Option<i32>>(5)?.map(|v| v as u32),
                 project_path: row.get(6)?,

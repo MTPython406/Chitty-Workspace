@@ -69,6 +69,12 @@ pub struct ExecutionConfig {
     pub max_tokens: Option<u32>,
     /// If true, skip approval prompts — agent auto-approves all sensitive actions
     pub auto_approve: bool,
+    /// Context budget: percentage of model's context window to use before compacting (default 75)
+    pub context_budget_pct: u32,
+    /// Compaction strategy: "truncate" (fast, mechanical) or "summarize" (uses LLM)
+    pub compaction_strategy: String,
+    /// Max conversation turns before forcing compaction (None = unlimited)
+    pub max_conversation_turns: Option<u32>,
 }
 
 impl Default for ExecutionConfig {
@@ -78,6 +84,9 @@ impl Default for ExecutionConfig {
             temperature: None,
             max_tokens: None,
             auto_approve: false,
+            context_budget_pct: 75,
+            compaction_strategy: "truncate".to_string(),
+            max_conversation_turns: None,
         }
     }
 }
@@ -93,17 +102,45 @@ Be direct and concise. Use tools when they help. Tool definitions are provided s
 
 **Providers:** BYOK — OpenAI, Anthropic, Google, xAI (keys in OS keyring). Local: Ollama (localhost:11434), HuggingFace sidecar. Setup via Settings → Providers.
 
-**Agents:** Stored in DB. Fields: name, description, instructions, tools[], preferred_provider/model, max_iterations, approval_mode. Agent Builder in Action Panel creates agents. To list agents use terminal: `Invoke-RestMethod http://localhost:8770/api/agents` (Windows) or `curl -s http://localhost:8770/api/agents` (Linux/Mac). Do NOT open new panels to answer questions about agents.
+**Skills:** Skills are composable capability packages that bundle instructions + tool requirements. Each skill is a folder with a SKILL.md file (YAML frontmatter + markdown instructions). Skills follow the open Agent Skills standard (agentskills.io). Use `load_skill` to activate a skill when a task matches its description. Available skills are listed in the skill catalog section below.
 
-**Packages:** Each has `package.json` (name, vendor, tools[], setup_steps[]) and tool dirs with `manifest.json` + script. Scripts read JSON stdin, write JSON stdout. setup_steps have check_command/install_command. To build a new package: create dir, write package.json, create tool manifests + scripts, install deps.
+**Creating skills:** To create a custom skill, write a SKILL.md file with this format:
+```
+---
+name: skill-name
+description: What this skill does and when to use it.
+allowed-tools: tool1 tool2
+---
+# Instructions here
+```
+Save to `~/.chitty-workspace/skills/<skill-name>/SKILL.md` or `<project>/.chitty/skills/<skill-name>/SKILL.md`. Skills are discovered automatically on startup.
+
+**Agents:** An agent = persona + skills + config. Persona is who the agent IS (short identity). Skills define what it can do (each skill brings its own tools). Fields: name, description, persona, skills[], preferred_provider/model, max_iterations, approval_mode. Agent Builder in Action Panel creates agents conversationally. To list agents: `Invoke-RestMethod http://localhost:8770/api/agents` (Windows) or `curl -s http://localhost:8770/api/agents` (Linux/Mac).
+
+**Building agents:** When helping users create agents:
+1. Understand what they want the agent to do
+2. Recommend appropriate skills from the available catalog
+3. Write a short persona (who the agent IS, not what it knows — skills handle expertise)
+4. Suggest provider/model if relevant
+5. Create via POST to `/api/agents` with persona + skills[]
+
+**Packages:** Marketplace packages can contain skills + custom tools + integrations. Each has `package.json` + optional `SKILL.md` + tool dirs. Scripts read JSON stdin, write JSON stdout.
+
+**Artifacts:** When you produce significant visual output (HTML apps, charts, dashboards), wrap it in artifact tags:
+```
+<artifact type="html" title="Name">
+...complete content...
+</artifact>
+```
+Supported types: html, code, markdown, svg, image. The artifact renders as a preview in the Action Panel.
 
 **Memory:** Save important info with `save_memory`. Types: user/feedback/project/reference. Scopes: global/project/agent. Search before re-asking.
 
-**Project context:** Loads `chitty.md` or `.chitty/chitty.md` automatically. Help generate it by scanning project structure.
+**Project context:** Loads `chitty.md` or `.chitty/chitty.md` automatically. Help generate it by scanning project structure. This file grows over time as the agent learns about the project.
 
 **Browser:** Controls user's real Chrome via extension. User's login sessions available.
 
-**Local API:** Chitty's own server runs at `http://localhost:8770`. Useful endpoints: `/api/agents`, `/api/tools`, `/api/providers`, `/api/conversations`, `/api/marketplace/packages`. Use terminal: `Invoke-RestMethod http://localhost:8770/...` (Windows) or `curl -s http://localhost:8770/...` (Linux/Mac).
+**Local API:** Server at `http://localhost:8770`. Endpoints: `/api/agents`, `/api/skills`, `/api/tools`, `/api/providers`, `/api/conversations`, `/api/marketplace/packages`.
 
 **Troubleshooting:** Check API keys in Settings, Ollama via `curl http://localhost:11434/api/tags`, extension status in Activity panel.
 
@@ -274,51 +311,53 @@ impl ChatEngine {
     /// Assemble context for an LLM call.
     ///
     /// Builds system prompt with:
-    /// 1. Base prompt (from agent or default)
+    /// 1. Base prompt (from agent persona or default)
     /// 2. Project context (chitty.md)
     /// 3. Relevant memories
-    /// 4. Tool agent instructions (auto-injected from tools — DataVisions pattern)
+    /// 4. Skill catalog (available skills — names + descriptions)
+    /// 5. Tool agent instructions (auto-injected from tools — DataVisions pattern)
+    /// 6. Tool definitions (filtered by skills' allowed-tools)
     ///
     /// Returns the assembled context, execution config, and the effective project path
     /// (which may come from the agent if none was provided in the request).
     ///
     /// `all_tool_defs` should be the full list of available tools from ToolRuntime.
-    /// The agent's tool list filters which ones to include.
+    /// `skill_registry` provides skill discovery and catalog generation.
     pub fn assemble_context(
         conn: &Connection,
         conversation_id: &str,
         agent_id: Option<&str>,
         project_path: Option<&str>,
         all_tool_defs: &[ToolDefinition],
+        skill_registry: &crate::skills::SkillRegistry,
     ) -> Result<(AssembledContext, ExecutionConfig, Option<String>)> {
-        // 1. Load agent → get base prompt, tool names, execution config, agent project_path
-        let (base_prompt, tool_names, exec_config, agent_project_path) = if let Some(sid) = agent_id {
+        // 1. Load agent → get base prompt, skill names, execution config, agent project_path
+        let (base_prompt, agent_skills, exec_config, agent_project_path) = if let Some(sid) = agent_id {
             match AgentsManager::load(conn, sid) {
                 Ok(Some(agent)) => {
-                    let tool_list: Option<Vec<String>> = if agent.tools.is_empty() {
-                        None // empty = all tools
-                    } else {
-                        Some(agent.tools)
-                    };
-                    // If agent has browser tool, allow more iterations (browser actions
-                    // consume iterations quickly: open, screenshot, click, type, etc.)
-                    let has_browser = tool_list.as_ref().map_or(true, |names| names.iter().any(|t| t == "browser"));
+                    // Check if any of the agent's skills require the browser tool
+                    // (for setting default iterations)
+                    let required_tools = skill_registry.union_tools(&agent.skills);
+                    let has_browser = agent.skills.is_empty() || required_tools.contains("browser");
                     let default_iters = if has_browser { 25 } else { 10 };
                     (
-                        agent.instructions,
-                        tool_list,
+                        agent.persona,
+                        agent.skills,
                         ExecutionConfig {
                             max_iterations: agent.max_iterations.unwrap_or(default_iters),
                             temperature: agent.temperature,
                             max_tokens: agent.max_tokens,
                             auto_approve: agent.approval_mode == "auto",
+                            context_budget_pct: agent.context_budget_pct.unwrap_or(75),
+                            compaction_strategy: agent.compaction_strategy.unwrap_or_else(|| "truncate".to_string()),
+                            max_conversation_turns: agent.max_conversation_turns,
                         },
                         agent.project_path,
                     )
                 }
                 _ => (
                     CHITTY_SYSTEM_PROMPT.to_string(),
-                    None,
+                    vec![],
                     ExecutionConfig { max_iterations: 25, ..ExecutionConfig::default() },
                     None,
                 ),
@@ -326,7 +365,7 @@ impl ChatEngine {
         } else {
             (
                 CHITTY_SYSTEM_PROMPT.to_string(),
-                None,
+                vec![], // empty = all skills available (default Chitty agent)
                 ExecutionConfig { max_iterations: 25, ..ExecutionConfig::default() },
                 None,
             )
@@ -358,16 +397,30 @@ impl ChatEngine {
             }
         }
 
-        // 4. Filter tool definitions based on agent's tool list
-        let filtered_defs: Vec<&ToolDefinition> = match &tool_names {
-            Some(names) => all_tool_defs
+        // 4. Skill catalog (available skills — metadata only, ~50-100 tokens per skill)
+        let skill_catalog = skill_registry.build_catalog_xml(&agent_skills);
+        if !skill_catalog.is_empty() {
+            system_parts.push(format!("\n\n{}", skill_catalog));
+        }
+
+        // 5. Filter tool definitions based on skills' allowed-tools
+        // Union all tools required by the agent's skills + base tools
+        let filtered_defs: Vec<&ToolDefinition> = if agent_skills.is_empty() {
+            // Default agent (no skills selected) or Chitty: all tools available
+            all_tool_defs.iter().collect()
+        } else {
+            let mut required_tools = skill_registry.union_tools(&agent_skills);
+            // Always include base tools regardless of skill selection
+            for base in &["load_skill", "save_memory", "file_reader"] {
+                required_tools.insert(base.to_string());
+            }
+            all_tool_defs
                 .iter()
-                .filter(|d| names.contains(&d.name))
-                .collect(),
-            None => all_tool_defs.iter().collect(),
+                .filter(|d| required_tools.contains(&d.name))
+                .collect()
         };
 
-        // 5. Tool Agent Instructions (auto-injected from tools themselves)
+        // 6. Tool Agent Instructions (auto-injected from tools themselves)
         // This is the DataVisions pattern — tools self-describe their usage
         let instruction_parts: Vec<String> = filtered_defs
             .iter()
@@ -386,7 +439,7 @@ impl ChatEngine {
 
         let system_prompt = system_parts.join("");
 
-        // 6. Tool definitions in OpenAI function calling format
+        // 7. Tool definitions in OpenAI function calling format
         let tools: Vec<serde_json::Value> = filtered_defs
             .iter()
             .map(|d| {
@@ -401,7 +454,7 @@ impl ChatEngine {
             })
             .collect();
 
-        // 7. Load conversation messages and convert to ChatMessage format
+        // 8. Load conversation messages and convert to ChatMessage format
         let db_messages = Self::get_messages(conn, conversation_id)?;
         let messages: Vec<ChatMessage> = db_messages
             .iter()

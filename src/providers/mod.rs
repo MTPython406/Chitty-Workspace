@@ -146,6 +146,12 @@ pub enum StreamChunk {
         /// Tokens written to cache (Anthropic: cache_creation_input_tokens)
         cache_write_tokens: u32,
     },
+    /// Context usage info (sent before each LLM call for UI progress bar)
+    ContextInfo {
+        used_tokens: u32,
+        max_tokens: u32,
+        percentage: u8,
+    },
     /// Stream complete
     Done,
     /// Error occurred
