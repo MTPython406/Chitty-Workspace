@@ -8,9 +8,10 @@ import sys
 import os
 import subprocess
 
-# Add parent dir so we can import the shared auth helper
+# Add parent dir so we can import shared helpers
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from auth import get_access_token, get_project_id
+from config import check_resource_allowed, check_feature_allowed
 
 
 def make_request(method, url, headers, body=None):
@@ -278,6 +279,27 @@ def main():
             "error": f"Unknown action '{action}'. Available: {', '.join(ACTIONS.keys())}"
         }))
         sys.exit(0)
+
+    # ── Config enforcement: feature flags ────────────────────────
+    feature_gates = {
+        "create_dataset": "allow_create_dataset",
+        "delete_dataset": "allow_delete_dataset",
+    }
+    if action in feature_gates:
+        allowed, err = check_feature_allowed(feature_gates[action], action)
+        if not allowed:
+            print(json.dumps({"success": False, "error": err}))
+            sys.exit(0)
+
+    # ── Config enforcement: allowed datasets ─────────────────────
+    dataset_actions = ["list_tables", "describe_table", "query", "insert_rows"]
+    if action in dataset_actions:
+        dataset_id = params.get("dataset_id", "")
+        if dataset_id:
+            allowed, err = check_resource_allowed("datasets", dataset_id)
+            if not allowed:
+                print(json.dumps({"success": False, "error": err}))
+                sys.exit(0)
 
     # Get auth token
     token, auth_err = get_access_token()

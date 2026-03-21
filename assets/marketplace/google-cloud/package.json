@@ -1,15 +1,34 @@
 {
   "name": "google-cloud",
-  "display_name": "Google Cloud",
-  "vendor": "Google",
-  "description": "Deploy, query, and manage Google Cloud services directly from Chitty Workspace",
-  "version": "1.0.0",
+  "display_name": "Google Cloud Platform",
+  "vendor": "Chitty",
+  "description": "BigQuery analytics, Cloud Storage management, and data pipelines using Google Cloud",
+  "version": "1.1.0",
   "icon": "cloud",
   "color": "#4285F4",
   "status": "not_installed",
+
+  "long_description": "Full Google Cloud Platform integration for Chitty Workspace. Query and manage BigQuery datasets, upload and organize files in Cloud Storage, and build data pipelines — all through natural language.\n\n**BigQuery** — Run SQL queries, explore schemas, create datasets and tables, insert data.\n\n**Cloud Storage** — Upload, download, list, and manage files in GCS buckets. Perfect for staging data for BigQuery or sharing results.\n\nAuthentication uses your existing `gcloud` CLI credentials. No passwords or service account keys are stored by Chitty.",
+
+  "categories": ["cloud", "data", "analytics"],
+  "docs_url": "https://cloud.google.com/docs",
+  "repo_url": "https://github.com/nicholasgitwork/chitty-workspace",
+
   "tools": [
-    "bigquery"
+    "bigquery",
+    "cloud-storage"
   ],
+
+  "auth": {
+    "type": "cli",
+    "instructions": "This package uses your Google Cloud CLI (gcloud) credentials. You'll be prompted to sign in via your browser during setup.",
+    "oauth_provider": "google",
+    "oauth_scopes": [
+      "https://www.googleapis.com/auth/bigquery",
+      "https://www.googleapis.com/auth/devstorage.read_write"
+    ]
+  },
+
   "setup_steps": [
     {
       "id": "check_gcloud",
@@ -43,11 +62,85 @@
     },
     {
       "id": "install_python_deps",
-      "label": "Install BigQuery dependencies",
+      "label": "Install Python dependencies",
       "check_command": "pip show google-cloud-bigquery",
-      "install_command": "pip install google-cloud-bigquery google-auth",
-      "help_text": "Python libraries needed for BigQuery operations.",
+      "install_command": "pip install google-cloud-bigquery google-cloud-storage google-auth",
+      "help_text": "Python libraries needed for BigQuery and Cloud Storage operations.",
       "required": true
     }
-  ]
+  ],
+
+  "configurable_resources": [
+    {
+      "id": "datasets",
+      "label": "BigQuery Datasets",
+      "description": "Select which BigQuery datasets the agent can access. The agent will only query, insert, or manage tables within these datasets.",
+      "discover_command": "gcloud bq ls --format=json",
+      "placeholder": "e.g. my_analytics_dataset",
+      "multi": true,
+      "required_by_actions": ["query", "list_tables", "describe_table", "insert_rows"]
+    },
+    {
+      "id": "buckets",
+      "label": "Cloud Storage Buckets",
+      "description": "Select which GCS buckets the agent can read from and write to.",
+      "discover_command": "gsutil ls",
+      "placeholder": "e.g. my-data-bucket",
+      "multi": true,
+      "required_by_actions": ["list_objects", "upload_object", "download_object", "delete_object"]
+    }
+  ],
+
+  "feature_flags": [
+    {
+      "id": "allow_create_dataset",
+      "label": "Allow creating new datasets",
+      "description": "When enabled, the agent can create new BigQuery datasets in your project.",
+      "default_enabled": false,
+      "gates_actions": ["create_dataset"],
+      "enable_warning": "Creating datasets may incur storage costs."
+    },
+    {
+      "id": "allow_delete_dataset",
+      "label": "Allow deleting datasets",
+      "description": "When enabled, the agent can delete BigQuery datasets and all their contents.",
+      "default_enabled": false,
+      "gates_actions": ["delete_dataset"],
+      "enable_warning": "Deleting a dataset permanently removes all tables and data. This cannot be undone."
+    },
+    {
+      "id": "allow_create_bucket",
+      "label": "Allow creating new buckets",
+      "description": "When enabled, the agent can create new Cloud Storage buckets.",
+      "default_enabled": false,
+      "gates_actions": ["create_bucket"],
+      "enable_warning": "Creating buckets may incur storage costs."
+    },
+    {
+      "id": "allow_delete_objects",
+      "label": "Allow deleting objects",
+      "description": "When enabled, the agent can delete files from Cloud Storage buckets.",
+      "default_enabled": false,
+      "gates_actions": ["delete_object"],
+      "enable_warning": "Deleted objects cannot be recovered unless versioning is enabled on the bucket."
+    }
+  ],
+
+  "agent_config": {
+    "default_instructions": "You have access to Google Cloud Platform tools. Always check the user's allowed datasets and buckets before performing operations. Prefer read-only operations unless the user explicitly asks to modify data.",
+    "suggested_prompts": [
+      "List my BigQuery datasets and show me the tables",
+      "Run a SQL query on my dataset to find the top 10 rows",
+      "Upload this CSV file to my Cloud Storage bucket",
+      "Show me what's in my GCS bucket"
+    ],
+    "recommended_model": "gpt-4o",
+    "capabilities": [
+      "Run SQL queries on BigQuery datasets",
+      "Explore table schemas and row counts",
+      "Upload and download files from Cloud Storage",
+      "List and organize bucket contents",
+      "Create and manage datasets and buckets (when enabled)"
+    ]
+  }
 }
