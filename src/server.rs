@@ -181,6 +181,13 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
     let oauth_pending = crate::oauth::PendingFlows::default();
     let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge, oauth_pending });
 
+    // Start the agent scheduler in the background
+    let scheduler_state = state.clone();
+    tokio::spawn(async move {
+        crate::scheduler::initialize_next_runs(scheduler_state.clone()).await;
+        crate::scheduler::run(scheduler_state).await;
+    });
+
     let app = Router::new()
         // Health check (for extension connectivity)
         .route("/health", get(|| async { "ok" }))
@@ -226,6 +233,13 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/agents/:id", delete(delete_agent))
         // Agent Builder
         .route("/api/agent-builder/generate", post(agent_builder_handler))
+        // Scheduled Tasks
+        .route("/api/schedules", get(list_schedules))
+        .route("/api/schedules", post(create_schedule))
+        .route("/api/schedules/:id", get(get_schedule))
+        .route("/api/schedules/:id", put(update_schedule))
+        .route("/api/schedules/:id", delete(delete_schedule))
+        .route("/api/schedules/:id/run", post(run_schedule_now))
         // Browser bridge WebSocket
         .route("/ws/browser", get(ws_browser_handler))
         // Extension WebSocket — dedicated endpoint for the Chitty Browser Extension
@@ -2677,6 +2691,297 @@ fn compact_context(messages: &mut Vec<ChatMessage>, target_chars: usize) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Scheduled Tasks — CRUD for autonomous agent scheduling
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CreateScheduleRequest {
+    name: String,
+    #[serde(default)]
+    agent_id: Option<String>,
+    prompt: String,
+    cron_expression: String,
+    #[serde(default)]
+    project_path: Option<String>,
+    #[serde(default = "default_auto_approve")]
+    auto_approve: bool,
+}
+fn default_auto_approve() -> bool { true }
+
+#[derive(Serialize)]
+struct ScheduleResponse {
+    id: String,
+    name: String,
+    agent_id: Option<String>,
+    prompt: String,
+    cron_expression: String,
+    project_path: Option<String>,
+    enabled: bool,
+    auto_approve: bool,
+    last_run_at: Option<String>,
+    next_run_at: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let db = state.db.clone();
+    let schedules = db
+        .with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, agent_id, prompt, cron_expression, project_path, \
+                 enabled, auto_approve, last_run_at, next_run_at, created_at, updated_at \
+                 FROM scheduled_tasks ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(ScheduleResponse {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    agent_id: row.get(2)?,
+                    prompt: row.get(3)?,
+                    cron_expression: row.get(4)?,
+                    project_path: row.get(5)?,
+                    enabled: row.get::<_, i32>(6)? != 0,
+                    auto_approve: row.get::<_, i32>(7)? != 0,
+                    last_run_at: row.get(8)?,
+                    next_run_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                })
+            })?;
+            let mut result = Vec::new();
+            for row in rows {
+                result.push(row?);
+            }
+            Ok(result)
+        })
+        .await
+        .unwrap_or_default();
+
+    Json(schedules)
+}
+
+async fn create_schedule(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateScheduleRequest>,
+) -> impl IntoResponse {
+    // Validate cron expression
+    let full_expr = format!("0 {} *", req.cron_expression);
+    if cron::Schedule::from_str(&full_expr).is_err() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": format!("Invalid cron expression: {}", req.cron_expression)
+        }))).into_response();
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Compute initial next_run_at
+    let next_run = cron::Schedule::from_str(&full_expr)
+        .ok()
+        .and_then(|s| s.upcoming(chrono::Local).next())
+        .map(|dt| dt.to_rfc3339());
+
+    let db = state.db.clone();
+    let schedule_id = id.clone();
+    let created = now.clone();
+    let name_for_log = req.name.clone();
+    let next_run_for_response = next_run.clone();
+    match db
+        .with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO scheduled_tasks (id, name, agent_id, prompt, cron_expression, project_path, enabled, auto_approve, next_run_at, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?9, ?9)",
+                rusqlite::params![
+                    schedule_id, req.name, req.agent_id, req.prompt, req.cron_expression,
+                    req.project_path, req.auto_approve as i32, next_run, created
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+    {
+        Ok(()) => {
+            tracing::info!("Created scheduled task '{}' ({})", name_for_log, id);
+            Json(serde_json::json!({ "id": id, "name": name_for_log, "next_run_at": next_run_for_response })).into_response()
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
+        }
+    }
+}
+
+async fn get_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    match db
+        .with_conn(move |conn| {
+            let s = conn.query_row(
+                "SELECT id, name, agent_id, prompt, cron_expression, project_path, \
+                 enabled, auto_approve, last_run_at, next_run_at, created_at, updated_at \
+                 FROM scheduled_tasks WHERE id = ?1",
+                rusqlite::params![id],
+                |row| {
+                    Ok(ScheduleResponse {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        agent_id: row.get(2)?,
+                        prompt: row.get(3)?,
+                        cron_expression: row.get(4)?,
+                        project_path: row.get(5)?,
+                        enabled: row.get::<_, i32>(6)? != 0,
+                        auto_approve: row.get::<_, i32>(7)? != 0,
+                        last_run_at: row.get(8)?,
+                        next_run_at: row.get(9)?,
+                        created_at: row.get(10)?,
+                        updated_at: row.get(11)?,
+                    })
+                },
+            )?;
+            Ok(s)
+        })
+        .await
+    {
+        Ok(schedule) => Json(serde_json::json!(schedule)).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateScheduleRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    cron_expression: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    auto_approve: Option<bool>,
+}
+
+async fn update_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateScheduleRequest>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // If cron changed, validate and recompute next_run
+    let new_next_run = if let Some(ref cron_expr) = req.cron_expression {
+        let full_expr = format!("0 {} *", cron_expr);
+        match cron::Schedule::from_str(&full_expr) {
+            Ok(s) => s.upcoming(chrono::Local).next().map(|dt| dt.to_rfc3339()),
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    "error": format!("Invalid cron expression: {}", cron_expr)
+                }))).into_response();
+            }
+        }
+    } else {
+        None
+    };
+
+    match db
+        .with_conn(move |conn| {
+            if let Some(name) = req.name {
+                conn.execute("UPDATE scheduled_tasks SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![name, now, id])?;
+            }
+            if let Some(prompt) = req.prompt {
+                conn.execute("UPDATE scheduled_tasks SET prompt = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![prompt, now, id])?;
+            }
+            if let Some(cron_expr) = req.cron_expression {
+                conn.execute("UPDATE scheduled_tasks SET cron_expression = ?1, next_run_at = ?2, updated_at = ?3 WHERE id = ?4",
+                    rusqlite::params![cron_expr, new_next_run, now, id])?;
+            }
+            if let Some(enabled) = req.enabled {
+                conn.execute("UPDATE scheduled_tasks SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![enabled as i32, now, id])?;
+            }
+            if let Some(auto_approve) = req.auto_approve {
+                conn.execute("UPDATE scheduled_tasks SET auto_approve = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![auto_approve as i32, now, id])?;
+            }
+            Ok(())
+        })
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn delete_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    match db
+        .with_conn(move |conn| {
+            conn.execute("DELETE FROM scheduled_tasks WHERE id = ?1", rusqlite::params![id])?;
+            Ok(())
+        })
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+async fn run_schedule_now(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    // Load the task and trigger it
+    let db = state.db.clone();
+    let task = db
+        .with_conn(move |conn| {
+            let t = conn.query_row(
+                "SELECT id, name, agent_id, prompt, cron_expression, project_path, enabled, auto_approve, last_run_at, next_run_at \
+                 FROM scheduled_tasks WHERE id = ?1",
+                rusqlite::params![id],
+                |row| {
+                    Ok(crate::scheduler::ScheduledTask {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        agent_id: row.get(2)?,
+                        prompt: row.get(3)?,
+                        cron_expression: row.get(4)?,
+                        project_path: row.get(5)?,
+                        enabled: row.get::<_, i32>(6)? != 0,
+                        auto_approve: row.get::<_, i32>(7)? != 0,
+                        last_run_at: row.get(8)?,
+                        next_run_at: row.get(9)?,
+                    })
+                },
+            )?;
+            Ok(t)
+        })
+        .await;
+
+    match task {
+        Ok(task) => {
+            let task_state = state.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::scheduler::execute_scheduled_task(task_state, task).await {
+                    tracing::error!("Manual schedule run failed: {}", e);
+                }
+            });
+            Json(serde_json::json!({ "success": true, "message": "Task triggered" })).into_response()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+use std::str::FromStr;
 
 // ---------------------------------------------------------------------------
 // Agent Builder — AI-powered agent generation with agent loop
