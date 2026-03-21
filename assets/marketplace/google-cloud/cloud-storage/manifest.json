@@ -1,0 +1,64 @@
+{
+  "name": "gcloud_storage",
+  "display_name": "Cloud Storage",
+  "description": "Upload, download, list, and manage files in Google Cloud Storage buckets",
+  "version": "1.0.0",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "action": {
+      "type": "string",
+      "description": "The Cloud Storage action to perform: list_buckets, create_bucket, list_objects, upload_object, download_object, delete_object, get_object_metadata",
+      "required": true
+    },
+    "project_id": {
+      "type": "string",
+      "description": "GCP project ID. If omitted, uses the default gcloud project.",
+      "required": false
+    },
+    "bucket": {
+      "type": "string",
+      "description": "GCS bucket name (without gs:// prefix). Required for most actions.",
+      "required": false
+    },
+    "object_path": {
+      "type": "string",
+      "description": "Object path within the bucket (e.g. 'data/file.csv'). Required for object operations.",
+      "required": false
+    },
+    "content": {
+      "type": "string",
+      "description": "Text content to upload (for upload_object action with inline content).",
+      "required": false
+    },
+    "local_path": {
+      "type": "string",
+      "description": "Local file path for upload/download operations.",
+      "required": false
+    },
+    "prefix": {
+      "type": "string",
+      "description": "Object name prefix for filtering list_objects results (e.g. 'data/').",
+      "required": false
+    },
+    "location": {
+      "type": "string",
+      "description": "Bucket location for create_bucket (default: US).",
+      "required": false
+    },
+    "max_results": {
+      "type": "number",
+      "description": "Maximum number of results to return for list operations (default: 100).",
+      "required": false
+    }
+  },
+  "install_commands": [
+    "pip install google-cloud-storage google-auth"
+  ],
+  "timeout_seconds": 60,
+  "permission_tier": "moderate",
+  "source": "marketplace",
+  "marketplace_id": "google-cloud",
+  "instructions": "Use this tool to interact with Google Cloud Storage. The user authenticates via their own gcloud CLI login.\n\n**Available actions:**\n- `list_buckets` — List all buckets in the project\n- `create_bucket` — Create a new bucket (requires bucket name, optional location)\n- `list_objects` — List objects in a bucket (optional prefix filter)\n- `upload_object` — Upload content or a local file to a bucket\n- `download_object` — Download an object to a local path or return its text content\n- `delete_object` — Delete an object from a bucket\n- `get_object_metadata` — Get metadata (size, type, updated) for an object\n\n**Important:** Always check the user's allowed buckets in the package configuration before operating on a bucket. If no buckets are configured, ask the user which bucket to use."
+}
