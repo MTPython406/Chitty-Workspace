@@ -1,7 +1,7 @@
 # Chitty Workspace - Claude Code Instructions
 
 ## Project Overview
-Chitty Workspace is a standalone, local-first AI assistant with skills, tools, and BYOK (Bring Your Own Key) provider support. It runs entirely on the user's machine — no cloud server required.
+Chitty Workspace is a standalone, local-first AI assistant with agents, tools, marketplace packages, browser automation, and BYOK (Bring Your Own Key) provider support. It runs entirely on the user's machine — no cloud server required.
 
 Free product that promotes the DataVisions Enterprise platform.
 
@@ -11,7 +11,8 @@ Free product that promotes the DataVisions Enterprise platform.
 - **UI:** System tray (tray-icon + tao) + WebView2 chat interface (wry)
 - **Local Storage:** SQLite (rusqlite)
 - **HTTP Client:** reqwest (for LLM API calls)
-- **Local Server:** axum (serves chat UI to WebView2)
+- **Local Server:** axum (serves chat UI to WebView2, port 8770)
+- **Scheduling:** cron crate (expression parsing for agent scheduler)
 - **Secure Storage:** OS keyring (keyring crate) for API keys
 
 ## Quick Start
@@ -26,7 +27,13 @@ C:\Users\pauls\.cargo\bin\cargo.exe build --release
 ```bash
 cargo run
 cargo run -- config
-cargo run -- skills
+cargo run -- agents
+```
+
+### Forcing HTML rebuild
+The chat UI is embedded via `include_str!("../assets/chat.html")`. Cargo doesn't track this dependency, so after editing chat.html:
+```bash
+touch src/server.rs && cargo build
 ```
 
 ## Project Structure
@@ -34,9 +41,9 @@ cargo run -- skills
 ```
 ChittyWorkspace/
 ├── src/
-│   ├── main.rs              # CLI entry point (clap)
+│   ├── main.rs              # CLI entry point (clap), spawns server + UI
 │   ├── chat/
-│   │   ├── mod.rs           # Chat engine, conversation types, context assembly
+│   │   ├── mod.rs           # Chat engine, CHITTY_SYSTEM_PROMPT, context assembly
 │   │   ├── memory.rs        # Persistent memory system (save/recall/search)
 │   │   └── context.rs       # Project context loader (chitty.md)
 │   ├── config/
@@ -45,211 +52,122 @@ ChittyWorkspace/
 │   │   ├── mod.rs           # Provider trait, types (ChatMessage, ToolCall, StreamChunk)
 │   │   ├── cloud.rs         # BYOK cloud providers (OpenAI, Anthropic, Google, xAI)
 │   │   └── ollama.rs        # Ollama local model provider
-│   ├── skills/
-│   │   └── mod.rs           # Skills system (Skill = Instructions + Tools)
+│   ├── agents/
+│   │   └── mod.rs           # Agent CRUD (instructions + tools + execution config)
 │   ├── tools/
-│   │   └── mod.rs           # Tool system (native + custom + integration tools)
+│   │   ├── mod.rs           # Native tools (file_reader, file_writer, terminal, etc.)
+│   │   ├── runtime.rs       # Tool runtime (native + custom + marketplace dispatch)
+│   │   ├── executor.rs      # Custom tool executor (Python, Node, PowerShell, Shell)
+│   │   └── manifest.rs      # Tool manifest parser
+│   ├── scheduler.rs         # Agent scheduler — cron-based autonomous task execution
 │   ├── integrations/
 │   │   └── mod.rs           # API key-based integrations
+│   ├── oauth/
+│   │   └── mod.rs           # OAuth PKCE flows (Google, etc.)
+│   ├── server.rs            # Axum HTTP server, all API endpoints, SSE chat streaming
 │   ├── storage/
 │   │   ├── mod.rs           # Database manager, connection, data directory
-│   │   └── schema.rs        # SQLite schema, migrations, table definitions
+│   │   └── schema.rs        # SQLite schema, migrations V1-V7
+│   ├── gpu.rs               # GPU detection for local models
+│   ├── huggingface.rs       # HuggingFace Python sidecar
 │   └── ui/
 │       └── mod.rs           # System tray + WebView2 chat UI
-├── assets/                   # Icons, static resources
-├── sidecar/                  # HuggingFace Python inference sidecar
+├── assets/
+│   ├── chat.html            # Full frontend (HTML + CSS + JS, embedded at compile time)
+│   └── marketplace/         # Built-in marketplace packages
+│       ├── web-tools/
+│       ├── google-cloud/
+│       └── social-media/
 ├── Cargo.toml
 └── .claude/CLAUDE.md         # This file
 ```
 
-## Architecture
+## Key Architecture Patterns
 
-```
-┌─────────────────────────────────────────────────┐
-│              Chitty Workspace                    │
-├─────────────────────────────────────────────────┤
-│  UI Layer (WebView2 + System Tray)              │
-│  ├── Chat interface                              │
-│  ├── Skill browser / builder                     │
-│  └── Settings (providers, keys, projects)        │
-├─────────────────────────────────────────────────┤
-│  Chat Engine                                     │
-│  ├── Message loop (user → LLM → tools → LLM)   │
-│  ├── Streaming responses                         │
-│  └── Context window management                   │
-├─────────────────────────────────────────────────┤
-│  Skills System                                   │
-│  ├── Skill = Instructions + Tool Set             │
-│  ├── Skills Builder (AI-generated)               │
-│  └── Import/export/share                         │
-├─────────────────────────────────────────────────┤
-│  Providers (BYOK)          │  Tools              │
-│  ├── OpenAI                │  ├── Native (file,  │
-│  ├── Anthropic             │  │   terminal, code)│
-│  ├── Google                │  ├── Custom (user/  │
-│  ├── xAI                   │  │   AI-generated)  │
-│  ├── Ollama (local)        │  └── Integration    │
-│  └── HuggingFace (sidecar) │      tools          │
-├─────────────────────────────────────────────────┤
-│  Storage (SQLite)           │  Config (TOML)     │
-│  ├── Conversations          │  ├── Providers     │
-│  ├── Messages               │  ├── Projects      │
-│  ├── Skills                 │  └── UI prefs      │
-│  └── Custom tools           │                    │
-│                             │  Keyring (OS)      │
-│                             │  └── API keys      │
-└─────────────────────────────────────────────────┘
-```
+### Default Chitty Agent
+When no agent is selected, the `CHITTY_SYSTEM_PROMPT` in `src/chat/mod.rs` is used. Chitty is the system administrator — knows all tools, packages, providers, local API endpoints, and can help build packages.
+
+### Dynamic Action Panel
+The Action Panel (right side) has fixed tabs (Activity, Agents, Providers) and a dynamic view container. Components like browser, media, and agent config open dynamically via `openDynamicView(icon, title, html)` in the frontend.
+
+### Slash Commands
+Frontend intercepts messages starting with `/` in `sendMessageInPanel()` before they reach the LLM. Commands are handled by `handleSlashCommand()` which routes to specific handlers.
+
+### Agent Scheduler
+- `src/scheduler.rs` — Background Tokio task polling every 30 seconds
+- `scheduled_tasks` SQLite table (migration V7)
+- CRUD API at `/api/schedules`
+- Cron expression parsing via the `cron` crate
+- Frontend UI via `/schedule` slash command
+
+### Approval System
+- `action_requires_approval()` in server.rs checks tool/action pairs
+- Frontend shows Deny / Always allow for session / Allow once buttons
+- `sessionAutoApprove` state flag auto-approves after user opts in
+- Denied results saved to DB to prevent conversation corruption
+- Agents can be set to `approval_mode: "auto"` to bypass entirely
+
+### Terminal Tool (Cross-Platform)
+- PowerShell on Windows (with CREATE_NO_WINDOW flag)
+- zsh on macOS
+- sh on Linux
+- HTTP: `Invoke-RestMethod` (Windows) or `curl` (Linux/Mac)
+
+### Marketplace Packages
+Packages live in `~/.chitty-workspace/tools/marketplace/`. Each has:
+- `package.json` — name, vendor, description, tools[], setup_steps[]
+- Tool directories with `manifest.json` + script (Python/Node/PowerShell/Shell)
+- Scripts read JSON from stdin, write JSON to stdout
+
+### open_agent_panel Tool
+Frontend-intercepted tool that lets Chitty open agents in new panels. Backend returns a UI command, frontend creates the panel and optionally sends a message.
 
 ## Core Concepts
 
-### Skills
-A Skill is the central unit. It combines:
-- **Instructions:** System prompt that tells the agent what it can do and how
-- **Tools:** Set of tools the agent can use when this skill is active
-- **Metadata:** Name, description, tags, preferred provider/model
+### Agents
+Agents combine: system prompt instructions + tool selection + execution config.
+Fields: name, description, instructions, tools[], preferred_provider/model, max_iterations, temperature, max_tokens, approval_mode ("prompt" or "auto").
 
-Skills are savable, loadable per project or globally, and shareable as JSON files.
-The Skills Builder uses the user's own BYOK key to AI-generate new tools and instructions.
-
-### Providers
-BYOK — the user provides their own API keys. Stored securely in OS keyring.
-- Cloud: OpenAI, Anthropic, Google, xAI (direct API calls from Rust)
-- Local: Ollama (proxy to localhost:11434), HuggingFace (Python sidecar)
-
-### Tools
-- **Native:** Built into the binary (file_reader, file_writer, terminal, code_search, code_analyzer)
-- **Custom:** User-defined or AI-generated via Skills Builder
-- **Integration:** Generated from configured API integrations
-
-### Chat
-Single-agent chat with tool calling loop:
-1. User sends message
-2. Context assembled: skill instructions + chitty.md + memories + tools + history
-3. Sent to LLM (any provider)
+### Chat Flow
+1. User sends message (or `/command` intercepted)
+2. Context assembled: agent instructions + chitty.md + memories + tools + history
+3. Sent to LLM (any provider) via streaming SSE
 4. LLM responds with text or tool calls
-5. Tool calls executed locally, results sent back
+5. Tool calls: approval gate → execute → results sent back
 6. LLM generates final response
 7. Everything persisted to SQLite
 
----
+### Memory System
+Types: user, feedback, project, reference. Scopes: global, project, agent.
+Auto-loaded at conversation start, injected into system prompt.
 
-## Memory System
-
-Persistent knowledge the agent retains across sessions. Unlike simple chat logs, memories are **semantic** — the agent actively decides what to remember and recalls relevant memories in future conversations.
-
-### Memory Types
-
-| Type | Purpose | Example |
-|------|---------|---------|
-| `user` | User's role, preferences, expertise | "Senior Rust developer, prefers minimal dependencies" |
-| `feedback` | Corrections and guidance | "Don't use unwrap() — always handle errors properly" |
-| `project` | Project-specific context | "Migrating from REST to gRPC by end of Q2" |
-| `reference` | Pointers to external resources | "CI docs are in Confluence at /team/ci-setup" |
-
-### Memory Scoping
-
-| Scope | When loaded | Example |
-|-------|-------------|---------|
-| `global` | Every conversation | User preferences, general feedback |
-| `project` | When chatting in that project directory | Project-specific decisions, conventions |
-| `skill` | When that skill is active | Skill-specific corrections |
-
-### How Memories Work
-
-1. **Auto-load:** At conversation start, relevant memories are loaded (global + project + skill)
-2. **Injected:** Memories are formatted and injected into the system prompt
-3. **Agent saves:** When the agent learns something important, it uses `save_memory` tool
-4. **Agent recalls:** Agent can search memories with `search_memory` tool
-5. **User manages:** User can list, edit, delete memories
-
-### Agent Memory Tools
-
-| Tool | Purpose |
-|------|---------|
-| `save_memory` | Save a new memory (type, scope, content) |
-| `search_memory` | Search memories by keyword |
-| `delete_memory` | Remove a memory by ID |
-| `list_memories` | List all active memories for current context |
-
----
-
-## Project Context (chitty.md)
-
-Automatically discovered project-specific instructions. When a user chats within a project directory, Chitty loads the `chitty.md` file and injects it into the system prompt.
-
-### Discovery Order
-
-1. `<project>/.chitty/chitty.md` (hidden directory)
-2. `<project>/chitty.md` (root level)
-
-### What Goes in chitty.md
-
-- Project overview and tech stack
-- Coding conventions and patterns
-- Important files and their purposes
-- Build/run/test commands
-- Special instructions for the AI
-
-### Generation
-
-The Skills Builder can auto-generate a `chitty.md` by scanning the project directory (file structure, package files, READMEs) using the user's BYOK key.
-
----
-
-## Context Assembly
-
-Every LLM call assembles context in this order:
-
-```
-┌─────────────────────────────────────────┐
-│ 1. System Prompt (from skill or default)│
-├─────────────────────────────────────────┤
-│ 2. Project Context (chitty.md)          │
-├─────────────────────────────────────────┤
-│ 3. Active Memories (global + scoped)    │
-├─────────────────────────────────────────┤
-│ 4. Tool Definitions                     │
-├─────────────────────────────────────────┤
-│ 5. Conversation History (trimmed)       │
-├─────────────────────────────────────────┤
-│ 6. User Message                         │
-└─────────────────────────────────────────┘
-```
-
-Context window management: when history exceeds the model's context window, older messages are summarized or trimmed while preserving tool call/result pairs.
-
----
+### Context Assembly Order
+1. System Prompt (from agent or CHITTY_SYSTEM_PROMPT)
+2. Project Context (chitty.md)
+3. Active Memories (global + scoped)
+4. Tool Definitions + Instructions
+5. Conversation History (trimmed to fit context window)
+6. User Message
 
 ## Data Storage
-
-All data is local:
 
 ```
 ~/.chitty-workspace/
 ├── config.toml              # App settings (TOML)
-├── workspace.db             # SQLite database
-│   ├── conversations        # Chat sessions (title, skill, project, provider, model)
-│   ├── messages             # Full message history (with tool calls, parent linking)
-│   ├── memories             # Persistent memories (typed, scoped, searchable)
-│   ├── skills               # Saved skill definitions
+├── workspace.db             # SQLite database (schema V7)
+│   ├── conversations        # Chat sessions (agent_id, project, provider, model)
+│   ├── messages             # Full message history (with tool calls)
+│   ├── agents               # Agent definitions
+│   ├── memories             # Persistent memories (typed, scoped)
+│   ├── scheduled_tasks      # Cron-based agent schedules
 │   ├── custom_tools         # User/AI-generated tools
+│   ├── token_usage          # Token tracking per conversation
 │   └── provider_configs     # Provider settings (keys in OS keyring)
+├── tools/
+│   ├── marketplace/         # Installed marketplace packages
+│   └── custom/              # User-created tools
 └── models/                  # GGUF model files (for HuggingFace sidecar)
 ```
-
-### SQLite Tables
-
-| Table | Purpose | Key Fields |
-|-------|---------|------------|
-| `conversations` | Chat sessions | id, title, skill_id, project_path, provider, model |
-| `messages` | Message history | id, conversation_id, parent_message_id, role, content, tool_calls |
-| `memories` | Persistent memory | id, memory_type, name, content, scope, scope_ref |
-| `skills` | Skill definitions | id, name, instructions, tools, project_path |
-| `custom_tools` | Custom tools | id, name, description, instructions, parameters, script_body |
-| `provider_configs` | Provider settings | id, provider_id, display_name, base_url, enabled |
-
-API keys are stored in the **OS keyring** (Windows Credential Manager), not in SQLite.
 
 ## Code Style
 
@@ -258,6 +176,7 @@ API keys are stored in the **OS keyring** (Windows Credential Manager), not in S
 - Async everywhere (tokio runtime)
 - Serde for all serialization
 - Keep modules focused — one responsibility per module
+- Frontend is a single `assets/chat.html` file (embedded at compile time via `include_str!`)
 
 ## Relationship to DataVisions
 

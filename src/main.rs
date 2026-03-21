@@ -5,6 +5,7 @@ mod huggingface;
 mod integrations;
 mod oauth;
 mod providers;
+mod scheduler;
 mod server;
 mod agents;
 mod storage;

@@ -48,6 +48,9 @@ sha2 = "0.10"
 rand = "0.9"
 urlencoding = "2"
 
+# Scheduler (cron expression parsing)
+cron = "0.13"
+
 # Tools (code search)
 walkdir = "2"
 which = "6"

@@ -1679,6 +1679,15 @@ const App = {
     if (!textarea) return;
     const text = textarea.value.trim();
     if (!text) return;
+
+    // Slash command interception — handle /commands before sending to LLM
+    if (text.startsWith('/')) {
+      textarea.value = '';
+      textarea.style.height = 'auto';
+      this.handleSlashCommand(panelId, text);
+      return;
+    }
+
     if (!this.state.selectedProvider || !this.state.selectedModel) {
       panel.messages.push({ role: 'system', content: 'Error: Select a provider and model. Add your API key in Settings.' });
       this.renderPanel(panelId);
@@ -2714,6 +2723,204 @@ const App = {
         : `<span style="color:#ef4444">✕ Action denied</span>`);
     } catch (e) {
       console.error('Approval response failed:', e);
+    }
+  },
+
+  /* ── Slash Commands ─────────────────────────────────────────────── */
+  handleSlashCommand(panelId, text) {
+    const panel = this.getPanel(panelId);
+    if (!panel) return;
+    const parts = text.split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+    const args = parts.slice(1).join(' ');
+
+    // Show the command as a user message
+    panel.messages.push({ role: 'user', content: text });
+    this.renderPanel(panelId);
+
+    switch (cmd) {
+      case '/schedule':
+        this.showScheduleBuilder(panelId, args);
+        break;
+      case '/schedules':
+        this.showSchedulesList(panelId);
+        break;
+      case '/help':
+        panel.messages.push({ role: 'assistant', content:
+          '## Available Commands\n\n' +
+          '| Command | Description |\n' +
+          '|---------|-------------|\n' +
+          '| `/schedule` | Create a new scheduled task |\n' +
+          '| `/schedules` | List all scheduled tasks |\n' +
+          '| `/help` | Show this help message |\n\n' +
+          'You can also just chat with Chitty — ask anything!'
+        });
+        this.renderPanel(panelId);
+        break;
+      default:
+        panel.messages.push({ role: 'system', content: `Unknown command: ${cmd}. Type /help for available commands.` });
+        this.renderPanel(panelId);
+    }
+  },
+
+  showScheduleBuilder(panelId, prefillTask) {
+    const panel = this.getPanel(panelId);
+    if (!panel) return;
+    const agents = this.state.agents || [];
+    const agentOptions = agents.map(a =>
+      `<option value="${esc(a.id)}">${esc(a.name)}</option>`
+    ).join('');
+
+    const cardHtml = `
+      <div class="schedule-builder" style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px;margin:8px 0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+          <span style="font-size:18px;">📅</span>
+          <span style="font-size:14px;font-weight:600;color:var(--text-primary);">Schedule a Task</span>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Agent</label>
+          <select id="sched-agent" style="width:100%;padding:6px 8px;background:var(--bg-main);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;">
+            <option value="">Chitty (default)</option>
+            ${agentOptions}
+          </select>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Task Description</label>
+          <textarea id="sched-prompt" rows="2" placeholder="e.g. Check my email and calendar, give me a morning briefing" style="width:100%;padding:6px 8px;background:var(--bg-main);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;resize:vertical;font-family:inherit;">${esc(prefillTask || '')}</textarea>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Name</label>
+          <input id="sched-name" type="text" placeholder="e.g. Morning Briefing" style="width:100%;padding:6px 8px;background:var(--bg-main);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;" />
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:6px;">Schedule</label>
+          <div style="display:flex;flex-direction:column;gap:4px;" id="sched-options">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+              <input type="radio" name="sched-freq" value="0 9 * * *" checked /> Every morning (9:00 AM)
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+              <input type="radio" name="sched-freq" value="0 * * * *" /> Every hour
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+              <input type="radio" name="sched-freq" value="0 9 * * 1-5" /> Weekdays at 9:00 AM
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+              <input type="radio" name="sched-freq" value="custom" /> Custom
+            </label>
+            <input id="sched-custom-cron" type="text" placeholder="e.g. */30 * * * *  (every 30 min)" style="display:none;margin-left:22px;padding:4px 8px;background:var(--bg-main);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:11px;" />
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button onclick="this.closest('.schedule-builder').remove()" style="padding:6px 14px;background:var(--bg-main);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:12px;cursor:pointer;">Cancel</button>
+          <button onclick="App.submitSchedule('${panelId}')" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Create Schedule</button>
+        </div>
+      </div>`;
+    this.appendToolBlockInPanel(panelId, cardHtml);
+
+    // Toggle custom cron input visibility
+    setTimeout(() => {
+      document.querySelectorAll('input[name="sched-freq"]').forEach(r => {
+        r.addEventListener('change', () => {
+          const custom = document.getElementById('sched-custom-cron');
+          if (custom) custom.style.display = r.value === 'custom' ? 'block' : 'none';
+        });
+      });
+    }, 100);
+  },
+
+  async submitSchedule(panelId) {
+    const panel = this.getPanel(panelId);
+    if (!panel) return;
+
+    const name = document.getElementById('sched-name')?.value?.trim();
+    const prompt = document.getElementById('sched-prompt')?.value?.trim();
+    const agentId = document.getElementById('sched-agent')?.value || null;
+    const freqRadio = document.querySelector('input[name="sched-freq"]:checked');
+    let cronExpr = freqRadio?.value || '0 9 * * *';
+    if (cronExpr === 'custom') {
+      cronExpr = document.getElementById('sched-custom-cron')?.value?.trim();
+    }
+
+    if (!prompt) {
+      panel.messages.push({ role: 'system', content: 'Please enter a task description.' });
+      this.renderPanel(panelId);
+      return;
+    }
+    if (!name) {
+      panel.messages.push({ role: 'system', content: 'Please enter a name for the schedule.' });
+      this.renderPanel(panelId);
+      return;
+    }
+
+    try {
+      const resp = await fetch('/api/schedules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          agent_id: agentId,
+          prompt,
+          cron_expression: cronExpr,
+          project_path: panel.projectPath,
+        }),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        // Remove the builder card
+        document.querySelector('.schedule-builder')?.remove();
+        panel.messages.push({ role: 'assistant', content:
+          `✅ **Scheduled task created!**\n\n` +
+          `**Name:** ${name}\n` +
+          `**Schedule:** \`${cronExpr}\`\n` +
+          `**Next run:** ${data.next_run_at ? new Date(data.next_run_at).toLocaleString() : 'Computing...'}\n\n` +
+          `Type \`/schedules\` to view all scheduled tasks.`
+        });
+        this.renderPanel(panelId);
+        this.activityLog('info', `<span class="hl">Scheduled task created:</span> ${esc(name)}`);
+      } else {
+        panel.messages.push({ role: 'system', content: `Error: ${data.error || 'Failed to create schedule'}` });
+        this.renderPanel(panelId);
+      }
+    } catch (e) {
+      panel.messages.push({ role: 'system', content: `Error creating schedule: ${e.message}` });
+      this.renderPanel(panelId);
+    }
+  },
+
+  async showSchedulesList(panelId) {
+    const panel = this.getPanel(panelId);
+    if (!panel) return;
+
+    try {
+      const resp = await fetch('/api/schedules');
+      const schedules = await resp.json();
+
+      if (!schedules.length) {
+        panel.messages.push({ role: 'assistant', content:
+          '📅 **No scheduled tasks yet.**\n\nType `/schedule` to create one.'
+        });
+        this.renderPanel(panelId);
+        return;
+      }
+
+      let content = '📅 **Your Scheduled Tasks:**\n\n';
+      for (const s of schedules) {
+        const status = s.enabled ? '🟢 enabled' : '⏸ paused';
+        const agentName = s.agent_id
+          ? (this.state.agents.find(a => a.id === s.agent_id)?.name || s.agent_id)
+          : 'Chitty';
+        const lastRun = s.last_run_at ? new Date(s.last_run_at).toLocaleString() : 'Never';
+        const nextRun = s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '—';
+        content += `**${s.name}** — ${agentName} (${status})\n`;
+        content += `  Schedule: \`${s.cron_expression}\` | Last: ${lastRun} | Next: ${nextRun}\n\n`;
+      }
+      content += `Type \`/schedule\` to create a new task.`;
+
+      panel.messages.push({ role: 'assistant', content });
+      this.renderPanel(panelId);
+    } catch (e) {
+      panel.messages.push({ role: 'system', content: `Error loading schedules: ${e.message}` });
+      this.renderPanel(panelId);
     }
   },
 
