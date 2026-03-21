@@ -111,11 +111,12 @@ pub struct AppState {
     pub tool_registry: Arc<ToolRegistry>,
     pub tool_runtime: Arc<tokio::sync::RwLock<ToolRuntime>>,
     pub browser_bridge: Arc<BrowserBridge>,
+    pub skill_registry: Arc<crate::skills::SkillRegistry>,
     pub oauth_pending: crate::oauth::PendingFlows,
 }
 
 /// Start the axum server on the given port.
-pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime: Arc<tokio::sync::RwLock<ToolRuntime>>, browser_bridge: Arc<BrowserBridge>, port: u16) -> anyhow::Result<()> {
+pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime: Arc<tokio::sync::RwLock<ToolRuntime>>, browser_bridge: Arc<BrowserBridge>, skill_registry: Arc<crate::skills::SkillRegistry>, port: u16) -> anyhow::Result<()> {
     // Seed marketplace packages from bundled assets
     {
         let rt = tool_runtime.read().await;
@@ -179,7 +180,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
     tool_runtime.write().await.load_package_configs(&db);
 
     let oauth_pending = crate::oauth::PendingFlows::default();
-    let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge, oauth_pending });
+    let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge, skill_registry, oauth_pending });
 
     // Start the agent scheduler in the background
     let scheduler_state = state.clone();
@@ -231,6 +232,9 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/agents/:id", get(get_agent))
         .route("/api/agents/:id", put(update_agent))
         .route("/api/agents/:id", delete(delete_agent))
+        // Skills
+        .route("/api/skills", get(list_skills))
+        .route("/api/skills/:name", get(get_skill))
         // Agent Builder
         .route("/api/agent-builder/generate", post(agent_builder_handler))
         // Scheduled Tasks
@@ -1000,6 +1004,15 @@ async fn chat_handler(
                     })
                     .unwrap_or_default(),
                 ),
+            StreamChunk::ContextInfo { used_tokens, max_tokens, percentage } => Event::default()
+                .event("context_info")
+                .data(
+                    serde_json::json!({
+                        "used_tokens": used_tokens,
+                        "max_tokens": max_tokens,
+                        "percentage": percentage,
+                    }).to_string(),
+                ),
             StreamChunk::Done => Event::default().event("done").data("{}"),
             StreamChunk::Error(err) => Event::default().event("error").data(
                 serde_json::to_string(&ChatEventData {
@@ -1106,6 +1119,8 @@ async fn process_chat(
         rt.list_definitions()
     };
 
+    let skills_ref = state.skill_registry.clone();
+
     let (conversation_id, context, exec_config, effective_project_path) = db
         .with_conn(move |conn| {
             let cid = if let Some(id) = conv_id {
@@ -1119,13 +1134,14 @@ async fn process_chat(
             // Save user message
             ChatEngine::save_message(conn, &cid, "user", &msg, None, None)?;
 
-            // Assemble context (with tools + agent instructions from full runtime)
+            // Assemble context (with tools + skills catalog + agent instructions)
             let (ctx, exec_cfg, eff_pp) = ChatEngine::assemble_context(
                 conn,
                 &cid,
                 sid.as_deref(),
                 pp.as_deref(),
                 &all_tool_defs,
+                &skills_ref,
             )?;
 
             Ok((cid, ctx, exec_cfg, eff_pp))
@@ -1162,6 +1178,16 @@ async fn process_chat(
 
     let current_tools = context.tools;
     let max_iterations = exec_config.max_iterations;
+
+    // 3b. Model-aware context budget
+    let model_context_tokens = get_model_context_window(&provider_str, &model_str);
+    let context_budget_pct = exec_config.context_budget_pct.max(10).min(95); // clamp to 10-95%
+    let token_budget = (model_context_tokens as u64 * context_budget_pct as u64 / 100) as usize;
+    let char_budget = token_budget * 4; // rough chars-to-tokens estimate
+    tracing::info!(
+        "Context budget: model={} tokens, budget={}% → {} tokens ({} chars)",
+        model_context_tokens, context_budget_pct, token_budget, char_budget
+    );
 
     // =========================================================================
     // Agent Execution Loop (mirrors DataVisions streaming_executor)
@@ -1215,28 +1241,76 @@ async fn process_chat(
             Some(current_tools.as_slice())
         };
 
-        // 4. Context budget check & compaction
+        // 4. Context budget check & compaction (model-aware)
         let prompt_chars: usize = current_messages.iter().map(|m| m.content.len()).sum();
+        let estimated_tokens = (prompt_chars / 4) as u32;
 
-        // Auto-compact if prompt exceeds threshold (model context ~128K tokens ≈ 512K chars,
-        // but we want to stay well under. Compact at ~80K chars ≈ 20K tokens)
-        let compact_threshold = 80_000;
-        if prompt_chars > compact_threshold && current_messages.len() > 4 {
-            tracing::info!("Context compaction triggered: {} chars > {} threshold", prompt_chars, compact_threshold);
-            let _ = sse_tx
-                .send(StreamChunk::Thinking("Context compaction: summarizing older tool results...".to_string()))
-                .await;
+        // Send context usage info to UI
+        let usage_pct = ((estimated_tokens as u64 * 100) / model_context_tokens.max(1) as u64).min(100) as u8;
+        let _ = sse_tx
+            .send(StreamChunk::ContextInfo {
+                used_tokens: estimated_tokens,
+                max_tokens: model_context_tokens,
+                percentage: usage_pct,
+            })
+            .await;
 
-            compact_context(&mut current_messages, compact_threshold);
+        // Auto-compact if prompt exceeds the dynamic budget
+        if prompt_chars > char_budget && current_messages.len() > 4 {
+            tracing::info!(
+                "Context compaction triggered: {} chars (~{} tokens) > {} char budget ({}% of {} model limit)",
+                prompt_chars, estimated_tokens, char_budget, context_budget_pct, model_context_tokens
+            );
+
+            if exec_config.compaction_strategy == "summarize" {
+                let _ = sse_tx
+                    .send(StreamChunk::Thinking(format!(
+                        "Context at {}% — summarizing older messages...",
+                        usage_pct
+                    )))
+                    .await;
+
+                summarize_compact(&mut current_messages, &state, &provider_str).await;
+            } else {
+                let _ = sse_tx
+                    .send(StreamChunk::Thinking(format!(
+                        "Context at {}% — compacting older messages...",
+                        usage_pct
+                    )))
+                    .await;
+
+                truncate_compact(&mut current_messages, char_budget);
+            }
 
             let new_chars: usize = current_messages.iter().map(|m| m.content.len()).sum();
             tracing::info!("Context compacted: {} -> {} chars ({} messages)", prompt_chars, new_chars, current_messages.len());
+        }
+
+        // Pre-flight validation: if still over model's HARD limit, aggressive compact
+        let prompt_chars: usize = current_messages.iter().map(|m| m.content.len()).sum();
+        let hard_limit_chars = (model_context_tokens as usize) * 4; // full model context in chars
+        if prompt_chars > hard_limit_chars {
+            tracing::warn!(
+                "Context still exceeds model hard limit after compaction: {} chars > {} limit. Aggressive compact.",
+                prompt_chars, hard_limit_chars
+            );
             let _ = sse_tx
-                .send(StreamChunk::Thinking(format!(
-                    "Compacted: {} -> {} chars",
-                    prompt_chars, new_chars
-                )))
+                .send(StreamChunk::Thinking("Context exceeds model limit — aggressive compaction...".to_string()))
                 .await;
+
+            aggressive_compact(&mut current_messages);
+
+            let final_chars: usize = current_messages.iter().map(|m| m.content.len()).sum();
+            if final_chars > hard_limit_chars {
+                // Even aggressive compact wasn't enough — error out gracefully instead of API crash
+                let _ = sse_tx
+                    .send(StreamChunk::Error(format!(
+                        "Context ({} tokens) still exceeds model limit ({} tokens) after compaction. Please start a new conversation.",
+                        final_chars / 4, model_context_tokens
+                    )))
+                    .await;
+                break;
+            }
         }
 
         let prompt_chars: usize = current_messages.iter().map(|m| m.content.len()).sum();
@@ -2520,8 +2594,12 @@ async fn get_agent(
 struct CreateAgentRequest {
     name: String,
     description: String,
-    instructions: String,
-    tools: Vec<String>,
+    /// Agent persona (who the agent IS). Accepts "instructions" for backward compat.
+    #[serde(alias = "instructions")]
+    persona: String,
+    /// Skills this agent uses. Accepts "tools" for backward compat.
+    #[serde(alias = "tools")]
+    skills: Vec<String>,
     #[serde(default)]
     project_path: Option<String>,
     #[serde(default)]
@@ -2536,6 +2614,13 @@ struct CreateAgentRequest {
     max_tokens: Option<u32>,
     #[serde(default = "default_approval_mode_req")]
     approval_mode: String,
+    // Context management
+    #[serde(default)]
+    context_budget_pct: Option<u32>,
+    #[serde(default)]
+    compaction_strategy: Option<String>,
+    #[serde(default)]
+    max_conversation_turns: Option<u32>,
 }
 
 fn default_approval_mode_req() -> String {
@@ -2550,8 +2635,8 @@ async fn create_agent(
         id: uuid::Uuid::new_v4().to_string(),
         name: req.name,
         description: req.description,
-        instructions: req.instructions,
-        tools: req.tools,
+        persona: req.persona,
+        skills: req.skills,
         project_path: req.project_path,
         preferred_provider: req.preferred_provider,
         preferred_model: req.preferred_model,
@@ -2562,6 +2647,9 @@ async fn create_agent(
         temperature: req.temperature,
         max_tokens: req.max_tokens,
         approval_mode: req.approval_mode,
+        context_budget_pct: req.context_budget_pct,
+        compaction_strategy: req.compaction_strategy,
+        max_conversation_turns: req.max_conversation_turns,
     };
 
     let db = state.db.clone();
@@ -2588,8 +2676,8 @@ async fn update_agent(
         id,
         name: req.name,
         description: req.description,
-        instructions: req.instructions,
-        tools: req.tools,
+        persona: req.persona,
+        skills: req.skills,
         project_path: req.project_path,
         preferred_provider: req.preferred_provider,
         preferred_model: req.preferred_model,
@@ -2600,6 +2688,9 @@ async fn update_agent(
         temperature: req.temperature,
         max_tokens: req.max_tokens,
         approval_mode: req.approval_mode,
+        context_budget_pct: req.context_budget_pct,
+        compaction_strategy: req.compaction_strategy,
+        max_conversation_turns: req.max_conversation_turns,
     };
 
     let db = state.db.clone();
@@ -2635,60 +2726,285 @@ async fn delete_agent(
 }
 
 // ---------------------------------------------------------------------------
+// Skills API
+// ---------------------------------------------------------------------------
+
+async fn list_skills(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let skills: Vec<crate::skills::SkillSummary> = state
+        .skill_registry
+        .list()
+        .iter()
+        .map(|s| crate::skills::SkillSummary::from(*s))
+        .collect();
+
+    Json(serde_json::json!(skills))
+}
+
+async fn get_skill(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.skill_registry.get(&name) {
+        Some(skill) => {
+            let content = state.skill_registry.load_skill_content(&name);
+            Json(serde_json::json!({
+                "name": skill.name,
+                "description": skill.description,
+                "allowed_tools": skill.allowed_tools,
+                "source": skill.source.to_string(),
+                "compatibility": skill.compatibility,
+                "license": skill.license,
+                "path": skill.skill_path.display().to_string(),
+                "content": content,
+            }))
+            .into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Skill '{}' not found", name)})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Context Compaction — keep conversation within context budget
 // ---------------------------------------------------------------------------
 
-/// Compact older messages to fit within the context budget.
-/// Preserves: system prompt (first message), last N messages.
-/// Compacts: older tool results and assistant messages by truncating/summarizing.
-fn compact_context(messages: &mut Vec<ChatMessage>, target_chars: usize) {
+// ---------------------------------------------------------------------------
+// Context Management — model-aware compaction with pre-flight validation
+// ---------------------------------------------------------------------------
+
+/// Get the context window size (in tokens) for a given model.
+/// Uses known provider defaults. User-configured context windows from user_models
+/// table can override these when queried via the async path.
+fn get_model_context_window(provider_id: &str, model_id: &str) -> u32 {
+    match provider_id {
+        "anthropic" => {
+            if model_id.contains("sonnet-4-6") || model_id.contains("1m") {
+                1_000_000
+            } else {
+                200_000 // claude-sonnet-4, claude-opus-4, claude-haiku-4.5
+            }
+        }
+        "xai" => 131_072,   // grok models
+        "openai" => {
+            if model_id.contains("gpt-4o") {
+                128_000
+            } else if model_id.contains("o1") || model_id.contains("o3") {
+                200_000
+            } else {
+                128_000
+            }
+        }
+        "google" => 1_000_000, // gemini models
+        "ollama" => 8_192,     // conservative default for local models
+        _ => 128_000,          // safe fallback
+    }
+}
+
+/// Truncation-based compaction (fast, no LLM call).
+/// Preserves system prompt + last N messages, truncates older content.
+fn truncate_compact(messages: &mut Vec<ChatMessage>, target_chars: usize) {
     if messages.len() <= 4 {
-        return; // Nothing to compact
+        return;
     }
 
-    let preserve_last = 5.min(messages.len() - 1); // Keep last 5 messages + system
+    let preserve_last = 5.min(messages.len() - 1);
     let compact_end = messages.len() - preserve_last;
 
-    // Compact messages from index 1 (skip system) to compact_end
+    // Pass 1: Truncate long tool results and assistant messages
     for i in 1..compact_end {
         let msg = &mut messages[i];
         let content_len = msg.content.len();
 
         if msg.role == "tool" && content_len > 500 {
-            // Truncate tool results to first 300 chars + summary
-            let preview = if content_len > 300 {
-                format!(
-                    "{}\n\n[... compacted: {} chars total, showing first 300]",
-                    &msg.content[..300],
-                    content_len
-                )
-            } else {
-                msg.content.clone()
-            };
-            msg.content = preview;
-        } else if msg.role == "assistant" && content_len > 1000 {
-            // Keep assistant messages but trim very long ones
-            let preview = format!(
-                "{}\n\n[... compacted: {} chars total]",
-                &msg.content[..800],
+            let safe_end = msg.content.char_indices().nth(300).map(|(i, _)| i).unwrap_or(300.min(content_len));
+            msg.content = format!(
+                "{}\n\n[... compacted: {} chars total, showing first 300]",
+                &msg.content[..safe_end],
                 content_len
             );
-            msg.content = preview;
+        } else if msg.role == "assistant" && content_len > 1000 {
+            let safe_end = msg.content.char_indices().nth(800).map(|(i, _)| i).unwrap_or(800.min(content_len));
+            msg.content = format!(
+                "{}\n\n[... compacted: {} chars total]",
+                &msg.content[..safe_end],
+                content_len
+            );
         }
     }
 
-    // If still over budget after truncation, drop oldest tool result pairs
+    // Pass 2: If still over budget, replace oldest tool results with placeholders
     let mut current_chars: usize = messages.iter().map(|m| m.content.len()).sum();
     if current_chars > target_chars && messages.len() > 6 {
-        // Remove oldest tool results (keep system + at least preserved messages)
         let mut i = 1;
         while current_chars > target_chars && i < messages.len() - preserve_last {
             if messages[i].role == "tool" {
                 current_chars -= messages[i].content.len();
-                messages[i].content = format!("[compacted — tool result removed to fit context]");
+                messages[i].content = "[compacted — tool result removed to fit context]".to_string();
+                current_chars += messages[i].content.len();
             }
             i += 1;
         }
+    }
+
+    // Pass 3: If STILL over budget, remove entire old message blocks (user+assistant pairs)
+    let mut current_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+    if current_chars > target_chars && messages.len() > 6 {
+        let mut i = 1;
+        while current_chars > target_chars && i < messages.len() - preserve_last {
+            current_chars -= messages[i].content.len();
+            messages[i].content = "[compacted]".to_string();
+            current_chars += 11;
+            i += 1;
+        }
+    }
+}
+
+/// Summarize-based compaction — uses a fast LLM to summarize older messages.
+/// Preserves key decisions, file paths, and context while dramatically reducing tokens.
+async fn summarize_compact(
+    messages: &mut Vec<ChatMessage>,
+    state: &Arc<AppState>,
+    provider_str: &str,
+) {
+    if messages.len() <= 4 {
+        return;
+    }
+
+    let preserve_last = 5.min(messages.len() - 1);
+    let compact_end = messages.len() - preserve_last;
+
+    // Build the conversation text to summarize (skip system prompt at index 0)
+    let mut conversation_text = String::new();
+    for i in 1..compact_end {
+        let msg = &messages[i];
+        let role = &msg.role;
+        // Truncate very large individual messages for the summary prompt itself
+        let content = if msg.content.len() > 2000 {
+            format!("{}... [truncated, {} chars total]", &msg.content[..msg.content.char_indices().nth(2000).map(|(i,_)|i).unwrap_or(2000)], msg.content.len())
+        } else {
+            msg.content.clone()
+        };
+        conversation_text.push_str(&format!("[{}]: {}\n\n", role, content));
+    }
+
+    if conversation_text.is_empty() {
+        return;
+    }
+
+    // Pick a fast/cheap model for summarization based on provider
+    let summary_model = match provider_str {
+        "anthropic" => "claude-haiku-4-5-20251001",
+        "xai" => "grok-3-mini-fast-beta",
+        "openai" => "gpt-4o-mini",
+        _ => {
+            // Fallback to truncate if we can't determine a cheap model
+            tracing::info!("No cheap model available for provider '{}', falling back to truncate", provider_str);
+            truncate_compact(messages, messages.iter().map(|m| m.content.len()).sum::<usize>() / 2);
+            return;
+        }
+    };
+
+    let summary_prompt = format!(
+        "Summarize this conversation history into a concise recap (max 500 words).\n\
+         Preserve: key decisions made, file paths mentioned, tool results and outcomes, user preferences, important context.\n\
+         Drop: verbose tool output, repeated attempts, intermediate steps, raw file contents.\n\
+         Format as a clear, structured summary.\n\n\
+         ---\n{}\n---",
+        conversation_text
+    );
+
+    // Make the summarization LLM call
+    let provider = match create_provider(state, provider_str).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Failed to create provider for summarization: {}, falling back to truncate", e);
+            truncate_compact(messages, messages.iter().map(|m| m.content.len()).sum::<usize>() / 2);
+            return;
+        }
+    };
+
+    let summary_messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: summary_prompt,
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    match provider.chat(summary_model, &summary_messages, None).await {
+        Ok(response) => {
+            let summary = response.content;
+            tracing::info!("Context summarized: {} messages → {} char summary", compact_end - 1, summary.len());
+
+            // Replace old messages with the summary
+            messages.drain(1..compact_end);
+            messages.insert(1, ChatMessage {
+                role: "system".to_string(),
+                content: format!("[Context Summary — earlier conversation summarized to fit context]\n\n{}", summary),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+
+            // Clean up orphaned tool_result messages in the preserved set.
+            // After draining, some preserved "tool" messages may reference tool_call_ids
+            // whose corresponding "assistant" message (with tool_calls) was in the drained set.
+            // The Anthropic API requires every tool_result to have a matching tool_use block.
+            let mut tool_call_ids_in_assistants: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for msg in messages.iter() {
+                if let Some(ref tcs) = msg.tool_calls {
+                    for tc in tcs {
+                        tool_call_ids_in_assistants.insert(tc.id.clone());
+                    }
+                }
+            }
+            messages.retain(|msg| {
+                if msg.role == "tool" {
+                    if let Some(ref tcid) = msg.tool_call_id {
+                        return tool_call_ids_in_assistants.contains(tcid);
+                    }
+                }
+                true // keep non-tool messages
+            });
+
+            // Also strip tool_calls from assistant messages if their tool_results were drained
+            let tool_result_ids: std::collections::HashSet<String> = messages.iter()
+                .filter(|m| m.role == "tool")
+                .filter_map(|m| m.tool_call_id.clone())
+                .collect();
+            for msg in messages.iter_mut() {
+                if let Some(ref mut tcs) = msg.tool_calls {
+                    tcs.retain(|tc| tool_result_ids.contains(&tc.id));
+                    if tcs.is_empty() {
+                        msg.tool_calls = None;
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Summarization LLM call failed: {}, falling back to truncate", e);
+            truncate_compact(messages, messages.iter().map(|m| m.content.len()).sum::<usize>() / 2);
+        }
+    }
+}
+
+/// Aggressive fallback compaction — keeps only system + last 3 messages.
+/// Used when normal compaction isn't enough to fit the model's context window.
+fn aggressive_compact(messages: &mut Vec<ChatMessage>) {
+    let keep_last = 3.min(messages.len().saturating_sub(1));
+    let compact_end = messages.len() - keep_last;
+    if compact_end > 1 {
+        let summary = "[Earlier conversation compacted to fit context window. Key context may have been lost. Consider starting a new conversation for complex tasks.]".to_string();
+        messages.drain(1..compact_end);
+        messages.insert(1, ChatMessage {
+            role: "system".to_string(),
+            content: summary,
+            tool_calls: None,
+            tool_call_id: None,
+        });
     }
 }
 

@@ -62,7 +62,7 @@ pub struct ToolRuntime {
 
 impl ToolRuntime {
     /// Create a new ToolRuntime, scanning the filesystem for tools
-    pub fn new(data_dir: &Path, browser_bridge: Arc<BrowserBridge>) -> anyhow::Result<Self> {
+    pub fn new(data_dir: &Path, browser_bridge: Arc<BrowserBridge>, skill_registry: Arc<crate::skills::SkillRegistry>) -> anyhow::Result<Self> {
         let tools_dir = data_dir.join("tools");
         let sandbox_dir = data_dir.join("sandbox");
         let packages_dir = data_dir.join("packages");
@@ -75,7 +75,7 @@ impl ToolRuntime {
         std::fs::create_dir_all(packages_dir.join("node"))?;
 
         let mut runtime = Self {
-            native_registry: ToolRegistry::new(browser_bridge),
+            native_registry: ToolRegistry::new(browser_bridge, skill_registry),
             custom_tools: HashMap::new(),
             connections: HashMap::new(),
             marketplace_packages: Vec::new(),

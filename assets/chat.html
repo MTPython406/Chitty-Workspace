@@ -603,6 +603,27 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 }
 .tool-call-body.open { display: block; }
 
+/* Artifact cards (rendered in chat when agent produces <artifact> output) */
+.artifact-card { display:flex; align-items:center; gap:10px; padding:10px 14px; margin:8px 0; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; cursor:pointer; transition:border-color 0.15s,background 0.15s; }
+.artifact-card:hover { border-color:var(--accent); background:var(--bg-card-hover); }
+.artifact-icon { font-size:18px; flex-shrink:0; }
+.artifact-title { font-size:13px; font-weight:600; color:var(--text-primary); flex:1; }
+.artifact-badge { font-size:10px; padding:2px 8px; border-radius:10px; background:rgba(59,130,246,0.1); color:var(--accent); font-weight:500; text-transform:uppercase; letter-spacing:0.3px; }
+
+/* Context usage bar (thin progress indicator at top of chat panel) */
+.context-bar { height:2px; background:var(--border); width:100%; flex-shrink:0; }
+.context-bar-fill { height:2px; background:var(--accent); transition:width 0.3s ease; min-width:0; }
+.context-bar-fill.warning { background:#e8a84c; }
+.context-bar-fill.danger { background:var(--danger); }
+
+/* Context token badge (next to model selector) */
+.context-token-badge { display:none; font-size:10px; padding:2px 8px; border-radius:10px; cursor:pointer; font-family:var(--font-mono); letter-spacing:-0.3px; user-select:none; transition:background 0.15s; }
+.context-token-badge.visible { display:inline-block; }
+.context-token-badge.normal { background:rgba(59,130,246,0.1); color:var(--accent); }
+.context-token-badge.warning { background:rgba(232,168,76,0.15); color:#e8a84c; }
+.context-token-badge.danger { background:rgba(204,68,68,0.15); color:var(--danger); }
+.context-token-badge:hover { filter:brightness(1.3); }
+
 /* ── Action Approval Cards ──────────────────────────────────── */
 .approval-card {
   margin: 8px 0; border: 1px solid var(--accent); border-radius: 8px;
@@ -2060,6 +2081,28 @@ const App = {
                 this.appendToolBlockInPanel(panelId, cardHtml);
               }
 
+            } else if (evType === 'context_info') {
+              // Update context usage bar
+              const pct = parsed.percentage || 0;
+              const bar = document.getElementById(`context-bar-${panelId}`);
+              if (bar) {
+                bar.style.width = pct + '%';
+                bar.className = 'context-bar-fill' + (pct > 90 ? ' danger' : pct > 75 ? ' warning' : '');
+              }
+              // Update token badge next to model selector
+              const badge = document.querySelector(`[data-panel-id="${panelId}"] .context-token-badge`);
+              if (badge) {
+                const used = parsed.used_tokens || 0;
+                const max = parsed.max_tokens || 0;
+                const label = used >= 1000 ? (used/1000).toFixed(0) + 'K' : used;
+                const maxLabel = max >= 1000 ? (max/1000).toFixed(0) + 'K' : max;
+                badge.textContent = `${label} / ${maxLabel}`;
+                badge.className = 'context-token-badge visible ' + (pct > 90 ? 'danger' : pct > 75 ? 'warning' : 'normal');
+                badge.title = `${pct}% context used (${used.toLocaleString()} / ${max.toLocaleString()} tokens). Click to compact.`;
+              }
+              if (pct > 80) {
+                this.activityLog('info', `Context: ${pct}% of ${(parsed.max_tokens||0).toLocaleString()} token limit`);
+              }
             } else if (evType === 'error') {
               this.activityLog('error', `<span class="hl">${esc(parsed.error || 'Unknown error')}</span>`);
               panel.messages.push({ role: 'system', content: 'Error: ' + (parsed.error || 'Unknown') });
@@ -2209,6 +2252,119 @@ const App = {
     if (dynamicView) dynamicView.style.display = 'none';
     // Return to Activity tab
     this.switchActionTab('activity');
+  },
+
+  /* ── Artifact Preview ────────────────────────────────────────── */
+  showArtifact(id) {
+    const artifact = _artifacts[id];
+    if (!artifact) return;
+
+    let previewHTML = '';
+    let codeContent = esc(artifact.content);
+
+    if (artifact.type === 'html') {
+      // Sandboxed iframe for HTML artifacts
+      previewHTML = `
+        <div id="artifact-preview-area" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <iframe id="artifact-iframe" sandbox="allow-scripts" srcdoc="${esc(artifact.content)}"
+            style="flex:1;border:none;background:#fff;border-radius:0 0 6px 6px;min-height:300px;"></iframe>
+        </div>`;
+    } else if (artifact.type === 'svg') {
+      previewHTML = `<div id="artifact-preview-area" style="flex:1;overflow:auto;padding:16px;display:flex;align-items:center;justify-content:center;background:var(--bg-page);">${artifact.content}</div>`;
+    } else if (artifact.type === 'markdown') {
+      previewHTML = `<div id="artifact-preview-area" style="flex:1;overflow:auto;padding:16px;line-height:1.65;font-size:14px;">${formatContent(artifact.content)}</div>`;
+    } else {
+      // Code or unknown — show as syntax-highlighted code
+      previewHTML = `<div id="artifact-preview-area" style="flex:1;overflow:auto;"><pre style="margin:0;padding:16px;font-size:13px;line-height:1.5;"><code>${codeContent}</code></pre></div>`;
+    }
+
+    const viewHTML = `
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+          <span style="font-size:12px;font-weight:600;color:var(--text-primary);flex:1;">${esc(artifact.title)}</span>
+          <button onclick="app.toggleArtifactView('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;" id="artifact-toggle-btn">Code</button>
+          <button onclick="app.copyArtifact('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Copy</button>
+          <button onclick="app.downloadArtifact('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Download</button>
+        </div>
+        <div id="artifact-content-area" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          ${previewHTML}
+          <div id="artifact-code-area" style="display:none;flex:1;overflow:auto;"><pre style="margin:0;padding:16px;font-size:13px;line-height:1.5;"><code>${codeContent}</code></pre></div>
+        </div>
+        <div style="display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--border);flex-shrink:0;">
+          <input id="artifact-iterate-input" placeholder="Describe changes..." style="flex:1;padding:6px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;" />
+          <button onclick="app.iterateArtifact('${id}')" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Update</button>
+        </div>
+      </div>`;
+
+    this.openDynamicView('\u{1F4E6}', artifact.title, viewHTML);
+  },
+
+  toggleArtifactView(id) {
+    const preview = document.getElementById('artifact-preview-area');
+    const code = document.getElementById('artifact-code-area');
+    const btn = document.getElementById('artifact-toggle-btn');
+    if (!preview || !code) return;
+    if (preview.style.display === 'none') {
+      preview.style.display = 'flex';
+      code.style.display = 'none';
+      btn.textContent = 'Code';
+    } else {
+      preview.style.display = 'none';
+      code.style.display = 'flex';
+      btn.textContent = 'Preview';
+    }
+  },
+
+  copyArtifact(id) {
+    const artifact = _artifacts[id];
+    if (!artifact) return;
+    navigator.clipboard.writeText(artifact.content).then(() => {
+      // Brief visual feedback
+      const btn = event.target;
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = orig, 1500);
+    });
+  },
+
+  downloadArtifact(id) {
+    const artifact = _artifacts[id];
+    if (!artifact) return;
+    const ext = artifact.type === 'html' ? '.html' : artifact.type === 'svg' ? '.svg' : artifact.type === 'markdown' ? '.md' : '.txt';
+    const filename = artifact.title.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase() + ext;
+    const blob = new Blob([artifact.content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  manualCompact(panelId) {
+    const panel = this.panels ? Object.values(this.panels).find(p => p.id === panelId) : null;
+    if (!panel || !panel.conversationId) {
+      return alert('No active conversation to compact.');
+    }
+    // Send a system-level message that triggers the agent to summarize
+    panel.messages.push({ role: 'user', content: '/compact' });
+    this.renderPanel(panelId);
+    // Send as a normal message — the agent will see this and the context management system handles it
+    this.sendMessageInPanel(panelId, 'Summarize the conversation so far into a concise recap. Keep key decisions, file paths, and outcomes. Drop verbose tool output.');
+  },
+
+  iterateArtifact(id) {
+    const artifact = _artifacts[id];
+    if (!artifact) return;
+    const input = document.getElementById('artifact-iterate-input');
+    const changeRequest = input?.value?.trim();
+    if (!changeRequest) return;
+    input.value = '';
+
+    // Find the focused panel and send the iterate request as a chat message
+    const focusedPanel = this.getFocusedPanel();
+    if (!focusedPanel) return;
+
+    const msg = `Update the artifact "${artifact.title}" (type: ${artifact.type}): ${changeRequest}\n\nProduce the full updated artifact wrapped in <artifact type="${artifact.type}" title="${artifact.title}"> tags.`;
+    this.sendMessageInPanel(focusedPanel.id, msg);
   },
 
   // Open browser component dynamically
@@ -2552,6 +2708,7 @@ const App = {
           <input class="panel-project-path" type="text" placeholder="e.g. C:\\my_project" value="${esc(panel.projectPath || '')}" />
         </div>
       </div>
+      <div class="context-bar"><div class="context-bar-fill" id="context-bar-${panel.id}" style="width:0%"></div></div>
       <div class="panel-body">${panel.messages.length ? this.messagesHTML(panel) : this.welcomeHTML(panel)}</div>
       <div class="panel-input">
         <div class="input-row">
@@ -2566,6 +2723,7 @@ const App = {
             </select>
           </div>
           <div class="input-footer-right">
+            <span class="context-token-badge" title="Click to compact context" onclick="app.manualCompact('${panel.id}')"></span>
             <select class="panel-model-select input-footer-select" title="Select Model">
               ${this.modelOptionsHTML()}
             </select>
@@ -2745,11 +2903,28 @@ const App = {
       case '/schedules':
         this.showSchedulesList(panelId);
         break;
+      case '/skills':
+        this.showSkillsList(panelId);
+        break;
+      case '/skill':
+        if (args) {
+          // Force-activate a skill by sending it as a chat message
+          panel.messages.push({ role: 'assistant', content: `Loading skill: **${args}**...` });
+          this.renderPanel(panelId);
+          // Send as a regular message that triggers load_skill
+          this.sendMessageInPanel(panelId, `Load and activate the skill "${args}" using the load_skill tool.`);
+        } else {
+          panel.messages.push({ role: 'system', content: 'Usage: /skill <skill-name>. Type /skills to see available skills.' });
+          this.renderPanel(panelId);
+        }
+        break;
       case '/help':
         panel.messages.push({ role: 'assistant', content:
           '## Available Commands\n\n' +
           '| Command | Description |\n' +
           '|---------|-------------|\n' +
+          '| `/skills` | List available skills |\n' +
+          '| `/skill <name>` | Load a skill into the conversation |\n' +
           '| `/schedule` | Create a new scheduled task |\n' +
           '| `/schedules` | List all scheduled tasks |\n' +
           '| `/help` | Show this help message |\n\n' +
@@ -2761,6 +2936,30 @@ const App = {
         panel.messages.push({ role: 'system', content: `Unknown command: ${cmd}. Type /help for available commands.` });
         this.renderPanel(panelId);
     }
+  },
+
+  async showSkillsList(panelId) {
+    const panel = this.getPanel(panelId);
+    if (!panel) return;
+    try {
+      const resp = await fetch('/api/skills');
+      if (!resp.ok) throw new Error('Failed to load skills');
+      const skills = await resp.json();
+      if (!skills.length) {
+        panel.messages.push({ role: 'assistant', content: 'No skills installed yet.\n\nAsk me to create a custom skill, or drop a SKILL.md folder into `~/.chitty-workspace/skills/`.' });
+      } else {
+        let msg = '## Available Skills\n\n';
+        for (const s of skills) {
+          const tools = s.allowed_tools?.length ? s.allowed_tools.join(', ') : 'all';
+          msg += `**${s.name}** (${s.source})\n${s.description}\nTools: \`${tools}\`\n\n`;
+        }
+        msg += 'Use `/skill <name>` to load a skill, or just describe your task and I\'ll pick the right one.';
+        panel.messages.push({ role: 'assistant', content: msg });
+      }
+    } catch (e) {
+      panel.messages.push({ role: 'system', content: 'Failed to load skills: ' + e.message });
+    }
+    this.renderPanel(panelId);
   },
 
   showScheduleBuilder(panelId, prefillTask) {
@@ -3899,40 +4098,43 @@ const App = {
     }
     const container = document.getElementById('agent-form-container');
 
-    // Group tools by category
-    const native = this.state.availableTools.filter(t => t.category === 'native');
-    const integration = this.state.availableTools.filter(t => t.category === 'integration');
-    const marketplace = this.state.availableTools.filter(t => t.category === 'marketplace');
+    // Load available skills from API
+    let availableSkills = [];
+    try {
+      const skillResp = await fetch('/api/skills');
+      if (skillResp.ok) availableSkills = await skillResp.json();
+    } catch (e) { console.error('Failed to load skills:', e); }
 
-    const toolCheckbox = (t) => {
-      const checked = existing ? (existing.tools || []).includes(t.name) : false;
-      return `<label class="tool-checkbox${checked ? ' checked' : ''}">
-        <input type="checkbox" value="${esc(t.name)}" ${checked ? 'checked' : ''} />
-        ${esc(t.display_name || t.name)}
+    // Build skill checkboxes (grouped by source)
+    const agentSkills = existing?.skills || existing?.tools || [];
+    const skillCheckbox = (s) => {
+      const checked = agentSkills.includes(s.name);
+      return `<label class="tool-checkbox${checked ? ' checked' : ''}" title="${esc(s.description)}">
+        <input type="checkbox" value="${esc(s.name)}" ${checked ? 'checked' : ''} />
+        ${esc(s.name)}
       </label>`;
     };
     const separator = (label) => `<div style="width:100%;font-size:11px;color:var(--text-muted);font-weight:600;margin:8px 0 4px;padding-top:8px;border-top:1px solid var(--border);">\u2500\u2500 ${esc(label)} \u2500\u2500</div>`;
 
-    let toolChecks = '';
-    for (const t of native) toolChecks += toolCheckbox(t);
-    if (integration.length) {
-      toolChecks += separator('Google Integration');
-      for (const t of integration) toolChecks += toolCheckbox(t);
+    let skillChecks = '';
+    const builtIn = availableSkills.filter(s => s.source.includes('built-in') || s.source.includes('marketplace'));
+    const project = availableSkills.filter(s => s.source === 'project');
+    const user = availableSkills.filter(s => s.source === 'user');
+
+    if (builtIn.length) {
+      for (const s of builtIn) skillChecks += skillCheckbox(s);
     }
-    if (marketplace.length) {
-      // Group marketplace tools by vendor
-      const byVendor = {};
-      for (const t of marketplace) {
-        const v = t.vendor || 'other';
-        if (!byVendor[v]) byVendor[v] = [];
-        byVendor[v].push(t);
-      }
-      for (const [vendor, tools] of Object.entries(byVendor)) {
-        const pkg = this.state.availableTools.find(t => t.vendor === vendor);
-        toolChecks += separator(vendor.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
-        for (const t of tools) toolChecks += toolCheckbox(t);
-      }
+    if (project.length) {
+      skillChecks += separator('Project Skills');
+      for (const s of project) skillChecks += skillCheckbox(s);
     }
+    if (user.length) {
+      skillChecks += separator('Custom Skills');
+      for (const s of user) skillChecks += skillCheckbox(s);
+    }
+
+    // Get existing persona (support both old "instructions" and new "persona" field)
+    const existingPersona = existing?.persona || existing?.instructions || '';
 
     container.innerHTML = `<div class="agent-form">
       <div class="model-section-title">${existing ? 'Edit Agent' : 'Create Agent'}</div>
@@ -3940,12 +4142,12 @@ const App = {
       <input id="sf-name" value="${esc(existing?.name || '')}" placeholder="e.g. Code Assistant" />
       <label>Description</label>
       <input id="sf-desc" value="${esc(existing?.description || '')}" placeholder="Short description of what this agent does" />
-      <label>Instructions (System Prompt)</label>
-      <textarea id="sf-instructions" placeholder="Describe the agent's role and task. You do NOT need to describe how to use tools.">${esc(existing?.instructions || '')}</textarea>
-      <div class="hint">Tool usage instructions are automatically included from the tools themselves.</div>
-      <label>Tools</label>
-      <div class="tool-checkboxes" id="sf-tools">${toolChecks || '<span style="font-size:12px;color:var(--text-muted);">No tools registered</span>'}</div>
-      <div class="hint">Leave all unchecked to give access to all tools.</div>
+      <label>Persona</label>
+      <textarea id="sf-persona" placeholder="Who is this agent? (e.g. 'You are a senior frontend developer focused on clean, accessible UI.')">${esc(existingPersona)}</textarea>
+      <div class="hint">Keep it short — just who the agent IS. Domain expertise comes from skills.</div>
+      <label>Skills</label>
+      <div class="tool-checkboxes" id="sf-skills">${skillChecks || '<span style="font-size:12px;color:var(--text-muted);">No skills installed. Ask Chitty to create one, or drop a SKILL.md into ~/.chitty-workspace/skills/</span>'}</div>
+      <div class="hint">Each skill brings its own tools and instructions. Leave unchecked for all skills.</div>
       <label>Default Provider &amp; Model</label>
       <div class="exec-config">
         <div class="config-field">
@@ -3986,6 +4188,18 @@ const App = {
         <div class="config-field"><label>Temperature</label><input type="number" id="sf-temp" value="${existing?.temperature ?? ''}" min="0" max="2" step="0.1" placeholder="default" /></div>
         <div class="config-field"><label>Max Tokens</label><input type="number" id="sf-max-tokens" value="${existing?.max_tokens ?? ''}" placeholder="default" /></div>
       </div>
+      <label>Context Management</label>
+      <div class="exec-config">
+        <div class="config-field"><label>Budget %</label><input type="number" id="sf-context-budget" value="${existing?.context_budget_pct ?? 75}" min="25" max="95" title="Percentage of model context window to use before compacting" /></div>
+        <div class="config-field"><label>Compaction</label>
+          <select id="sf-compaction-strategy" style="width:100%;padding:6px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;">
+            <option value="truncate" ${(!existing?.compaction_strategy || existing?.compaction_strategy === 'truncate') ? 'selected' : ''}>Truncate (fast)</option>
+            <option value="summarize" ${existing?.compaction_strategy === 'summarize' ? 'selected' : ''}>Summarize (LLM)</option>
+          </select>
+        </div>
+        <div class="config-field"><label>Max Turns</label><input type="number" id="sf-max-turns" value="${existing?.max_conversation_turns ?? ''}" placeholder="unlimited" min="1" max="500" /></div>
+      </div>
+      <div class="hint">Budget: % of model context to use before compacting. Truncate is fast; Summarize uses a cheap LLM call for better quality.</div>
       <div class="agent-form-actions">
         <button class="agent-save-btn" id="sf-save">${existing ? 'Update' : 'Create'}</button>
         <button class="agent-cancel-btn" id="sf-cancel">Cancel</button>
@@ -4022,14 +4236,14 @@ const App = {
       const name = document.getElementById('sf-name').value.trim();
       if (!name) return alert('Name is required');
 
-      const selectedTools = [];
-      container.querySelectorAll('.tool-checkbox input:checked').forEach(cb => selectedTools.push(cb.value));
+      const selectedSkills = [];
+      container.querySelectorAll('#sf-skills input:checked').forEach(cb => selectedSkills.push(cb.value));
 
       const body = {
         name,
         description: document.getElementById('sf-desc').value.trim(),
-        instructions: document.getElementById('sf-instructions').value,
-        tools: selectedTools,
+        persona: document.getElementById('sf-persona').value,
+        skills: selectedSkills,
         project_path: document.getElementById('sf-project-path').value.trim() || null,
         preferred_provider: document.getElementById('sf-provider').value || null,
         preferred_model: document.getElementById('sf-model').value || null,
@@ -4037,6 +4251,9 @@ const App = {
         max_iterations: parseInt(document.getElementById('sf-max-iter').value) || null,
         temperature: parseFloat(document.getElementById('sf-temp').value) || null,
         max_tokens: parseInt(document.getElementById('sf-max-tokens').value) || null,
+        context_budget_pct: parseInt(document.getElementById('sf-context-budget').value) || null,
+        compaction_strategy: document.getElementById('sf-compaction-strategy').value || null,
+        max_conversation_turns: parseInt(document.getElementById('sf-max-turns').value) || null,
       };
 
       const url = existing ? `/api/agents/${editId}` : '/api/agents';
@@ -5099,13 +5316,43 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// Artifact storage (in-memory, per session)
+const _artifacts = {};
+let _artifactCounter = 0;
+
 function formatContent(text) {
   if (!text) return '';
-  let h = esc(text);
+
+  // Extract <artifact> blocks BEFORE escaping (they contain raw HTML/code)
+  const artifactPlaceholders = [];
+  let processed = text.replace(/<artifact\s+type="([^"]+)"\s+title="([^"]+)">([\s\S]*?)<\/artifact>/g,
+    (match, type, title, content) => {
+      const id = 'artifact-' + (++_artifactCounter);
+      _artifacts[id] = { id, type, title, content: content.trim() };
+      const placeholder = `__ARTIFACT_${artifactPlaceholders.length}__`;
+      const icon = type === 'html' ? '\u{1F310}' : type === 'code' ? '\u{1F4BB}' : type === 'svg' ? '\u{1F3A8}' : type === 'markdown' ? '\u{1F4C4}' : '\u{1F4E6}';
+      artifactPlaceholders.push(
+        `<div class="artifact-card" onclick="app.showArtifact('${id}')">` +
+        `<span class="artifact-icon">${icon}</span>` +
+        `<span class="artifact-title">${esc(title)}</span>` +
+        `<span class="artifact-badge">${esc(type)}</span>` +
+        `</div>`
+      );
+      return placeholder;
+    }
+  );
+
+  let h = esc(processed);
   h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, l, c) => `<pre><code>${c}</code></pre>`);
   h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
   h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   h = h.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+
+  // Restore artifact cards (they were placeholder'd before escaping)
+  for (let i = 0; i < artifactPlaceholders.length; i++) {
+    h = h.replace(`__ARTIFACT_${i}__`, artifactPlaceholders[i]);
+  }
+
   return h;
 }
 

@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 9;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -41,6 +41,12 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if current < 7 {
         migrate_v7(conn)?;
+    }
+    if current < 8 {
+        migrate_v8(conn)?;
+    }
+    if current < 9 {
+        migrate_v9(conn)?;
     }
 
     conn.execute(
@@ -408,5 +414,35 @@ fn migrate_v7(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("Database migrated to v7 (scheduled tasks)");
+    Ok(())
+}
+
+/// V8: Agents — rename instructions→persona, tools→skills
+///
+/// Agents now select skills (composable capability packages) instead of
+/// individual tools. Skills bundle instructions + tool requirements together.
+/// The "persona" field replaces "instructions" — it's just who the agent IS,
+/// not what it knows (domain expertise lives in skills).
+fn migrate_v8(conn: &Connection) -> Result<()> {
+    // SQLite 3.25.0+ supports ALTER TABLE RENAME COLUMN
+    // rusqlite bundles SQLite 3.45+, so this is safe
+    conn.execute_batch(
+        "ALTER TABLE agents RENAME COLUMN instructions TO persona;
+         ALTER TABLE agents RENAME COLUMN tools TO skills;",
+    )?;
+
+    tracing::info!("Database migrated to v8 (agents: instructions→persona, tools→skills)");
+    Ok(())
+}
+
+/// V9: Agent context management configuration
+fn migrate_v9(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "ALTER TABLE agents ADD COLUMN context_budget_pct INTEGER;
+         ALTER TABLE agents ADD COLUMN compaction_strategy TEXT;
+         ALTER TABLE agents ADD COLUMN max_conversation_turns INTEGER;",
+    )?;
+
+    tracing::info!("Database migrated to v9 (agent context management config)");
     Ok(())
 }

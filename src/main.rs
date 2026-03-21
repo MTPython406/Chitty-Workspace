@@ -8,6 +8,7 @@ mod providers;
 mod scheduler;
 mod server;
 mod agents;
+mod skills;
 mod storage;
 mod tools;
 mod ui;
@@ -107,14 +108,17 @@ async fn main() -> anyhow::Result<()> {
             // Browser bridge — connects to the Chitty Browser Extension via WebSocket
             let browser_bridge = std::sync::Arc::new(server::BrowserBridge::new());
 
+            // Create skill registry (discovers SKILL.md files from all paths)
+            let skill_registry = std::sync::Arc::new(skills::SkillRegistry::new(&data_dir, None));
+
             // Create tool registry (native tools) and runtime (native + custom + connections)
-            let tool_registry = std::sync::Arc::new(tools::ToolRegistry::new(browser_bridge.clone()));
-            let tool_runtime = match tools::ToolRuntime::new(&data_dir, browser_bridge.clone()) {
+            let tool_registry = std::sync::Arc::new(tools::ToolRegistry::new(browser_bridge.clone(), skill_registry.clone()));
+            let tool_runtime = match tools::ToolRuntime::new(&data_dir, browser_bridge.clone(), skill_registry.clone()) {
                 Ok(rt) => std::sync::Arc::new(tokio::sync::RwLock::new(rt)),
                 Err(e) => {
                     tracing::error!("Failed to initialize tool runtime: {}", e);
                     std::sync::Arc::new(tokio::sync::RwLock::new(
-                        tools::ToolRuntime::new(&data_dir, browser_bridge.clone()).expect("Tool runtime init failed")
+                        tools::ToolRuntime::new(&data_dir, browser_bridge.clone(), skill_registry.clone()).expect("Tool runtime init failed")
                     ))
                 }
             };
@@ -131,8 +135,9 @@ async fn main() -> anyhow::Result<()> {
             let server_tools = tool_registry.clone();
             let server_runtime = tool_runtime.clone();
             let server_bridge = browser_bridge.clone();
+            let server_skills = skill_registry.clone();
             tokio::spawn(async move {
-                if let Err(e) = server::start(server_db, server_tools, server_runtime, server_bridge, port).await {
+                if let Err(e) = server::start(server_db, server_tools, server_runtime, server_bridge, server_skills, port).await {
                     tracing::error!("Server error: {}", e);
                 }
             });
@@ -337,16 +342,18 @@ async fn main() -> anyhow::Result<()> {
             let data_dir = storage::default_data_dir();
             let db = storage::Database::new(&data_dir)?;
             let sb_bridge = std::sync::Arc::new(server::BrowserBridge::new());
-            let tool_registry = std::sync::Arc::new(tools::ToolRegistry::new(sb_bridge.clone()));
+            let sb_skills = std::sync::Arc::new(skills::SkillRegistry::new(&data_dir, None));
+            let tool_registry = std::sync::Arc::new(tools::ToolRegistry::new(sb_bridge.clone(), sb_skills.clone()));
             let tool_runtime = std::sync::Arc::new(tokio::sync::RwLock::new(
-                tools::ToolRuntime::new(&data_dir, sb_bridge.clone())?
+                tools::ToolRuntime::new(&data_dir, sb_bridge.clone(), sb_skills.clone())?
             ));
             let port: u16 = 8770;
             let server_db = db.clone();
             let server_tools = tool_registry.clone();
             let server_runtime = tool_runtime.clone();
+            let server_skills = sb_skills.clone();
             tokio::spawn(async move {
-                if let Err(e) = server::start(server_db, server_tools, server_runtime, sb_bridge, port).await {
+                if let Err(e) = server::start(server_db, server_tools, server_runtime, sb_bridge, server_skills, port).await {
                     tracing::error!("Server error: {}", e);
                 }
             });
