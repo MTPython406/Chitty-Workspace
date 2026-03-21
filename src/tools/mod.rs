@@ -492,12 +492,13 @@ impl NativeTool for TerminalTool {
             }),
             instructions: Some(
                 "Run shell commands on the user's machine.\n\
-                 - Use for builds, tests, git operations, package managers, system info, etc.\n\
+                 - Commands execute in: PowerShell (Windows), zsh (macOS), sh (Linux).\n\
+                 - Use for builds, tests, git operations, package managers, system info, HTTP requests, etc.\n\
                  - Commands run in the project working directory by default.\n\
-                 - **Prefer short-lived commands.** Long-running processes (servers, watchers) will timeout after 30 seconds.\n\
+                 - For HTTP requests: use `Invoke-RestMethod` on Windows (PowerShell), `curl` on Linux/Mac.\n\
+                 - **Prefer short-lived commands.** Long-running processes will timeout after 30 seconds.\n\
                  - Show the user relevant output. Summarize long output.\n\
-                 - Be careful with destructive commands (rm, format, etc.) — confirm with the user first.\n\
-                 - On Windows, use `cmd /c` or PowerShell syntax as appropriate."
+                 - Be careful with destructive commands — confirm with the user first."
                     .to_string(),
             ),
             category: ToolCategory::Native,
@@ -523,20 +524,33 @@ impl NativeTool for TerminalTool {
             })
             .unwrap_or_else(|| ctx.working_dir.clone());
 
-        // Use cmd on Windows, sh on Unix
-        let (shell, flag) = if cfg!(target_os = "windows") {
-            ("cmd", "/C")
-        } else {
-            ("sh", "-c")
-        };
-
+        // Use PowerShell on Windows (has curl alias, better tool support),
+        // sh on Linux, zsh on macOS (default shell since Catalina)
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            tokio::process::Command::new(shell)
-                .arg(flag)
-                .arg(command)
-                .current_dir(&working_dir)
-                .output(),
+            {
+                let mut cmd = if cfg!(target_os = "windows") {
+                    let mut c = tokio::process::Command::new("powershell");
+                    c.args(&["-NoProfile", "-NonInteractive", "-Command", command]);
+                    c
+                } else if cfg!(target_os = "macos") {
+                    let mut c = tokio::process::Command::new("zsh");
+                    c.args(&["-c", command]);
+                    c
+                } else {
+                    let mut c = tokio::process::Command::new("sh");
+                    c.args(&["-c", command]);
+                    c
+                };
+                cmd.current_dir(&working_dir);
+                // On Windows, prevent a console window from flashing
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                }
+                cmd.output()
+            },
         )
         .await;
 

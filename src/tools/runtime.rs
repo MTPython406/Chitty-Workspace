@@ -311,6 +311,29 @@ impl ToolRuntime {
             }
         }
 
+        // Add the open_agent_panel UI command tool (handled by frontend, not tool_runtime)
+        defs.push(ToolDefinition {
+            name: "open_agent_panel".to_string(),
+            display_name: "Open Agent Panel".to_string(),
+            description: "Open a SPECIFIC EXISTING agent in a NEW chat panel. ONLY use when the user EXPLICITLY asks to open or launch a different agent in a new panel. NEVER use this for normal conversation, answering questions about agents, or when the user asks you to do something yourself.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The ID of the agent to open. Leave empty to open the default Chitty agent."
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "An optional message to automatically send to the agent once the panel opens."
+                    }
+                }
+            }),
+            instructions: Some("IMPORTANT: Only use open_agent_panel when the user EXPLICITLY requests opening a specific agent in a new panel (e.g. 'open the Code Reviewer in a new panel', 'launch my Data Agent'). Do NOT use this tool to answer questions about agents, list agents, describe agents, or handle any task yourself. If the user asks 'can you see my agents' or 'what agents do I have', use file_reader or terminal to check — do NOT open panels.".to_string()),
+            category: ToolCategory::Native,
+            vendor: None,
+        });
+
         defs
     }
 

@@ -218,6 +218,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         // Tools
         .route("/api/tools", get(list_tools))
         // Agents
+        .route("/api/agents/system", get(get_system_agent))
         .route("/api/agents", get(list_agents))
         .route("/api/agents", post(create_agent))
         .route("/api/agents/:id", get(get_agent))
@@ -1464,6 +1465,16 @@ async fn process_chat(
                         })
                         .await;
 
+                    // Save denied result to DB so conversation stays valid
+                    let db = state.db.clone();
+                    let cid = conversation_id.clone();
+                    let tc_id = tc.id.clone();
+                    let rc = result_content.clone();
+                    db.with_conn(move |conn| {
+                        ChatEngine::save_message(conn, &cid, "tool", &rc, None, Some(&tc_id))?;
+                        Ok(())
+                    }).await?;
+
                     current_messages.push(ChatMessage {
                         role: "tool".to_string(),
                         content: result_content,
@@ -1473,6 +1484,41 @@ async fn process_chat(
                     continue; // skip execution, move to next tool call
                 }
                 tracing::info!("  Action approved by user: {} {}", tc.name, action_str);
+            }
+
+            // Handle frontend-only tools (UI commands the frontend intercepts)
+            if tc.name == "open_agent_panel" {
+                let agent_id = tc.arguments.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                let message = tc.arguments.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                let result_content = format!(
+                    r#"{{"success":true,"action":"open_agent_panel","agent_id":"{}","message":"{}"}}"#,
+                    agent_id, message.replace('"', "\\\"")
+                );
+                let _ = sse_tx
+                    .send(StreamChunk::ToolResult {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        content: result_content.clone(),
+                        success: true,
+                        duration_ms: 0,
+                    })
+                    .await;
+                // Save tool result and add to messages
+                let db = state.db.clone();
+                let cid = conversation_id.clone();
+                let tc_id = tc.id.clone();
+                let rc = result_content.clone();
+                db.with_conn(move |conn| {
+                    ChatEngine::save_message(conn, &cid, "tool", &rc, None, Some(&tc_id))?;
+                    Ok(())
+                }).await?;
+                current_messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: result_content,
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+                continue;
             }
 
             // Dispatch via tool_runtime (native + custom + connection tools)
@@ -1744,18 +1790,28 @@ async fn stream_llm_response(
 struct ConversationResponse {
     id: String,
     title: Option<String>,
+    agent_id: Option<String>,
     provider: String,
     model: String,
     created_at: String,
     updated_at: String,
 }
 
+#[derive(Deserialize)]
+struct ListConversationsQuery {
+    agent_id: Option<String>,
+}
+
 async fn list_conversations(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<ListConversationsQuery>,
 ) -> Json<Vec<ConversationResponse>> {
     let db = state.db.clone();
+    let agent_filter = query.agent_id.clone();
     let convs = db
-        .with_conn(|conn| ChatEngine::list_conversations(conn))
+        .with_conn(move |conn| {
+            ChatEngine::list_conversations(conn, agent_filter.as_deref())
+        })
         .await
         .unwrap_or_default();
 
@@ -1765,6 +1821,7 @@ async fn list_conversations(
             .map(|c| ConversationResponse {
                 id: c.id,
                 title: c.title,
+                agent_id: c.agent_id,
                 provider: c.provider,
                 model: c.model,
                 created_at: c.created_at,
@@ -2402,6 +2459,20 @@ async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 // Agents handlers
 // ---------------------------------------------------------------------------
+
+/// Returns the built-in Chitty system agent metadata (not stored in DB).
+async fn get_system_agent() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "id": "__chitty__",
+        "name": "Chitty",
+        "description": "System administrator & AI assistant — manages tools, packages, agents, providers, and local models",
+        "is_system": true,
+        "tools": [],
+        "tags": ["system", "admin"],
+        "max_iterations": 25,
+        "approval_mode": "prompt"
+    }))
+}
 
 async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db = state.db.clone();

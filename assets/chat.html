@@ -240,6 +240,30 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .welcome-name { font-size: 16px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
 .welcome-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; text-align: center; }
 
+.welcome-actions { display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; justify-content: center; }
+.welcome-action-btn {
+  display: flex; align-items: center; gap: 6px; padding: 10px 16px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--text-secondary); font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.welcome-action-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--text-primary); }
+
+/* ── View switcher (inside action panel tab bodies) ──────────── */
+.view-switcher {
+  display: flex; gap: 0; padding: 0 8px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border); background: var(--bg-panel-header);
+}
+.view-switch-btn {
+  padding: 6px 12px; font-size: 11px; color: var(--text-muted);
+  border: none; background: none; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s;
+}
+.view-switch-btn:hover { color: var(--text-secondary); }
+.view-switch-btn.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+.view-content { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.view-content.active { display: flex; }
+
 .recent-label {
   font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;
   margin-bottom: 8px; width: 100%; max-width: 380px;
@@ -1227,7 +1251,6 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
       </div>
       <div class="action-tabs">
         <button class="action-tab active" data-action-tab="activity">Activity</button>
-        <button class="action-tab" data-action-tab="browser">Browser</button>
         <button class="action-tab" data-action-tab="agents">Agents</button>
         <button class="action-tab" data-action-tab="providers">Providers</button>
       </div>
@@ -1242,39 +1265,16 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
         </div>
         <div class="activity-log" id="activity-log"></div>
       </div>
-      <div id="browser-body">
-        <div class="browser-status-bar">
-          <span id="browser-status-dot" class="dot idle"></span>
-          <span id="browser-status-text" style="font-size:11px;color:var(--text-muted);">Extension not connected</span>
-        </div>
-        <input class="browser-url-bar" id="browser-url" type="text" placeholder="No page loaded" readonly />
-        <div id="browser-empty">
-          <div id="browser-not-connected" style="text-align:center;padding:16px;">
-            <div style="font-size:28px;margin-bottom:8px;">🌐</div>
-            <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Chitty Browser Extension</div>
-            <div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:16px;">
-              Install the extension to let your agent control your browser.<br>
-              It can open pages, click, type, and read — on any site.
-            </div>
-            <div style="font-size:11px;color:var(--text-secondary);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:left;line-height:1.8;">
-              <b>Install:</b><br>
-              1. Open <b>chrome://extensions</b> in Chrome<br>
-              2. Enable <b>Developer mode</b> (top right)<br>
-              3. Click <b>Load unpacked</b><br>
-              4. Select the <b>extension</b> folder in your Chitty Workspace directory
-            </div>
+      <!-- Dynamic view container — components open here on demand -->
+      <div id="dynamic-view" style="display:none;flex:1;flex-direction:column;overflow:hidden;">
+        <div id="dynamic-view-header" style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span id="dynamic-view-icon" style="font-size:14px;"></span>
+            <span id="dynamic-view-title" style="font-size:12px;font-weight:600;color:var(--text-primary);"></span>
           </div>
-          <div id="browser-connected-idle" style="display:none;text-align:center;padding:16px;">
-            <div style="font-size:28px;margin-bottom:8px;">✅</div>
-            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Extension Connected</div>
-            <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">
-              Your agent can now control your browser.<br>
-              Ask it to open a website or automate a task.
-            </div>
-            <button onclick="app.openMarketplace()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Browse Marketplace</button>
-          </div>
+          <button onclick="app.closeDynamicView()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:2px 6px;">&times;</button>
         </div>
-        <img id="browser-screenshot" style="display:none;width:100%;border-radius:6px;border:1px solid var(--border);" />
+        <div id="dynamic-view-content" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;"></div>
       </div>
       <div id="agents-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
       <div id="builder-body" style="display:none;flex:1;overflow-y:auto;padding:0;"></div>
@@ -1345,6 +1345,7 @@ const App = {
     availableTools: [],
     conversations: [],
     actionPanelOpen: false,
+    sessionAutoApprove: false, // When true, auto-approve all tool actions for this session
   },
 
   /* ── Init ───────────────────────────────────────────────────────── */
@@ -1396,6 +1397,7 @@ const App = {
     document.querySelectorAll('.action-tab').forEach(tab => {
       tab.addEventListener('click', () => this.switchActionTab(tab.dataset.actionTab));
     });
+    // (dynamic views are bound inline via onclick)
     document.getElementById('provider-select')?.addEventListener('change', e => {
       this.state.selectedProvider = e.target.value;
       this.loadModels(e.target.value);
@@ -1832,6 +1834,10 @@ const App = {
                 try {
                   const args = JSON.parse(tc.args || '{}');
                   if (args.action === 'open' && args.url) {
+                    // Open browser view first (creates the DOM elements)
+                    this.openBrowserView();
+                    this.toggleActionPanel(true);
+                    // Now reference the DOM elements created by openBrowserView
                     const iframe = document.getElementById('browser-iframe');
                     const urlBar = document.getElementById('browser-url');
                     const empty = document.getElementById('browser-empty');
@@ -1842,8 +1848,6 @@ const App = {
                     if (urlBar) urlBar.value = args.url;
                     if (statusText) statusText.textContent = 'Connected — ' + new URL(args.url).hostname;
                     if (statusDot) statusDot.className = 'dot connected';
-                    this.switchActionTab('browser');
-                    this.toggleActionPanel(true);
 
                     // Try loading in iframe first
                     if (iframe) {
@@ -1892,6 +1896,34 @@ const App = {
                     }
                   }
                 } catch (e) { /* ignore parse errors */ }
+              }
+              // Handle open_agent_panel UI command
+              if (parsed.tool_name === 'open_agent_panel' && parsed.success) {
+                try {
+                  const cmd = JSON.parse(parsed.content);
+                  if (cmd.action === 'open_agent_panel') {
+                    // Open a new panel
+                    this.addPanel();
+                    const newPanel = this.state.panels[this.state.panels.length - 1];
+                    if (newPanel) {
+                      // Set the agent
+                      if (cmd.agent_id) {
+                        newPanel.selectedAgent = cmd.agent_id;
+                        const agent = this.state.agents.find(a => a.id === cmd.agent_id);
+                        if (agent) newPanel.name = agent.name;
+                      }
+                      this.renderWorkspace();
+                      // Auto-send a message if provided
+                      if (cmd.message) {
+                        const newPanelId = newPanel.id;
+                        setTimeout(() => {
+                          const ta = document.querySelector(`[data-panel-id="${newPanelId}"] .panel-textarea`);
+                          if (ta) { ta.value = cmd.message; this.sendMessageInPanel(newPanelId); }
+                        }, 300);
+                      }
+                    }
+                  }
+                } catch (_) { /* ignore parse errors */ }
               }
               // Update the tool call block in the DOM
               const block = document.querySelector(`[data-panel-id="${panelId}"] .tool-call-block[data-tool-id="${parsed.tool_call_id}"]`);
@@ -1974,29 +2006,50 @@ const App = {
               const details = parsed.details || {};
               const icon = details.icon || '🔒';
 
-              this.activityLog('tool', `<span style="color:#f59e0b">⏸ APPROVAL</span> ${esc(description)}`);
+              // Session auto-approve: automatically respond without user interaction
+              if (this.state.sessionAutoApprove) {
+                this.activityLog('tool', `<span style="color:#10b981">✓ AUTO</span> ${esc(description)}`);
+                const autoCardHtml = `
+                  <div class="approval-card resolved" data-approval-id="${esc(approvalId)}">
+                    <div class="approval-header">
+                      <span class="approval-icon">${icon}</span>
+                      <span>${esc(description)}</span>
+                      <span class="approval-badge" style="background:rgba(16,185,129,0.15);color:#10b981;">Auto-approved</span>
+                    </div>
+                  </div>`;
+                this.appendToolBlockInPanel(panelId, autoCardHtml);
+                // Auto-send approval response
+                fetch('/api/approval/respond', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ approval_id: approvalId, approved: true }),
+                }).catch(e => console.error('Auto-approval failed:', e));
+              } else {
+                this.activityLog('tool', `<span style="color:#f59e0b">⏸ APPROVAL</span> ${esc(description)}`);
 
-              // Build detail lines
-              let detailHtml = '';
-              if (details.url) detailHtml += `<div class="approval-detail"><span class="label">URL:</span> ${esc(details.url)}</div>`;
-              if (details.selector) detailHtml += `<div class="approval-detail"><span class="label">Element:</span> ${esc(details.selector)}</div>`;
-              if (details.text_preview) detailHtml += `<div class="approval-detail"><span class="label">Text:</span> ${esc(details.text_preview)}</div>`;
-              if (details.script_preview) detailHtml += `<div class="approval-detail"><span class="label">Script:</span> ${esc(details.script_preview)}</div>`;
+                // Build detail lines
+                let detailHtml = '';
+                if (details.url) detailHtml += `<div class="approval-detail"><span class="label">URL:</span> ${esc(details.url)}</div>`;
+                if (details.selector) detailHtml += `<div class="approval-detail"><span class="label">Element:</span> ${esc(details.selector)}</div>`;
+                if (details.text_preview) detailHtml += `<div class="approval-detail"><span class="label">Text:</span> ${esc(details.text_preview)}</div>`;
+                if (details.script_preview) detailHtml += `<div class="approval-detail"><span class="label">Script:</span> ${esc(details.script_preview)}</div>`;
 
-              const cardHtml = `
-                <div class="approval-card" data-approval-id="${esc(approvalId)}">
-                  <div class="approval-header">
-                    <span class="approval-icon">${icon}</span>
-                    <span>${esc(description)}</span>
-                    <span class="approval-badge">Awaiting Approval</span>
-                  </div>
-                  ${detailHtml ? `<div class="approval-body">${detailHtml}</div>` : ''}
-                  <div class="approval-actions">
-                    <button class="approval-btn-approve" onclick="App.respondApproval('${esc(approvalId)}', true, this)">✓ Approve</button>
-                    <button class="approval-btn-deny" onclick="App.respondApproval('${esc(approvalId)}', false, this)">✕ Deny</button>
-                  </div>
-                </div>`;
-              this.appendToolBlockInPanel(panelId, cardHtml);
+                const cardHtml = `
+                  <div class="approval-card" data-approval-id="${esc(approvalId)}">
+                    <div class="approval-header">
+                      <span class="approval-icon">${icon}</span>
+                      <span>${esc(description)}</span>
+                      <span class="approval-badge">Awaiting Approval</span>
+                    </div>
+                    ${detailHtml ? `<div class="approval-body">${detailHtml}</div>` : ''}
+                    <div class="approval-actions" style="display:flex;gap:6px;align-items:center;">
+                      <button class="approval-btn-deny" onclick="App.respondApproval('${esc(approvalId)}', false, this)" style="padding:6px 14px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;">Deny</button>
+                      <button onclick="App.setSessionAutoApprove(true, '${esc(approvalId)}')" style="flex:1;padding:6px 14px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);cursor:pointer;">Always allow for session</button>
+                      <button class="approval-btn-approve" onclick="App.respondApproval('${esc(approvalId)}', true, this)" style="padding:6px 18px;font-size:12px;font-weight:600;border-radius:6px;border:none;background:#e5e7eb;color:#111;cursor:pointer;">Allow once</button>
+                    </div>
+                  </div>`;
+                this.appendToolBlockInPanel(panelId, cardHtml);
+              }
 
             } else if (evType === 'error') {
               this.activityLog('error', `<span class="hl">${esc(parsed.error || 'Unknown error')}</span>`);
@@ -2094,12 +2147,12 @@ const App = {
       t.classList.toggle('active', t.dataset.actionTab === tabName || (t.dataset.actionTab === 'agents' && tabName === 'builder'))
     );
     const actionBody = document.getElementById('action-body');
-    const browserBody = document.getElementById('browser-body');
+    const dynamicView = document.getElementById('dynamic-view');
     const agentsBody = document.getElementById('agents-body');
     const builderBody = document.getElementById('builder-body');
     const providersBody = document.getElementById('providers-body');
     if (actionBody) actionBody.style.display = tabName === 'activity' ? '' : 'none';
-    if (browserBody) browserBody.classList.toggle('active', tabName === 'browser');
+    if (dynamicView) dynamicView.style.display = tabName === 'dynamic' ? 'flex' : 'none';
     if (agentsBody) agentsBody.style.display = tabName === 'agents' ? 'block' : 'none';
     if (builderBody) builderBody.style.display = tabName === 'builder' ? 'flex' : 'none';
     if (providersBody) providersBody.style.display = tabName === 'providers' ? 'block' : 'none';
@@ -2121,18 +2174,131 @@ const App = {
     }
   },
 
+  /* ── Dynamic View — opens components on demand ─────────────────── */
+  // Opens a dynamic component in the Action Panel (browser, media, agent config, custom apps)
+  openDynamicView(icon, title, contentHTML) {
+    document.getElementById('dynamic-view-icon').textContent = icon;
+    document.getElementById('dynamic-view-title').textContent = title;
+    document.getElementById('dynamic-view-content').innerHTML = contentHTML;
+    // Deselect all fixed tabs, show dynamic view
+    document.querySelectorAll('.action-tab').forEach(t => t.classList.remove('active'));
+    const actionBody = document.getElementById('action-body');
+    const agentsBody = document.getElementById('agents-body');
+    const builderBody = document.getElementById('builder-body');
+    const providersBody = document.getElementById('providers-body');
+    const dynamicView = document.getElementById('dynamic-view');
+    if (actionBody) actionBody.style.display = 'none';
+    if (agentsBody) agentsBody.style.display = 'none';
+    if (builderBody) builderBody.style.display = 'none';
+    if (providersBody) providersBody.style.display = 'none';
+    if (dynamicView) dynamicView.style.display = 'flex';
+    this.toggleActionPanel(true);
+  },
+
+  closeDynamicView() {
+    const dynamicView = document.getElementById('dynamic-view');
+    if (dynamicView) dynamicView.style.display = 'none';
+    // Return to Activity tab
+    this.switchActionTab('activity');
+  },
+
+  // Open browser component dynamically
+  openBrowserView() {
+    this.openDynamicView('🌐', 'Browser', `
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div class="browser-status-bar">
+          <span id="browser-status-dot" class="dot idle"></span>
+          <span id="browser-status-text" style="font-size:11px;color:var(--text-muted);">Extension not connected</span>
+        </div>
+        <input class="browser-url-bar" id="browser-url" type="text" placeholder="No page loaded" readonly />
+        <div id="browser-empty">
+          <div id="browser-not-connected" style="text-align:center;padding:16px;">
+            <div style="font-size:28px;margin-bottom:8px;">🌐</div>
+            <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Chitty Browser Extension</div>
+            <div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:16px;">
+              Install the extension to let your agent control your browser.<br>
+              It can open pages, click, type, and read — on any site.
+            </div>
+            <div style="font-size:11px;color:var(--text-secondary);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:left;line-height:1.8;">
+              <b>Install:</b><br>
+              1. Open <b>chrome://extensions</b> in Chrome<br>
+              2. Enable <b>Developer mode</b> (top right)<br>
+              3. Click <b>Load unpacked</b><br>
+              4. Select the <b>extension</b> folder in your Chitty Workspace directory
+            </div>
+          </div>
+          <div id="browser-connected-idle" style="display:none;text-align:center;padding:16px;">
+            <div style="font-size:28px;margin-bottom:8px;">✅</div>
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Extension Connected</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">
+              Your agent can now control your browser.<br>
+              Ask it to open a website or automate a task.
+            </div>
+            <button onclick="app.openMarketplace()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Browse Marketplace</button>
+          </div>
+        </div>
+        <img id="browser-screenshot" style="display:none;width:100%;border-radius:6px;border:1px solid var(--border);" />
+      </div>
+    `);
+  },
+
+  // Open agent config view dynamically
+  openAgentConfigView() {
+    const panel = this.getFocusedPanel();
+    let content = '';
+
+    if (this.builderState && this.builderState.draft) {
+      const d = this.builderState.draft;
+      content = `
+        <div style="padding:12px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text-primary);">Agent Draft</div>
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;line-height:1.6;">
+            <div style="margin-bottom:8px;"><b>Name:</b> ${esc(d.name || '—')}</div>
+            <div style="margin-bottom:8px;"><b>Description:</b> ${esc(d.description || '—')}</div>
+            <div style="margin-bottom:8px;"><b>Tools:</b> ${d.tools?.length ? d.tools.map(t => '<span style="background:var(--bg-hover);padding:2px 6px;border-radius:4px;margin:0 2px;">' + esc(t) + '</span>').join(' ') : '—'}</div>
+            <div><b>Instructions:</b><br><pre style="white-space:pre-wrap;font-size:11px;color:var(--text-secondary);margin-top:4px;">${esc((d.instructions || '').substring(0, 500))}</pre></div>
+          </div>
+        </div>`;
+    } else if (panel && panel.selectedAgent) {
+      const agent = this.state.agents.find(a => a.id === panel.selectedAgent);
+      if (agent) {
+        content = `
+          <div style="padding:12px;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text-primary);">${esc(agent.name)}</div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;line-height:1.6;">
+              <div style="margin-bottom:8px;color:var(--text-muted);">${esc(agent.description || '')}</div>
+              <div style="margin-bottom:8px;"><b>Tools:</b> ${agent.tools?.length ? agent.tools.length + ' configured' : 'All tools'}</div>
+              <div style="margin-bottom:8px;"><b>Provider:</b> ${esc(agent.preferred_provider || 'Default')}</div>
+              <div style="margin-bottom:8px;"><b>Model:</b> ${esc(agent.preferred_model || 'Default')}</div>
+            </div>
+            <button onclick="app.showAgentFormInPanel('${esc(agent.id)}')" style="margin-top:12px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Edit Agent</button>
+          </div>`;
+      }
+    } else {
+      content = `
+        <div style="text-align:center;padding:32px;color:var(--text-muted);">
+          <div style="font-size:13px;font-weight:500;margin-bottom:4px;color:var(--text-secondary);">Chitty — System Agent</div>
+          <div style="font-size:12px;margin-bottom:16px;">The default system administrator with access to all tools.</div>
+          <button onclick="app.switchActionTab('builder');app.toggleActionPanel(true);" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Open Agent Builder</button>
+        </div>`;
+    }
+    this.openDynamicView('⚙️', 'Agent Configuration', content);
+  },
+
   /* ── Open Marketplace in Browser ──────────────────────────────────── */
   openMarketplace() {
-    const iframe = document.getElementById('browser-iframe');
-    const urlBar = document.getElementById('browser-url');
-    const empty = document.getElementById('browser-empty');
-    const url = 'https://chitty.ai/marketplace';
-    iframe.src = url;
-    iframe.style.display = 'block';
-    empty.style.display = 'none';
-    urlBar.value = url;
-    this.switchActionTab('browser');
-    this.toggleActionPanel(true);
+    // Open browser view first, then load the marketplace URL
+    this.openBrowserView();
+    // Now the DOM has the browser elements — set them up
+    setTimeout(() => {
+      const iframe = document.getElementById('browser-iframe');
+      const urlBar = document.getElementById('browser-url');
+      const empty = document.getElementById('browser-empty');
+      const url = 'https://chitty.ai/marketplace';
+      if (iframe) { iframe.src = url; iframe.style.display = 'block'; }
+      if (empty) empty.style.display = 'none';
+      if (urlBar) urlBar.value = url;
+    }, 50);
     this.activityLog('info', '<span class="hl">Opened Marketplace</span>');
   },
 
@@ -2156,27 +2322,30 @@ const App = {
   },
 
   async executeBrowserCommand(cmd) {
+    // Get iframe if browser view is already open (may be null for 'open' action)
     const iframe = document.getElementById('browser-iframe');
-    const urlBar = document.getElementById('browser-url');
-    const empty = document.getElementById('browser-empty');
-
     try {
       switch (cmd.action) {
         case 'open': {
           const url = cmd.params.url;
           if (!url) return { id: cmd.id, success: false, data: null, error: 'Missing url parameter' };
 
+          // Open browser view first (creates DOM elements)
+          this.openBrowserView();
+          this.toggleActionPanel(true);
+          const iframe = document.getElementById('browser-iframe');
+          const urlBar = document.getElementById('browser-url');
+          const empty = document.getElementById('browser-empty');
           const screenshot = document.getElementById('browser-screenshot');
           // Show the page in the iframe — user can interact with it directly
-          iframe.src = url;
-          iframe.style.display = 'block';
+          if (iframe) { iframe.src = url; iframe.style.display = 'block'; }
           if (screenshot) screenshot.style.display = 'none';
-          empty.style.display = 'none';
-          urlBar.value = url;
-          document.getElementById('browser-status-text').textContent = 'Connected — ' + new URL(url).hostname;
-          document.getElementById('browser-status-dot').className = 'dot connected';
-          this.switchActionTab('browser');
-          this.toggleActionPanel(true);
+          if (empty) empty.style.display = 'none';
+          if (urlBar) urlBar.value = url;
+          const st = document.getElementById('browser-status-text');
+          const sd = document.getElementById('browser-status-dot');
+          if (st) st.textContent = 'Connected — ' + new URL(url).hostname;
+          if (sd) sd.className = 'dot connected';
 
           // Wait for iframe load
           await new Promise((resolve) => {
@@ -2265,7 +2434,11 @@ const App = {
     e.stopPropagation();
     this.closeAllPopovers();
     const pop = document.querySelector(`[data-panel-id="${panelId}"] .history-popover`);
-    if (pop) { pop.classList.toggle('visible'); }
+    if (pop) {
+      // Refresh content with agent-filtered history before showing
+      pop.innerHTML = this.historyPopoverHTML(panelId);
+      pop.classList.toggle('visible');
+    }
   },
 
   closeAllPopovers() {
@@ -2379,7 +2552,7 @@ const App = {
         <div class="input-footer">
           <div class="input-footer-left">
             <select class="panel-agent-select input-footer-select" title="Select Agent">
-              <option value="">No Agent</option>
+              <option value="">Chitty</option>
               ${this.state.agents.map(sk => `<option value="${esc(sk.id)}" ${panel.selectedAgent === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`).join('')}
             </select>
           </div>
@@ -2395,21 +2568,27 @@ const App = {
   },
 
   welcomeHTML(panel) {
-    const convs = this.state.conversations.slice(0, 8);
+    const isChitty = !panel.selectedAgent;
+    const name = isChitty ? 'Chitty' : (this.state.agents.find(a => a.id === panel.selectedAgent)?.name || panel.name);
+    const subtitle = isChitty
+      ? 'System admin & AI assistant'
+      : 'How can I help you today?';
     let html = `<div class="panel-welcome">
       <div class="welcome-icon">${ICONS.robot}</div>
-      <div class="welcome-name">${esc(panel.name)}</div>
-      <div class="welcome-sub">How can I help you today?</div>`;
-    if (convs.length) {
-      html += `<div class="recent-label">${ICONS.clock} Recent conversations</div>
-      <div class="recent-list">`;
-      for (const c of convs) {
-        html += `<div class="recent-item" data-conv-id="${c.id}">
-          <div class="recent-item-title">${esc(c.title || 'Untitled')}</div>
-          <div class="recent-item-meta">${timeAgo(c.updated_at)}</div>
-        </div>`;
-      }
-      html += '</div>';
+      <div class="welcome-name">${esc(name)}</div>
+      <div class="welcome-sub">${esc(subtitle)}</div>`;
+    if (isChitty) {
+      html += `<div class="welcome-actions">
+        <button class="welcome-action-btn" onclick="app.switchActionTab('builder');app.toggleActionPanel(true);">
+          <span style="font-size:16px;">🛠</span> Build an Agent
+        </button>
+        <button class="welcome-action-btn" onclick="app.openMarketplace()">
+          <span style="font-size:16px;">📦</span> Marketplace
+        </button>
+        <button class="welcome-action-btn" onclick="app.switchActionTab('agents');app.toggleActionPanel(true);">
+          <span style="font-size:16px;">🤖</span> Browse Agents
+        </button>
+      </div>`;
     }
     html += '</div>';
     return html;
@@ -2433,7 +2612,14 @@ const App = {
   },
 
   historyPopoverHTML(panelId) {
-    const convs = this.state.conversations.slice(0, 15);
+    const panel = this.getPanel(panelId);
+    const agentId = panel ? panel.selectedAgent : null;
+    // Filter conversations by the panel's selected agent
+    const filtered = this.state.conversations.filter(c => {
+      if (agentId) return c.agent_id === agentId;
+      return !c.agent_id;
+    });
+    const convs = filtered.slice(0, 15);
     if (!convs.length) return '<div style="padding:12px;color:var(--text-muted);font-size:12px;">No history</div>';
     return convs.map(c =>
       `<div class="history-item" data-conv-id="${c.id}">
@@ -2488,6 +2674,15 @@ const App = {
     if (last) el.insertBefore(div.firstElementChild, last);
     else el.appendChild(div.firstElementChild);
     el.scrollTop = el.scrollHeight;
+  },
+
+  setSessionAutoApprove(checked, approvalId) {
+    this.state.sessionAutoApprove = checked;
+    if (checked) {
+      // Auto-approve the current pending request too
+      this.respondApproval(approvalId, true, null);
+      this.activityLog('info', '<span style="color:#10b981">✓ Session auto-approve enabled</span> — all future actions will be approved automatically');
+    }
   },
 
   async respondApproval(approvalId, approved, btnEl) {
@@ -2570,6 +2765,9 @@ const App = {
             }
           } catch (e) { console.error('Load agent details:', e); }
         }
+        // Refresh history popover to show agent-specific conversations
+        const pop = el.querySelector('.history-popover');
+        if (pop) pop.innerHTML = this.historyPopoverHTML(panelId);
       }
     });
     // Model selector (in input footer)
@@ -3419,7 +3617,7 @@ const App = {
     // Update agent dropdowns in all panel input footers
     document.querySelectorAll('.panel-agent-select').forEach(sel => {
       const current = sel.value;
-      let html = '<option value="">No Agent</option>';
+      let html = '<option value="">Chitty</option>';
       for (const sk of this.state.agents) {
         html += `<option value="${esc(sk.id)}" ${current === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`;
       }
