@@ -82,14 +82,30 @@ impl Default for ExecutionConfig {
     }
 }
 
-/// Default system prompt when no agent is active
-pub const DEFAULT_SYSTEM_PROMPT: &str = r#"You are Chitty, a helpful AI assistant running locally on the user's machine.
+/// Default system prompt when no agent is active — Chitty is the system administrator
+pub const CHITTY_SYSTEM_PROMPT: &str = r#"You are Chitty, the built-in system administrator and AI assistant for Chitty Workspace — a local-first AI assistant running 100% on the user's machine.
 
-You have access to tools that can read/write files, run terminal commands, search code, and more.
-Use tools when they help accomplish the user's request. Be direct and concise.
+Be direct and concise. Use tools when they help. Tool definitions are provided separately — refer to them for parameters and usage.
 
-When you learn something important about the user or their preferences, use the save_memory tool
-to remember it for future conversations.
+## Key System Knowledge
+
+**Data locations:** Config at `~/.chitty-workspace/config.toml`, DB at `~/.chitty-workspace/workspace.db`, packages at `~/.chitty-workspace/tools/marketplace/`.
+
+**Providers:** BYOK — OpenAI, Anthropic, Google, xAI (keys in OS keyring). Local: Ollama (localhost:11434), HuggingFace sidecar. Setup via Settings → Providers.
+
+**Agents:** Stored in DB. Fields: name, description, instructions, tools[], preferred_provider/model, max_iterations, approval_mode. Agent Builder in Action Panel creates agents. To list agents use terminal: `Invoke-RestMethod http://localhost:8770/api/agents` (Windows) or `curl -s http://localhost:8770/api/agents` (Linux/Mac). Do NOT open new panels to answer questions about agents.
+
+**Packages:** Each has `package.json` (name, vendor, tools[], setup_steps[]) and tool dirs with `manifest.json` + script. Scripts read JSON stdin, write JSON stdout. setup_steps have check_command/install_command. To build a new package: create dir, write package.json, create tool manifests + scripts, install deps.
+
+**Memory:** Save important info with `save_memory`. Types: user/feedback/project/reference. Scopes: global/project/agent. Search before re-asking.
+
+**Project context:** Loads `chitty.md` or `.chitty/chitty.md` automatically. Help generate it by scanning project structure.
+
+**Browser:** Controls user's real Chrome via extension. User's login sessions available.
+
+**Local API:** Chitty's own server runs at `http://localhost:8770`. Useful endpoints: `/api/agents`, `/api/tools`, `/api/providers`, `/api/conversations`, `/api/marketplace/packages`. Use terminal: `Invoke-RestMethod http://localhost:8770/...` (Windows) or `curl -s http://localhost:8770/...` (Linux/Mac).
+
+**Troubleshooting:** Check API keys in Settings, Ollama via `curl http://localhost:11434/api/tags`, extension status in Activity panel.
 
 When you encounter a project with a chitty.md file, follow its instructions."#;
 
@@ -170,13 +186,33 @@ impl ChatEngine {
         Ok(())
     }
 
-    /// List all conversations, newest first.
-    pub fn list_conversations(conn: &Connection) -> Result<Vec<Conversation>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, title, agent_id, project_path, provider, model, created_at, updated_at FROM conversations ORDER BY updated_at DESC",
-        )?;
+    /// List conversations, newest first. Optionally filter by agent_id.
+    /// Pass `Some("")` to get conversations with no agent, `Some(id)` for a
+    /// specific agent, or `None` for all conversations.
+    pub fn list_conversations(conn: &Connection, agent_id: Option<&str>) -> Result<Vec<Conversation>> {
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match agent_id {
+            Some("") => (
+                "SELECT id, title, agent_id, project_path, provider, model, created_at, updated_at \
+                 FROM conversations WHERE agent_id IS NULL OR agent_id = '' \
+                 ORDER BY updated_at DESC".to_string(),
+                vec![],
+            ),
+            Some(id) => (
+                "SELECT id, title, agent_id, project_path, provider, model, created_at, updated_at \
+                 FROM conversations WHERE agent_id = ?1 \
+                 ORDER BY updated_at DESC".to_string(),
+                vec![Box::new(id.to_string())],
+            ),
+            None => (
+                "SELECT id, title, agent_id, project_path, provider, model, created_at, updated_at \
+                 FROM conversations ORDER BY updated_at DESC".to_string(),
+                vec![],
+            ),
+        };
 
-        let rows = stmt.query_map([], |row| {
+        let mut stmt = conn.prepare(&sql)?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(params_refs.as_slice(), |row| {
             Ok(Conversation {
                 id: row.get(0)?,
                 title: row.get(1)?,
@@ -281,17 +317,17 @@ impl ChatEngine {
                     )
                 }
                 _ => (
-                    DEFAULT_SYSTEM_PROMPT.to_string(),
+                    CHITTY_SYSTEM_PROMPT.to_string(),
                     None,
-                    ExecutionConfig::default(),
+                    ExecutionConfig { max_iterations: 25, ..ExecutionConfig::default() },
                     None,
                 ),
             }
         } else {
             (
-                DEFAULT_SYSTEM_PROMPT.to_string(),
+                CHITTY_SYSTEM_PROMPT.to_string(),
                 None,
-                ExecutionConfig::default(),
+                ExecutionConfig { max_iterations: 25, ..ExecutionConfig::default() },
                 None,
             )
         };
