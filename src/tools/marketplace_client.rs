@@ -77,10 +77,11 @@ impl MarketplaceClient {
         }
     }
 
-    /// List all available packages
+    /// List approved/active packages from the marketplace registry.
+    /// Only shows packages that have been reviewed and approved — not requested or submitted ones.
     pub async fn list_packages(&self) -> Result<Vec<RemotePackage>> {
         let resp = self.client
-            .get(format!("{}/api/v1/packages", self.base_url))
+            .get(format!("{}/api/v1/packages?status=active", self.base_url))
             .send()
             .await?;
 
