@@ -7,6 +7,18 @@ import os
 import json
 
 
+# Secure defaults — all destructive/sensitive features disabled unless explicitly enabled
+SECURE_DEFAULTS = {
+    'allow_create_dataset': False,
+    'allow_delete_dataset': False,
+    'allow_create_bucket': False,
+    'allow_delete_objects': False,
+    'allow_mutating_queries': False,
+    'allow_local_file_upload': False,
+    'allow_local_file_download': False,
+}
+
+
 def get_package_config():
     """Load the package config from the CHITTY_PACKAGE_CONFIG env var."""
     raw = os.environ.get("CHITTY_PACKAGE_CONFIG", "")
@@ -35,13 +47,16 @@ def get_allowed_resources(resource_type):
 
 
 def is_feature_enabled(feature_id):
-    """Check if a feature flag is enabled. Returns True if not configured (default allow)."""
+    """Check if a feature flag is enabled.
+    Uses SECURE_DEFAULTS — features default to False (disabled) unless explicitly enabled.
+    """
     config = get_package_config()
     features = config.get("features", {})
-    # If no features configured at all, default to True (no restrictions)
-    if not features:
-        return True
-    return features.get(feature_id, True)
+    # Check explicit config first, then fall back to secure defaults
+    if feature_id in features:
+        return bool(features[feature_id])
+    # Use secure default if defined, otherwise default to False (deny)
+    return SECURE_DEFAULTS.get(feature_id, False)
 
 
 def check_resource_allowed(resource_type, resource_id):

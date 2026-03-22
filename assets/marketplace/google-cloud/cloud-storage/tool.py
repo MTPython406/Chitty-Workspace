@@ -4,14 +4,127 @@ Manages buckets and objects using the user's gcloud CLI credentials.
 """
 
 import json
+import re
 import sys
 import os
+import tempfile
 
 # Add parent dir so we can import shared helpers
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from chitty_sdk import require_credential, check_feature
+except ImportError:
+    pass  # Fall back to local helpers
+
 from auth import get_access_token, get_project_id
 from config import check_resource_allowed, check_feature_allowed
 
+
+# ── Security: input validation helpers ────────────────────────────
+
+# GCS bucket naming rules: lowercase, alphanumeric, hyphens, dots, 3-63 chars
+VALID_BUCKET_NAME = re.compile(r'^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$')
+
+# Maximum results for list operations
+MAX_LIST_RESULTS = 500
+
+# Maximum upload size: 50 MB
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+# Maximum download size: 50 MB
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+
+
+def validate_bucket_name(bucket):
+    """Validate a GCS bucket name per Google Cloud rules.
+    Lowercase, alphanumeric + hyphens + dots, 3-63 chars.
+    Returns (valid, error_message).
+    """
+    if not bucket:
+        return False, "bucket name is required"
+    if len(bucket) < 3 or len(bucket) > 63:
+        return False, f"Invalid bucket name '{bucket}': must be 3-63 characters."
+    if not VALID_BUCKET_NAME.match(bucket):
+        return False, (
+            f"Invalid bucket name '{bucket}': must be lowercase, start/end with alphanumeric, "
+            "and contain only lowercase letters, numbers, hyphens, underscores, and dots."
+        )
+    if '..' in bucket:
+        return False, f"Invalid bucket name '{bucket}': consecutive dots not allowed."
+    return True, None
+
+
+def validate_object_path(object_path):
+    """Validate a GCS object path, blocking path traversal.
+    Returns (valid, error_message).
+    """
+    if not object_path:
+        return False, "object_path is required"
+    if '..' in object_path:
+        return False, f"Invalid object_path '{object_path}': '..' path traversal not allowed."
+    if object_path.startswith('/'):
+        return False, f"Invalid object_path '{object_path}': absolute paths not allowed (remove leading '/')."
+    if '\\' in object_path:
+        return False, f"Invalid object_path '{object_path}': backslashes not allowed."
+    if len(object_path) > 1024:
+        return False, f"Invalid object_path: exceeds maximum length of 1024 characters."
+    return True, None
+
+
+def resolve_safe_local_path(local_path):
+    """Resolve a local file path, confining it to workspace dir or system temp.
+    Returns (safe_path, error_message).
+    """
+    if not local_path:
+        return None, "local_path is required"
+
+    # Resolve to absolute, normalizing any ../ etc.
+    resolved = os.path.realpath(os.path.abspath(local_path))
+
+    # Allowed base directories
+    allowed_bases = []
+
+    # Current working directory (workspace)
+    cwd = os.path.realpath(os.getcwd())
+    allowed_bases.append(cwd)
+
+    # System temp directory
+    tmp = os.path.realpath(tempfile.gettempdir())
+    allowed_bases.append(tmp)
+
+    # CHITTY_WORKSPACE_DIR if set
+    workspace = os.environ.get("CHITTY_WORKSPACE_DIR")
+    if workspace:
+        allowed_bases.append(os.path.realpath(workspace))
+
+    # Check if resolved path is under any allowed base
+    for base in allowed_bases:
+        # Ensure trailing separator for prefix check
+        base_prefix = base if base.endswith(os.sep) else base + os.sep
+        if resolved == base or resolved.startswith(base_prefix):
+            return resolved, None
+
+    return None, (
+        f"Local path '{local_path}' is outside allowed directories. "
+        f"File operations are restricted to the workspace directory and system temp. "
+        f"Resolved path: {resolved}"
+    )
+
+
+def normalize_list_results(params):
+    """Clamp max_results for list operations to MAX_LIST_RESULTS."""
+    raw = params.get("max_results")
+    if raw is not None:
+        try:
+            val = int(raw)
+            return max(1, min(val, MAX_LIST_RESULTS))
+        except (ValueError, TypeError):
+            return 100
+    return 100
+
+
+# ── HTTP helper ───────────────────────────────────────────────────
 
 def make_request(method, url, headers, body=None, raw_body=None):
     """Make HTTP request to GCS REST API."""
@@ -59,12 +172,14 @@ def resolve_project(params):
     return project, None
 
 
+# ── Actions ───────────────────────────────────────────────────────
+
 def list_buckets(params, headers):
     project, err = resolve_project(params)
     if err:
         return {"success": False, "error": err}
 
-    max_results = params.get("max_results", 100)
+    max_results = normalize_list_results(params)
     url = f"{STORAGE_API}/b?project={project}&maxResults={max_results}"
     data, status = make_request("GET", url, headers)
 
@@ -84,8 +199,9 @@ def list_buckets(params, headers):
 
 def create_bucket(params, headers):
     bucket = params.get("bucket")
-    if not bucket:
-        return {"success": False, "error": "bucket name is required"}
+    valid, err = validate_bucket_name(bucket)
+    if not valid:
+        return {"success": False, "error": err}
 
     project, err = resolve_project(params)
     if err:
@@ -108,11 +224,12 @@ def create_bucket(params, headers):
 
 def list_objects(params, headers):
     bucket = params.get("bucket")
-    if not bucket:
-        return {"success": False, "error": "bucket name is required"}
+    valid, err = validate_bucket_name(bucket)
+    if not valid:
+        return {"success": False, "error": err}
 
     prefix = params.get("prefix", "")
-    max_results = params.get("max_results", 100)
+    max_results = normalize_list_results(params)
     url = f"{STORAGE_API}/b/{bucket}/o?maxResults={max_results}"
     if prefix:
         import urllib.parse
@@ -137,8 +254,13 @@ def list_objects(params, headers):
 def upload_object(params, headers):
     bucket = params.get("bucket")
     object_path = params.get("object_path")
-    if not bucket or not object_path:
-        return {"success": False, "error": "bucket and object_path are required"}
+
+    valid, err = validate_bucket_name(bucket)
+    if not valid:
+        return {"success": False, "error": err}
+    valid, err = validate_object_path(object_path)
+    if not valid:
+        return {"success": False, "error": err}
 
     # Get content from inline text or local file
     content = params.get("content")
@@ -148,15 +270,42 @@ def upload_object(params, headers):
         data_bytes = content.encode("utf-8")
         content_type = "text/plain"
     elif local_path:
-        if not os.path.exists(local_path):
+        # Feature gate: local file uploads disabled by default
+        allowed, err = check_feature_allowed("allow_local_file_upload", "local file upload")
+        if not allowed:
+            return {"success": False, "error": err}
+
+        # Validate local path is within allowed directories
+        safe_path, err = resolve_safe_local_path(local_path)
+        if err:
+            return {"success": False, "error": err}
+
+        if not os.path.exists(safe_path):
             return {"success": False, "error": f"Local file not found: {local_path}"}
-        with open(local_path, "rb") as f:
+
+        # Check file size before reading
+        file_size = os.path.getsize(safe_path)
+        if file_size > MAX_UPLOAD_BYTES:
+            return {"success": False, "error": (
+                f"File size ({file_size:,} bytes) exceeds maximum upload size "
+                f"({MAX_UPLOAD_BYTES:,} bytes / {MAX_UPLOAD_BYTES // 1024 // 1024} MB). "
+                "Use gsutil for larger files."
+            )}
+
+        with open(safe_path, "rb") as f:
             data_bytes = f.read()
         # Guess content type
         import mimetypes
-        content_type = mimetypes.guess_type(local_path)[0] or "application/octet-stream"
+        content_type = mimetypes.guess_type(safe_path)[0] or "application/octet-stream"
     else:
         return {"success": False, "error": "Either 'content' or 'local_path' is required for upload"}
+
+    # Check size of inline content too
+    if len(data_bytes) > MAX_UPLOAD_BYTES:
+        return {"success": False, "error": (
+            f"Content size ({len(data_bytes):,} bytes) exceeds maximum upload size "
+            f"({MAX_UPLOAD_BYTES:,} bytes / {MAX_UPLOAD_BYTES // 1024 // 1024} MB)."
+        )}
 
     import urllib.parse
     encoded_name = urllib.parse.quote(object_path, safe="")
@@ -177,13 +326,30 @@ def upload_object(params, headers):
 def download_object(params, headers):
     bucket = params.get("bucket")
     object_path = params.get("object_path")
-    if not bucket or not object_path:
-        return {"success": False, "error": "bucket and object_path are required"}
 
+    valid, err = validate_bucket_name(bucket)
+    if not valid:
+        return {"success": False, "error": err}
+    valid, err = validate_object_path(object_path)
+    if not valid:
+        return {"success": False, "error": err}
+
+    # Check object size before downloading (metadata request)
     import urllib.parse
     encoded_name = urllib.parse.quote(object_path, safe="")
-    url = f"{STORAGE_API}/b/{bucket}/o/{encoded_name}?alt=media"
 
+    meta_url = f"{STORAGE_API}/b/{bucket}/o/{encoded_name}"
+    meta_data, meta_status = make_request("GET", meta_url, headers)
+    if meta_status == 200 and isinstance(meta_data, dict):
+        obj_size = int(meta_data.get("size", 0))
+        if obj_size > MAX_DOWNLOAD_BYTES:
+            return {"success": False, "error": (
+                f"Object size ({obj_size:,} bytes) exceeds maximum download size "
+                f"({MAX_DOWNLOAD_BYTES:,} bytes / {MAX_DOWNLOAD_BYTES // 1024 // 1024} MB). "
+                "Use gsutil for larger files."
+            )}
+
+    url = f"{STORAGE_API}/b/{bucket}/o/{encoded_name}?alt=media"
     data, status = make_request("GET", url, headers)
 
     if status != 200:
@@ -191,10 +357,20 @@ def download_object(params, headers):
 
     local_path = params.get("local_path")
     if local_path:
+        # Feature gate: local file downloads disabled by default
+        allowed, err = check_feature_allowed("allow_local_file_download", "local file download")
+        if not allowed:
+            return {"success": False, "error": err}
+
+        # Validate local path is within allowed directories
+        safe_path, err = resolve_safe_local_path(local_path)
+        if err:
+            return {"success": False, "error": err}
+
         # Save to local file
         write_data = data if isinstance(data, bytes) else json.dumps(data).encode()
-        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-        with open(local_path, "wb") as f:
+        os.makedirs(os.path.dirname(safe_path) or ".", exist_ok=True)
+        with open(safe_path, "wb") as f:
             f.write(write_data)
         return {"success": True, "output": f"Downloaded gs://{bucket}/{object_path} to {local_path} ({len(write_data)} bytes)"}
     else:
@@ -215,8 +391,13 @@ def download_object(params, headers):
 def delete_object(params, headers):
     bucket = params.get("bucket")
     object_path = params.get("object_path")
-    if not bucket or not object_path:
-        return {"success": False, "error": "bucket and object_path are required"}
+
+    valid, err = validate_bucket_name(bucket)
+    if not valid:
+        return {"success": False, "error": err}
+    valid, err = validate_object_path(object_path)
+    if not valid:
+        return {"success": False, "error": err}
 
     import urllib.parse
     encoded_name = urllib.parse.quote(object_path, safe="")
@@ -233,8 +414,13 @@ def delete_object(params, headers):
 def get_object_metadata(params, headers):
     bucket = params.get("bucket")
     object_path = params.get("object_path")
-    if not bucket or not object_path:
-        return {"success": False, "error": "bucket and object_path are required"}
+
+    valid, err = validate_bucket_name(bucket)
+    if not valid:
+        return {"success": False, "error": err}
+    valid, err = validate_object_path(object_path)
+    if not valid:
+        return {"success": False, "error": err}
 
     import urllib.parse
     encoded_name = urllib.parse.quote(object_path, safe="")
@@ -305,6 +491,11 @@ def main():
     if action in bucket_actions:
         bucket = params.get("bucket", "")
         if bucket:
+            # Validate bucket name format first
+            valid, err = validate_bucket_name(bucket)
+            if not valid:
+                print(json.dumps({"success": False, "error": err}))
+                sys.exit(0)
             allowed, err = check_resource_allowed("buckets", bucket)
             if not allowed:
                 print(json.dumps({"success": False, "error": err}))

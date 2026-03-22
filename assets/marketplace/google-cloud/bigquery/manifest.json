@@ -2,7 +2,7 @@
   "name": "gcloud_bigquery",
   "display_name": "BigQuery",
   "description": "Query datasets, create tables, and manage data in Google BigQuery",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "tool_type": "custom",
   "runtime": "python",
   "entry_point": "tool.py",
@@ -19,17 +19,17 @@
     },
     "dataset_id": {
       "type": "string",
-      "description": "BigQuery dataset ID (required for dataset/table operations)",
+      "description": "BigQuery dataset ID (required for dataset/table operations). Must be alphanumeric + underscores only.",
       "required": false
     },
     "table_id": {
       "type": "string",
-      "description": "BigQuery table ID (required for table operations)",
+      "description": "BigQuery table ID (required for table operations). Must be alphanumeric + underscores only.",
       "required": false
     },
     "sql": {
       "type": "string",
-      "description": "SQL query to execute (required for 'query' action)",
+      "description": "SQL query to execute (required for 'query' action). SELECT queries only unless allow_mutating_queries is enabled.",
       "required": false
     },
     "rows": {
@@ -41,14 +41,19 @@
       "type": "string",
       "description": "Dataset location (default: US)",
       "required": false
+    },
+    "max_results": {
+      "type": "number",
+      "description": "Maximum number of query result rows to return (default: 100, max: 1000).",
+      "required": false
     }
   },
   "install_commands": [
-    "pip install google-cloud-bigquery google-auth"
+    "pip install chitty-sdk"
   ],
   "timeout_seconds": 60,
   "permission_tier": "moderate",
   "source": "marketplace",
   "marketplace_id": "google-cloud",
-  "instructions": "Use this tool to interact with Google BigQuery. The user authenticates via their own gcloud CLI login.\n\n**Available actions:**\n- `list_datasets` — List all datasets in a project\n- `create_dataset` — Create a new dataset (requires dataset_id, optional location)\n- `delete_dataset` — Delete a dataset (requires dataset_id)\n- `list_tables` — List tables in a dataset (requires dataset_id)\n- `describe_table` — Get table schema (requires dataset_id + table_id)\n- `query` — Run a SQL query (requires sql). Returns up to 100 rows as JSON.\n- `insert_rows` — Insert rows into a table (requires dataset_id + table_id + rows)\n\n**Important:** Always check if a project_id is needed. If the user hasn't specified one, omit it to use their default gcloud project."
+  "instructions": "Use this tool to interact with Google BigQuery. The user authenticates via their own gcloud CLI login.\n\n**Available actions:**\n- `list_datasets` — List all datasets in a project\n- `create_dataset` — Create a new dataset (requires dataset_id, optional location). Requires allow_create_dataset flag.\n- `delete_dataset` — Delete a dataset (requires dataset_id). Requires allow_delete_dataset flag.\n- `list_tables` — List tables in a dataset (requires dataset_id)\n- `describe_table` — Get table schema (requires dataset_id + table_id)\n- `query` — Run a SQL query (requires sql). Returns up to 1000 rows. Only SELECT allowed unless allow_mutating_queries is enabled.\n- `insert_rows` — Insert rows into a table (requires dataset_id + table_id + rows). Requires allow_mutating_queries flag.\n\n**Security notes:**\n- Prefer read-only SELECT queries. Confirm with the user before mutations.\n- Always add LIMIT to queries to avoid scanning excessive data and costs.\n- Dataset and table IDs are validated (alphanumeric + underscores only).\n- Queries are checked against the allowed datasets list.\n- Mutating SQL (INSERT, UPDATE, DELETE, DROP, etc.) is blocked unless the feature flag is enabled."
 }
