@@ -112,8 +112,16 @@ impl MarketplaceClient {
     }
 
     /// Download and install a package to the local marketplace directory.
+    /// Security: validates package name, uses staging directory, checks archive paths.
     /// Returns the path where the package was installed.
     pub async fn install_package(&self, name: &str, version: &str, marketplace_dir: &Path) -> Result<std::path::PathBuf> {
+        // Validate package name (prevent path traversal)
+        if name.contains("..") || name.contains('/') || name.contains('\\')
+            || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            anyhow::bail!("Invalid package name: {}", name);
+        }
+
         // Download the .tar.gz package
         let resp = self.client
             .get(format!("{}/api/v1/packages/{}/{}/download", self.base_url, name, version))
@@ -123,21 +131,27 @@ impl MarketplaceClient {
         let bytes = resp.error_for_status()?.bytes().await?;
         tracing::info!("Downloaded {}@{} ({} bytes)", name, version, bytes.len());
 
-        // Extract to marketplace dir
-        let pkg_dir = marketplace_dir.join(name);
-        std::fs::create_dir_all(&pkg_dir)?;
+        // Use a staging directory to avoid partial installs
+        let staging_dir = marketplace_dir.join(format!(".staging-{}", name));
+        if staging_dir.exists() {
+            std::fs::remove_dir_all(&staging_dir)?;
+        }
+        std::fs::create_dir_all(&staging_dir)?;
 
-        // Write the tar.gz and extract
-        let tar_path = pkg_dir.join(format!("{}.tar.gz", version));
+        let pkg_dir = marketplace_dir.join(name);
+
+        // Write the tar.gz to staging and extract
+        let tar_path = staging_dir.join(format!("{}.tar.gz", version));
         std::fs::write(&tar_path, &bytes)?;
 
-        // Extract using tar (available on Windows via Git Bash / WSL)
+        // Extract using tar into staging directory
         let output = tokio::process::Command::new("tar")
-            .args(["-xzf", &tar_path.to_string_lossy(), "-C", &pkg_dir.to_string_lossy()])
+            .args(["-xzf", &tar_path.to_string_lossy(), "-C", &staging_dir.to_string_lossy()])
             .output()
             .await?;
 
         if !output.status.success() {
+            let _ = std::fs::remove_dir_all(&staging_dir);
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("Failed to extract package: {}", stderr);
         }
@@ -145,9 +159,21 @@ impl MarketplaceClient {
         // Clean up the tar.gz
         let _ = std::fs::remove_file(&tar_path);
 
+        // Validate: check for path traversal in extracted files
+        for entry in walkdir::WalkDir::new(&staging_dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if let Ok(relative) = path.strip_prefix(&staging_dir) {
+                let rel_str = relative.to_string_lossy();
+                if rel_str.contains("..") {
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    anyhow::bail!("Archive contains path traversal: {}", rel_str);
+                }
+            }
+        }
+
         // GitHub archives extract to a subdirectory like "chitty-pkg-slack-main/"
-        // Move contents from subdirectory up to the package root
-        if let Ok(entries) = std::fs::read_dir(&pkg_dir) {
+        // Move contents from subdirectory up to the staging root
+        if let Ok(entries) = std::fs::read_dir(&staging_dir) {
             let subdirs: Vec<_> = entries
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().is_dir() && e.file_name().to_string_lossy().ends_with("-main"))
@@ -157,11 +183,11 @@ impl MarketplaceClient {
                 let subdir = subdirs[0].path();
                 tracing::info!("Moving contents from GitHub archive subdirectory: {:?}", subdir);
 
-                // Move all files from subdirectory to package root
+                // Move all files from subdirectory to staging root
                 if let Ok(sub_entries) = std::fs::read_dir(&subdir) {
                     for entry in sub_entries.filter_map(|e| e.ok()) {
                         let src = entry.path();
-                        let dst = pkg_dir.join(entry.file_name());
+                        let dst = staging_dir.join(entry.file_name());
                         if dst.exists() {
                             if dst.is_dir() {
                                 let _ = std::fs::remove_dir_all(&dst);
@@ -176,6 +202,12 @@ impl MarketplaceClient {
                 let _ = std::fs::remove_dir_all(&subdir);
             }
         }
+
+        // Atomic-ish swap: remove old package dir, rename staging to live
+        if pkg_dir.exists() {
+            std::fs::remove_dir_all(&pkg_dir)?;
+        }
+        std::fs::rename(&staging_dir, &pkg_dir)?;
 
         tracing::info!("Installed {}@{} to {:?}", name, version, pkg_dir);
         Ok(pkg_dir)

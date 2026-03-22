@@ -145,10 +145,13 @@ async fn build_and_run_command(
     }
 
     // Add package paths to runtime search paths
+    // Use platform-appropriate path separator (';' on Windows, ':' on Unix)
+    let path_sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+
     let python_packages = packages_dir.join("python").join(tool_name);
     if python_packages.exists() {
         if let Ok(existing) = std::env::var("PYTHONPATH") {
-            command.env("PYTHONPATH", format!("{};{}", python_packages.display(), existing));
+            command.env("PYTHONPATH", format!("{}{}{}", python_packages.display(), path_sep, existing));
         } else {
             command.env("PYTHONPATH", python_packages.to_string_lossy().to_string());
         }
@@ -157,7 +160,7 @@ async fn build_and_run_command(
     let node_packages = packages_dir.join("node").join(tool_name);
     if node_packages.exists() {
         if let Ok(existing) = std::env::var("NODE_PATH") {
-            command.env("NODE_PATH", format!("{};{}", node_packages.join("node_modules").display(), existing));
+            command.env("NODE_PATH", format!("{}{}{}", node_packages.join("node_modules").display(), path_sep, existing));
         } else {
             command.env("NODE_PATH", node_packages.join("node_modules").to_string_lossy().to_string());
         }
