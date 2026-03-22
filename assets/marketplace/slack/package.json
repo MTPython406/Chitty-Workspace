@@ -121,6 +121,42 @@
     }
   ],
 
+  "connections": [
+    {
+      "id": "socket_mode",
+      "label": "Real-time Events (Socket Mode)",
+      "description": "Persistent WebSocket connection to receive @mentions, DMs, and slash commands from Slack in real-time.",
+      "runtime": "python",
+      "script": "socket-mode/connect.py",
+      "requires_feature": "allow_socket_mode",
+      "requires_credentials": ["oauth_slack_access_token", "slack_app_token"],
+      "health_interval_secs": 30,
+      "restart_on_failure": true,
+      "max_restarts": 5,
+      "restart_delay_secs": 10,
+      "events": [
+        {
+          "id": "mention",
+          "label": "@Mention",
+          "description": "Triggered when someone @mentions the bot in a channel",
+          "agent_configurable": true
+        },
+        {
+          "id": "dm",
+          "label": "Direct Message",
+          "description": "Triggered when someone sends a direct message to the bot",
+          "agent_configurable": true
+        },
+        {
+          "id": "slash_command",
+          "label": "Slash Command",
+          "description": "Triggered when someone uses the /datavisions slash command",
+          "agent_configurable": true
+        }
+      ]
+    }
+  ],
+
   "agent_config": {
     "default_instructions": "You have access to Slack tools. Always list channels first to confirm access. Show message content to the user before sending. Never post without explicit confirmation.",
     "suggested_prompts": [

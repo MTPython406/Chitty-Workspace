@@ -13,6 +13,7 @@ tokio = { version = "1", features = ["full"] }
 # Web/HTTP
 reqwest = { version = "0.12", features = ["json", "stream"] }
 axum = { version = "0.7", features = ["ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 # Serialization
@@ -47,6 +48,11 @@ async-trait = "0.1"
 sha2 = "0.10"
 rand = "0.9"
 urlencoding = "2"
+
+# TLS (self-signed cert for localhost OAuth callbacks)
+rcgen = "0.13"
+rustls = "0.23"
+rustls-pemfile = "2"
 
 # Scheduler (cron expression parsing)
 cron = "0.13"

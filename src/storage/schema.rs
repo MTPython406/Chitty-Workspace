@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 10;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -47,6 +47,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if current < 9 {
         migrate_v9(conn)?;
+    }
+    if current < 10 {
+        migrate_v10(conn)?;
     }
 
     conn.execute(
@@ -444,5 +447,49 @@ fn migrate_v9(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("Database migrated to v9 (agent context management config)");
+    Ok(())
+}
+
+/// V10: Persistent connections — event routing and status tracking
+///
+/// Marketplace packages can declare persistent background connections
+/// (WebSockets, listeners, etc.). Events from these connections are
+/// routed to configured agents. This migration adds the tables to
+/// store routing configuration and connection runtime status.
+fn migrate_v10(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS connection_event_routes (
+            id              TEXT PRIMARY KEY,
+            package_id      TEXT NOT NULL,
+            connection_id   TEXT NOT NULL,
+            event_id        TEXT NOT NULL,
+            agent_id        TEXT REFERENCES agents(id) ON DELETE SET NULL,
+            provider        TEXT,
+            model           TEXT,
+            auto_approve    INTEGER NOT NULL DEFAULT 1,
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(package_id, connection_id, event_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_conn_routes_pkg
+            ON connection_event_routes(package_id, connection_id);
+
+        CREATE TABLE IF NOT EXISTS connection_status (
+            id              TEXT PRIMARY KEY,
+            package_id      TEXT NOT NULL,
+            connection_id   TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'stopped',
+            error_message   TEXT,
+            started_at      TEXT,
+            last_heartbeat  TEXT,
+            restart_count   INTEGER NOT NULL DEFAULT 0,
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(package_id, connection_id)
+        );",
+    )?;
+
+    tracing::info!("Database migrated to v10 (persistent connections: event routes + status)");
     Ok(())
 }

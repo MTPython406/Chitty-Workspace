@@ -284,6 +284,13 @@ pub struct PackageManifest {
     /// Getting-started guide for first-time users
     #[serde(default)]
     pub agent_config: Option<AgentConfig>,
+
+    // ── Persistent Connections ───────────────────────────────────
+    /// Background processes that receive external events (WebSockets, listeners, etc.)
+    /// Each connection is a long-running script managed by the platform.
+    /// Events from connections are routed to configured agents.
+    #[serde(default)]
+    pub connections: Vec<PackageConnection>,
 }
 
 /// How a package authenticates with external services
@@ -404,6 +411,65 @@ pub struct SetupStep {
     #[serde(default = "default_true")]
     pub required: bool,
 }
+
+/// A persistent background connection declared by a marketplace package.
+/// The platform manages the lifecycle (start/stop/restart/health) of the
+/// connection script, and routes incoming events to configured agents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageConnection {
+    /// Unique connection identifier within this package (e.g., "socket_mode")
+    pub id: String,
+    /// Human-readable label (e.g., "Real-time Events (Socket Mode)")
+    pub label: String,
+    /// Description shown in the marketplace UI
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Script runtime (python, node, shell, etc.)
+    pub runtime: RuntimeType,
+    /// Script path relative to package directory (e.g., "socket-mode/connect.py")
+    pub script: String,
+    /// Feature flag ID that must be enabled for this connection to run
+    #[serde(default)]
+    pub requires_feature: Option<String>,
+    /// Keyring credential keys that must exist before starting
+    #[serde(default)]
+    pub requires_credentials: Vec<String>,
+    /// How often to expect heartbeats (seconds). Connection is unhealthy if missed.
+    #[serde(default = "default_health_interval")]
+    pub health_interval_secs: u32,
+    /// Whether to auto-restart on failure
+    #[serde(default = "default_true")]
+    pub restart_on_failure: bool,
+    /// Maximum restart attempts before giving up
+    #[serde(default = "default_max_restarts")]
+    pub max_restarts: u32,
+    /// Delay between restart attempts (seconds)
+    #[serde(default = "default_restart_delay")]
+    pub restart_delay_secs: u32,
+    /// Event types this connection can emit — each can be routed to an agent
+    #[serde(default)]
+    pub events: Vec<ConnectionEvent>,
+}
+
+/// An event type that a connection can emit.
+/// Users configure which agent handles each event via the Marketplace UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionEvent {
+    /// Event identifier (e.g., "mention", "dm", "slash_command")
+    pub id: String,
+    /// Human-readable label (e.g., "@Mention Workflow")
+    pub label: String,
+    /// Description shown in config UI
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Whether the user can assign an agent to this event
+    #[serde(default = "default_true")]
+    pub agent_configurable: bool,
+}
+
+fn default_health_interval() -> u32 { 30 }
+fn default_max_restarts() -> u32 { 5 }
+fn default_restart_delay() -> u32 { 10 }
 
 fn default_true() -> bool { true }
 

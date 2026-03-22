@@ -1,5 +1,6 @@
 mod chat;
 mod config;
+mod connections;
 mod gpu;
 mod huggingface;
 mod integrations;
@@ -10,6 +11,7 @@ mod server;
 mod agents;
 mod skills;
 mod storage;
+mod tls;
 mod tools;
 mod ui;
 

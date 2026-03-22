@@ -113,6 +113,7 @@ pub struct AppState {
     pub browser_bridge: Arc<BrowserBridge>,
     pub skill_registry: Arc<crate::skills::SkillRegistry>,
     pub oauth_pending: crate::oauth::PendingFlows,
+    pub connection_manager: Arc<tokio::sync::RwLock<crate::connections::ConnectionManager>>,
 }
 
 /// Start the axum server on the given port.
@@ -153,7 +154,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
 
         if let Some(assets_marketplace) = assets_base {
             tracing::info!("Marketplace assets found at: {:?}", assets_marketplace);
-            let packages = ["google-cloud", "web-tools", "social-media"];
+            let packages = ["google-cloud", "web-tools", "social-media", "slack"];
             for pkg_name in &packages {
                 let pkg_dir = marketplace_dir.join(pkg_name);
                 if !pkg_dir.exists() {
@@ -180,13 +181,22 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
     tool_runtime.write().await.load_package_configs(&db);
 
     let oauth_pending = crate::oauth::PendingFlows::default();
-    let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge, skill_registry, oauth_pending });
+    let connection_manager = Arc::new(tokio::sync::RwLock::new(
+        crate::connections::ConnectionManager::new(),
+    ));
+    let state = Arc::new(AppState { db, tool_registry, tool_runtime, browser_bridge, skill_registry, oauth_pending, connection_manager });
 
     // Start the agent scheduler in the background
     let scheduler_state = state.clone();
     tokio::spawn(async move {
         crate::scheduler::initialize_next_runs(scheduler_state.clone()).await;
         crate::scheduler::run(scheduler_state).await;
+    });
+
+    // Start the connection manager in the background
+    let conn_state = state.clone();
+    tokio::spawn(async move {
+        crate::connections::ConnectionManager::run(conn_state).await;
     });
 
     let app = Router::new()
@@ -269,6 +279,12 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/marketplace/packages/:vendor/config", put(save_package_config))
         .route("/api/marketplace/packages/:vendor/resources/discover", post(discover_package_resources))
         .route("/api/marketplace/packages/:vendor/disconnect", post(disconnect_package_auth))
+        // Persistent Connections (marketplace package background processes)
+        .route("/api/connections", get(list_connections_handler))
+        .route("/api/connections/:package_id/:conn_id/start", post(start_connection_handler))
+        .route("/api/connections/:package_id/:conn_id/stop", post(stop_connection_handler))
+        .route("/api/connections/routes", get(list_connection_routes_handler))
+        .route("/api/connections/routes/:package_id/:conn_id/:event_id", put(set_connection_route_handler))
         // Marketplace registry (remote — browse/search/install from chitty.ai)
         .route("/api/marketplace/registry/packages", get(registry_list_packages))
         .route("/api/marketplace/registry/search", get(registry_search))
@@ -293,7 +309,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/local/sidecar/models/unload", post(sidecar_unload_handler))
         // Direct GGUF scanning (no sidecar needed)
         .route("/api/local/gguf/scan", get(gguf_scan_local_handler))
-        .with_state(state);
+        .with_state(state.clone());
 
     // Try the requested port first, then fall back to nearby ports
     let mut bound_port = port;
@@ -315,7 +331,48 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         }
     };
     tracing::info!("Server listening on http://127.0.0.1:{}", bound_port);
+
+    // Spawn an HTTPS listener on port 8771 for OAuth callbacks.
+    // Some providers (e.g., Slack) require HTTPS redirect URIs.
+    // This uses a self-signed certificate for localhost.
+    let https_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = start_oauth_https_listener(https_state).await {
+            tracing::warn!("HTTPS OAuth listener failed to start: {} — OAuth flows requiring HTTPS will fall back to HTTP", e);
+        }
+    });
+
     axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+/// Start a minimal HTTPS server on port 8771 for OAuth callbacks.
+/// This handles providers like Slack that require HTTPS redirect URIs.
+async fn start_oauth_https_listener(state: Arc<AppState>) -> anyhow::Result<()> {
+    use axum_server::tls_rustls::RustlsConfig;
+
+    let data_dir = crate::storage::default_data_dir();
+    let tls_certs = crate::tls::ensure_localhost_cert(&data_dir)?;
+
+    let rustls_config = RustlsConfig::from_pem_file(
+        &tls_certs.cert_path,
+        &tls_certs.key_path,
+    ).await?;
+
+    // Minimal router — only OAuth callback + a redirect for the start flow
+    let oauth_app = Router::new()
+        .route("/oauth/callback", get(oauth_callback_handler))
+        .route("/oauth/start/:provider", get(oauth_start_handler))
+        .with_state(state);
+
+    let https_port: u16 = 8771;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], https_port));
+    tracing::info!("HTTPS OAuth listener on https://127.0.0.1:{}", https_port);
+
+    axum_server::bind_rustls(addr, rustls_config)
+        .serve(oauth_app.into_make_service())
+        .await?;
 
     Ok(())
 }
@@ -3458,6 +3515,37 @@ fn agent_builder_tools() -> Vec<serde_json::Value> {
         serde_json::json!({
             "type": "function",
             "function": {
+                "name": "ask_user_question",
+                "description": "Present a question to the user as an interactive card with clickable options. The user picks one option. Always use this instead of asking questions in plain text. The first option should be your recommended choice. Ask ONE question at a time — wait for the answer before asking the next.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The question to ask the user"
+                        },
+                        "options": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": { "type": "string", "description": "Short label (2-5 words)" },
+                                    "description": { "type": "string", "description": "Brief explanation of what this option means" }
+                                },
+                                "required": ["label", "description"]
+                            },
+                            "minItems": 2,
+                            "maxItems": 4,
+                            "description": "2-4 options. First option should be the recommended choice."
+                        }
+                    },
+                    "required": ["question", "options"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
                 "name": "update_agent_draft",
                 "description": "Update a field on the agent being built. The user sees changes in real-time on the preview panel. Call this incrementally as you discuss and agree on parts of the agent with the user.",
                 "parameters": {
@@ -3625,6 +3713,20 @@ async fn execute_builder_tool(
                 }
             }
         }
+        "ask_user_question" => {
+            // Return the question data as JSON — the frontend renders it as an interactive card.
+            // The LLM receives this as the tool result and should stop to wait for the user's answer
+            // which comes as the next message in the conversation.
+            let question = args.get("question").and_then(|v| v.as_str()).unwrap_or("");
+            let options = args.get("options").cloned().unwrap_or(serde_json::json!([]));
+            serde_json::json!({
+                "type": "question",
+                "question": question,
+                "options": options,
+                "status": "waiting_for_user",
+                "instruction": "The question has been displayed to the user as an interactive card. STOP here. Do NOT ask another question or continue. Wait for the user's next message which will contain their selection."
+            }).to_string()
+        }
         "update_agent_draft" => {
             let field = args.get("field").and_then(|v| v.as_str()).unwrap_or("unknown");
             let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
@@ -3661,17 +3763,20 @@ Your job is to have a conversation with the user to understand what they need, t
 ## Your Process
 
 1. FIRST, call `list_system_tools` and `list_marketplace_packages` to see what is available.
-2. Discuss the design with the user — ask clarifying questions, explain what tools are available, recommend packages, and discuss trade-offs.
+2. Based on what the user asked for, use `ask_user_question` to ask ONE clarifying question at a time. Wait for the answer before asking the next question. Each question should have 3-4 clickable options with the recommended option listed first.
 3. When recommending a marketplace package, call `check_package_status` to verify it is set up. Warn the user if authentication or configuration is needed (they can complete setup from the preview panel).
 4. Use `update_agent_draft` to incrementally set the agent's name, description, instructions, tools, and packages as you agree on them with the user.
 5. Continue the conversation — refine the agent based on user feedback.
 
 ## Important Rules
 
+- ALWAYS use `ask_user_question` when you need user input. NEVER ask questions as plain text. Questions must be presented as interactive cards with clickable options.
+- Ask ONE question at a time. Wait for the user's answer before presenting the next question.
+- The first option in each question should be your recommended choice. Mark it clearly.
 - NEVER try to create custom tools. All tools come from native system tools or installed marketplace packages.
 - Tools from marketplace packages are real, community-developed, security-reviewed integrations.
-- Be conversational — explain your reasoning, ask follow-up questions, and discuss alternatives.
-- Do NOT output raw JSON. Respond with natural language and use `update_agent_draft` tool calls to build the agent.
+- Keep text responses brief. Use `ask_user_question` for decisions, use `update_agent_draft` for building.
+- Do NOT output raw JSON. Use tool calls for questions and draft updates.
 
 ## update_agent_draft Fields
 
@@ -3687,12 +3792,12 @@ Call `update_agent_draft` with these field values:
 
 ## Conversation Guidelines
 
-1. On the first message, call `list_system_tools` and `list_marketplace_packages` to understand what's available. Then respond conversationally.
-2. Recommend specific tools and packages based on the user's needs. Explain what each one does and why you're including it.
+1. On the first message, call `list_system_tools` and `list_marketplace_packages` to understand what's available. Then use `ask_user_question` for your first clarifying question.
+2. After each answer, either ask the next question with `ask_user_question` or call `update_agent_draft` to build parts of the agent.
 3. When adding a marketplace package, always call `check_package_status` first so you can tell the user if setup is needed.
 4. Write thorough instructions — be specific about the agent's persona, approach, constraints, and quality standards.
-5. After setting up the initial draft, ask the user if they want any changes before they save.
-6. Keep responses concise and focused. The user can see the agent being built in real-time on the preview panel."#.to_string()
+5. After setting up the initial draft, use `ask_user_question` to ask if the user wants any changes before they save.
+6. Keep text responses SHORT (1-2 sentences max). The interactive question cards do the heavy lifting."#.to_string()
 }
 
 /// Core agent builder processing — conversational agent loop with tool calls.
@@ -4908,4 +5013,145 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> anyhow::R
         }
     }
     Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Persistent Connections API
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// List all declared connections across marketplace packages with their runtime status.
+async fn list_connections_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let mut connections = Vec::new();
+
+    // Scan packages for connection declarations
+    let packages = {
+        let rt = state.tool_runtime.read().await;
+        rt.list_marketplace_packages()
+            .into_iter()
+            .filter(|pkg| !pkg.manifest.connections.is_empty())
+            .map(|pkg| pkg.manifest.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let mgr = state.connection_manager.read().await;
+
+    for manifest in &packages {
+        for conn_def in &manifest.connections {
+            let key = format!("{}:{}", manifest.name, conn_def.id);
+            let active = mgr.connections.get(&key);
+
+            let status = active
+                .map(|a| a.status.to_string())
+                .unwrap_or_else(|| "stopped".to_string());
+
+            let error = active.and_then(|a| a.error_message.clone());
+
+            connections.push(serde_json::json!({
+                "package_id": manifest.name,
+                "package_name": manifest.display_name,
+                "connection_id": conn_def.id,
+                "label": conn_def.label,
+                "description": conn_def.description,
+                "status": status,
+                "error": error,
+                "requires_feature": conn_def.requires_feature,
+                "events": conn_def.events.iter().map(|e| serde_json::json!({
+                    "id": e.id,
+                    "label": e.label,
+                    "description": e.description,
+                    "agent_configurable": e.agent_configurable,
+                })).collect::<Vec<_>>(),
+            }));
+        }
+    }
+
+    axum::Json(serde_json::json!({ "connections": connections }))
+}
+
+/// Start a specific connection.
+async fn start_connection_handler(
+    State(state): State<Arc<AppState>>,
+    Path((package_id, conn_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let mut mgr = state.connection_manager.write().await;
+    mgr.start_connection(&package_id, &conn_id).await;
+    axum::Json(serde_json::json!({"ok": true, "message": format!("Connection {}:{} starting", package_id, conn_id)}))
+}
+
+/// Stop a specific connection.
+async fn stop_connection_handler(
+    State(state): State<Arc<AppState>>,
+    Path((package_id, conn_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let key = format!("{}:{}", package_id, conn_id);
+    let mut mgr = state.connection_manager.write().await;
+    mgr.stop_connection(&key).await;
+    axum::Json(serde_json::json!({"ok": true, "message": format!("Connection {} stopped", key)}))
+}
+
+/// List all event route configurations.
+async fn list_connection_routes_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let routes = db.with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, package_id, connection_id, event_id, agent_id, provider, model, auto_approve, enabled
+             FROM connection_event_routes"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "package_id": row.get::<_, String>(1)?,
+                "connection_id": row.get::<_, String>(2)?,
+                "event_id": row.get::<_, String>(3)?,
+                "agent_id": row.get::<_, Option<String>>(4)?,
+                "provider": row.get::<_, Option<String>>(5)?,
+                "model": row.get::<_, Option<String>>(6)?,
+                "auto_approve": row.get::<_, bool>(7)?,
+                "enabled": row.get::<_, bool>(8)?,
+            }))
+        })?;
+        let result: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+        Ok(result)
+    }).await.unwrap_or_default();
+
+    axum::Json(serde_json::json!({ "routes": routes }))
+}
+
+/// Set (or create) an event route — maps a connection event to an agent.
+async fn set_connection_route_handler(
+    State(state): State<Arc<AppState>>,
+    Path((package_id, conn_id, event_id)): Path<(String, String, String)>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let agent_id = body.get("agent_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let provider = body.get("provider").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let model = body.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+
+    let db = state.db.clone();
+    let id = format!("{}:{}:{}", package_id, conn_id, event_id);
+
+    let result = db.with_conn(move |conn| {
+        conn.execute(
+            "INSERT INTO connection_event_routes (id, package_id, connection_id, event_id, agent_id, provider, model, enabled, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+             ON CONFLICT(package_id, connection_id, event_id) DO UPDATE SET
+                 agent_id = ?5,
+                 provider = ?6,
+                 model = ?7,
+                 enabled = ?8,
+                 updated_at = datetime('now')",
+            rusqlite::params![id, package_id, conn_id, event_id, agent_id, provider, model, enabled],
+        )?;
+        Ok(())
+    }).await;
+
+    match result {
+        Ok(()) => axum::Json(serde_json::json!({"ok": true})),
+        Err(e) => axum::Json(serde_json::json!({"ok": false, "error": e.to_string()})),
+    }
 }
