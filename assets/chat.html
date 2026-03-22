@@ -1375,6 +1375,7 @@ const App = {
     this.bindGlobalEvents();
     this.initBrowserWs();
     await this.loadProviders();
+    await this.loadAllUserModels();
     await this.loadAgents();
     await this.loadConversations();
     this.addPanel();
@@ -1489,6 +1490,15 @@ const App = {
       const data = await resp.json();
       this.state.userModels = data.models || [];
     } catch (e) { console.error('loadUserModels:', e); }
+    // Also load Ollama models for the unified dropdown
+    try {
+      const or = await fetch('/api/local/ollama/models');
+      if (or.ok) {
+        const od = await or.json();
+        this._ollamaModels = od.models || [];
+      }
+    } catch (_) { this._ollamaModels = []; }
+    this.renderModelSelect();
   },
 
   async loadConversations() {
@@ -2633,12 +2643,46 @@ const App = {
   },
 
   modelOptionsHTML() {
-    if (!this.state.models.length) return '<option value="">No models</option>';
-    return this.state.models.map(m => {
-      const val = m.model_id || m.id;
-      const name = m.display_name || val;
-      return `<option value="${val}" ${this.state.selectedModel === val ? 'selected' : ''}>${esc(name)}</option>`;
-    }).join('');
+    // Build options grouped by provider from userModels + Ollama
+    const allModels = [...(this.state.userModels || [])];
+
+    // Add Ollama models if available
+    if (this._ollamaModels && this._ollamaModels.length) {
+      for (const m of this._ollamaModels) {
+        const name = m.name || m.model;
+        if (!allModels.find(x => (x.model_id || x.id) === name)) {
+          allModels.push({ model_id: name, display_name: name, provider_id: 'ollama' });
+        }
+      }
+    }
+
+    if (!allModels.length) return '<option value="">No models — add in Settings</option>';
+
+    // Group by provider
+    const groups = {};
+    const providerNames = { anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI', google: 'Google AI', ollama: 'Ollama', huggingface: 'Local (GGUF)' };
+    for (const m of allModels) {
+      const pid = m.provider_id || 'other';
+      if (!groups[pid]) groups[pid] = [];
+      groups[pid].push(m);
+    }
+
+    // Render optgroups — cloud providers first, then local
+    const order = ['anthropic', 'openai', 'xai', 'google', 'ollama', 'huggingface', 'other'];
+    let html = '';
+    for (const pid of order) {
+      if (!groups[pid] || !groups[pid].length) continue;
+      const label = providerNames[pid] || pid;
+      html += `<optgroup label="${esc(label)}">`;
+      for (const m of groups[pid]) {
+        const val = m.model_id || m.id;
+        const name = m.display_name || val;
+        const sel = this.state.selectedModel === val ? 'selected' : '';
+        html += `<option value="${val}" data-provider="${esc(pid)}" ${sel}>${esc(name)}</option>`;
+      }
+      html += '</optgroup>';
+    }
+    return html;
   },
 
   renderModelSelect() {
@@ -3176,10 +3220,14 @@ const App = {
         if (pop) pop.innerHTML = this.historyPopoverHTML(panelId);
       }
     });
-    // Model selector (in input footer)
+    // Model selector (in input footer) — also updates provider from data attribute
     const modelSel = el.querySelector('.panel-model-select');
     if (modelSel) modelSel.addEventListener('change', () => {
       this.state.selectedModel = modelSel.value;
+      const opt = modelSel.selectedOptions[0];
+      if (opt && opt.dataset.provider) {
+        this.state.selectedProvider = opt.dataset.provider;
+      }
       // Sync all panel model selects
       document.querySelectorAll('.panel-model-select').forEach(s => { if (s !== modelSel) s.value = modelSel.value; });
     });
@@ -3263,11 +3311,22 @@ const App = {
     await this.loadProviders();
     await this.loadAllUserModels();
 
-    // Check Ollama status
+    // Check Ollama status + models
     let ollamaStatus = { running: false, models: [] };
     try {
-      const r = await fetch('/api/providers/ollama/status');
-      if (r.ok) ollamaStatus = await r.json();
+      const r = await fetch('/api/local/ollama/status');
+      if (r.ok) {
+        const s = await r.json();
+        ollamaStatus.running = s.running;
+        ollamaStatus.version = s.version;
+      }
+      if (ollamaStatus.running) {
+        const mr = await fetch('/api/local/ollama/models');
+        if (mr.ok) {
+          const md = await mr.json();
+          ollamaStatus.models = md.models || [];
+        }
+      }
     } catch (_) {}
 
     let html = '';
@@ -3605,10 +3664,23 @@ const App = {
             ? `${(data.vram_used_mb/1024).toFixed(1)}/${(data.vram_total_mb/1024).toFixed(1)} GB`
             : '—';
           document.getElementById('monitor-ram').textContent = '—';
-          // Check sidecar for active model
-          const sr = await fetch('/api/local/sidecar/status');
-          const ss = await sr.json();
-          document.getElementById('monitor-model').textContent = ss.loaded_model || 'None';
+          // Check active model — sidecar first, then Ollama
+          let activeModel = 'None';
+          try {
+            const sr = await fetch('/api/local/sidecar/status');
+            const ss = await sr.json();
+            if (ss.loaded_model) activeModel = ss.loaded_model;
+          } catch (_) {}
+          if (activeModel === 'None') {
+            try {
+              const or = await fetch('/api/local/ollama/running');
+              const os = await or.json();
+              if (os.models && os.models.length) {
+                activeModel = os.models.map(m => m.name || m.model).join(', ');
+              }
+            } catch (_) {}
+          }
+          document.getElementById('monitor-model').textContent = activeModel;
         }
       } catch (_) {}
     });

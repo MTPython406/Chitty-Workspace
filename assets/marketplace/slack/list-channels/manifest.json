@@ -1,0 +1,23 @@
+{
+  "name": "slack_list_channels",
+  "display_name": "List Slack Channels",
+  "description": "List public channels in the connected Slack workspace. Returns channel names, topics, purposes, and member counts.",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "exclude_archived": {
+      "type": "boolean",
+      "description": "Exclude archived channels (default true)",
+      "required": false
+    },
+    "limit": {
+      "type": "number",
+      "description": "Maximum number of channels to return (default 100)",
+      "required": false
+    }
+  },
+  "timeout_seconds": 15,
+  "source": "marketplace",
+  "marketplace_id": "slack"
+}
