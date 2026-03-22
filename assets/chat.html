@@ -1082,15 +1082,55 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .pkg-detail-back:hover { text-decoration: underline; }
 .pkg-detail-header {
   display: flex; align-items: center; gap: 14px;
-  margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+  margin-bottom: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
 }
 .pkg-detail-icon {
-  width: 48px; height: 48px; border-radius: 12px;
+  width: 52px; height: 52px; border-radius: 14px;
   display: flex; align-items: center; justify-content: center;
   font-size: 24px; color: #fff; flex-shrink: 0;
 }
-.pkg-detail-title { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+.pkg-detail-title { font-size: 20px; font-weight: 700; color: var(--text-primary); }
 .pkg-detail-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+/* Connection status */
+.pkg-connect-btn {
+  padding: 6px 16px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  transition: all 0.15s; flex-shrink: 0;
+}
+.pkg-connect-btn.connected {
+  background: transparent; border-color: var(--border); color: var(--text-muted);
+}
+.pkg-connect-btn:hover { opacity: 0.85; }
+.pkg-connection-status {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-radius: 8px; font-size: 12px; margin-bottom: 16px;
+}
+.pkg-connection-status.connected { background: rgba(34,197,94,0.08); color: #22c55e; border: 1px solid rgba(34,197,94,0.2); }
+.pkg-connection-status.disconnected { background: rgba(239,68,68,0.06); color: var(--text-muted); border: 1px solid var(--border); }
+.pkg-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.pkg-connection-status.connected .pkg-status-dot { background: #22c55e; }
+.pkg-connection-status.disconnected .pkg-status-dot { background: var(--text-muted); }
+/* Setup steps */
+.pkg-setup-step {
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 8px; background: var(--bg-secondary);
+}
+.pkg-setup-step-header { display: flex; align-items: center; gap: 8px; }
+.pkg-setup-step-status { font-size: 14px; flex-shrink: 0; }
+.pkg-setup-step-label { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.pkg-setup-step-help { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; white-space: pre-line; }
+.pkg-setup-step-input { margin-top: 6px; }
+.pkg-setup-input {
+  width: 100%; padding: 6px 10px; border-radius: 6px; font-size: 12px;
+  border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary);
+  box-sizing: border-box;
+}
+.pkg-setup-connect-btn {
+  padding: 6px 14px; border-radius: 6px; font-size: 11px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+}
 .pkg-detail-section {
   margin-bottom: 20px;
 }
@@ -5134,26 +5174,50 @@ const App = {
       const featureFlags = pkg.feature_flags || [];
       const agentConfig = pkg.agent_config || {};
 
+      // Check OAuth connection status if applicable
+      let authStatus = null;
+      const oauthProvider = pkg.auth?.oauth_provider;
+      if (oauthProvider) {
+        try {
+          const ar = await fetch('/api/oauth/status/' + encodeURIComponent(oauthProvider));
+          if (ar.ok) authStatus = await ar.json();
+        } catch (_) {}
+      }
+      const isConnected = authStatus?.connected === true;
+
       let html = '<div class="pkg-detail">';
 
       // Back button
       html += '<button class="pkg-detail-back" id="pkg-back">\u2190 Back to packages</button>';
 
-      // Header
+      // Header with connection status
       html += '<div class="pkg-detail-header">' +
-        '<div class="pkg-detail-icon" style="background:' + esc(pkg.color || '#666') + ';">\u2601</div>' +
-        '<div>' +
+        '<div class="pkg-detail-icon" style="background:' + esc(pkg.color || '#666') + ';">' +
+          (pkg.name === 'slack' ? '<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/></svg>'
+            : '\u2601') +
+        '</div>' +
+        '<div style="flex:1;">' +
           '<div class="pkg-detail-title">' + esc(pkg.display_name || pkg.name) + '</div>' +
-          '<div class="pkg-detail-meta">by ' + esc(pkg.vendor) + ' \u00b7 v' + esc(pkg.version) +
-            (pkg.categories && pkg.categories.length ? ' \u00b7 ' + pkg.categories.map(c => esc(c)).join(', ') : '') +
+          '<div class="pkg-detail-meta">' +
+            'by ' + esc(pkg.vendor || 'Community') + ' \u00b7 v' + esc(pkg.version || '1.0') +
+            (pkg.categories?.length ? ' \u00b7 ' + pkg.categories.map(c => esc(c)).join(', ') : '') +
           '</div>' +
         '</div>' +
+        (oauthProvider ? '<button class="pkg-connect-btn ' + (isConnected ? 'connected' : '') + '" id="pkg-connect-toggle">' +
+          (isConnected ? 'Disconnect' : 'Connect') + '</button>' : '') +
       '</div>';
+
+      // Connection status banner
+      if (oauthProvider) {
+        html += '<div class="pkg-connection-status ' + (isConnected ? 'connected' : 'disconnected') + '">' +
+          '<span class="pkg-status-dot"></span>' +
+          '<span>' + (isConnected ? 'Connected to ' + esc(pkg.display_name || pkg.name) : 'Not connected \u2014 set up credentials and connect') + '</span>' +
+        '</div>';
+      }
 
       // Description
       const desc = pkg.long_description || pkg.description || '';
       html += '<div class="pkg-detail-section">' +
-        '<div class="pkg-detail-section-title">About</div>' +
         '<div class="pkg-detail-desc">' + esc(desc) + '</div>' +
       '</div>';
 
@@ -5166,9 +5230,49 @@ const App = {
           '</ul></div>';
       }
 
+      // Setup section (for packages with setup_steps)
+      const setupSteps = pkg.setup_steps || [];
+      if (setupSteps.length > 0) {
+        html += '<div class="pkg-detail-section">' +
+          '<div class="pkg-detail-section-title">Setup</div>' +
+          '<div class="pkg-setup-steps" id="pkg-setup-steps">';
+        for (const step of setupSteps) {
+          const isCredential = !!step.credentials_key;
+          const isPrompt = step.prompt_user || isCredential;
+          html += '<div class="pkg-setup-step" data-step-id="' + esc(step.id) + '">' +
+            '<div class="pkg-setup-step-header">' +
+              '<span class="pkg-setup-step-status" id="setup-status-' + esc(step.id) + '">\u25cb</span>' +
+              '<span class="pkg-setup-step-label">' + esc(step.label) + '</span>' +
+            '</div>';
+          if (step.help_text) {
+            html += '<div class="pkg-setup-step-help">' + esc(step.help_text) + '</div>';
+          }
+          if (step.help_url) {
+            html += '<div style="margin-top:4px;"><a href="' + esc(step.help_url) + '" target="_blank" style="font-size:11px;color:var(--accent);">Open setup page \u2192</a></div>';
+          }
+          if (isPrompt) {
+            html += '<div class="pkg-setup-step-input">' +
+              '<input type="' + (isCredential ? 'password' : 'text') + '" ' +
+                'class="pkg-setup-input" data-step="' + esc(step.id) + '" ' +
+                'placeholder="' + esc(step.prompt_placeholder || step.prompt_label || '') + '" />' +
+            '</div>';
+          }
+          if (step.id === 'oauth_connect') {
+            html += '<div style="margin-top:6px;"><button class="pkg-setup-connect-btn" id="pkg-oauth-btn">' +
+              (isConnected ? '\u2713 Connected' : '\u26a1 Connect to ' + esc(pkg.display_name || 'service')) +
+            '</button></div>';
+          }
+          html += '</div>';
+        }
+        html += '</div>' +
+          '<button class="provider-card-btn" id="pkg-run-setup" style="margin-top:8px;">\u25b6 Run Setup</button>' +
+          '<div id="pkg-setup-result" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>' +
+        '</div>';
+      }
+
       // Tools
       html += '<div class="pkg-detail-section">' +
-        '<div class="pkg-detail-section-title">Tools (' + tools.length + ')</div>';
+        '<div class="pkg-detail-section-title">Tools <span style="font-size:11px;color:var(--text-muted);font-weight:400;">' + tools.length + '</span></div>';
       for (const tool of tools) {
         const actions = tool.parameters && tool.parameters.action
           ? (tool.parameters.action.description || '').replace(/^.*?:\s*/, '').split(',').map(a => a.trim()).filter(Boolean)
@@ -5255,6 +5359,97 @@ const App = {
 
       // Back button
       document.getElementById('pkg-back').addEventListener('click', () => self.renderMarketplaceSettings());
+
+      // Connect/Disconnect OAuth
+      const connectBtn = document.getElementById('pkg-connect-toggle');
+      if (connectBtn) {
+        connectBtn.addEventListener('click', async () => {
+          if (isConnected) {
+            if (!confirm('Disconnect from ' + (pkg.display_name || vendor) + '?')) return;
+            await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/disconnect', { method: 'POST' });
+            self.renderPackageDetail(vendor);
+          } else {
+            // Open OAuth flow
+            window.open('/oauth/start/' + encodeURIComponent(oauthProvider), '_blank');
+            // Poll for connection
+            const poll = setInterval(async () => {
+              try {
+                const r = await fetch('/api/oauth/status/' + encodeURIComponent(oauthProvider));
+                const s = await r.json();
+                if (s.connected) { clearInterval(poll); self.renderPackageDetail(vendor); }
+              } catch (_) {}
+            }, 2000);
+            setTimeout(() => clearInterval(poll), 120000);
+          }
+        });
+      }
+
+      // OAuth connect button in setup section
+      const oauthBtn = document.getElementById('pkg-oauth-btn');
+      if (oauthBtn) {
+        oauthBtn.addEventListener('click', () => {
+          window.open('/oauth/start/' + encodeURIComponent(oauthProvider), '_blank');
+          const poll = setInterval(async () => {
+            try {
+              const r = await fetch('/api/oauth/status/' + encodeURIComponent(oauthProvider));
+              const s = await r.json();
+              if (s.connected) { clearInterval(poll); self.renderPackageDetail(vendor); }
+            } catch (_) {}
+          }, 2000);
+          setTimeout(() => clearInterval(poll), 120000);
+        });
+      }
+
+      // Run Setup button
+      const runSetupBtn = document.getElementById('pkg-run-setup');
+      if (runSetupBtn) {
+        runSetupBtn.addEventListener('click', async () => {
+          runSetupBtn.disabled = true;
+          runSetupBtn.textContent = 'Running...';
+          const resultEl = document.getElementById('pkg-setup-result');
+
+          // Collect input values
+          const values = {};
+          container.querySelectorAll('.pkg-setup-input').forEach(input => {
+            if (input.value.trim()) values[input.dataset.step] = input.value.trim();
+          });
+
+          try {
+            const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/setup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ values }),
+            });
+            const result = await resp.json();
+            // Update step statuses
+            for (const step of (result.steps || [])) {
+              const el = document.getElementById('setup-status-' + step.step_id);
+              if (el) {
+                if (step.status === 'completed' || step.status === 'already_done') {
+                  el.textContent = '\u2713'; el.style.color = '#22c55e';
+                } else if (step.status === 'failed') {
+                  el.textContent = '\u2717'; el.style.color = '#ef4444';
+                } else if (step.status === 'needs_input') {
+                  el.textContent = '?'; el.style.color = '#f59e0b';
+                }
+              }
+            }
+            if (result.success) {
+              resultEl.textContent = '\u2713 Setup complete!';
+              resultEl.style.color = '#22c55e';
+            } else {
+              const failedStep = (result.steps || []).find(s => s.status === 'needs_input' || s.status === 'failed');
+              resultEl.textContent = failedStep ? failedStep.message || 'Setup incomplete' : 'Setup incomplete';
+              resultEl.style.color = '#f59e0b';
+            }
+          } catch (e) {
+            resultEl.textContent = 'Error: ' + e.message;
+            resultEl.style.color = '#ef4444';
+          }
+          runSetupBtn.disabled = false;
+          runSetupBtn.textContent = '\u25b6 Run Setup';
+        });
+      }
 
       // Remove resource tags
       container.querySelectorAll('.pkg-resource-tag .remove-btn').forEach(btn => {
