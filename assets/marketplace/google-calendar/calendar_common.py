@@ -65,6 +65,31 @@ def normalize_attendees(attendees) -> list[str]:
     return valid
 
 
+def validate_calendar_id(calendar_id) -> str:
+    """Validate and sanitize a calendar ID.
+
+    Accepts 'primary', email addresses, or Google resource calendar IDs.
+    Returns 'primary' if the input is empty or invalid.
+    """
+    if not calendar_id or not isinstance(calendar_id, str):
+        return "primary"
+    calendar_id = calendar_id.strip()
+    if not calendar_id:
+        return "primary"
+    if calendar_id.lower() == "primary":
+        return "primary"
+    # Allow email-style IDs and resource calendar IDs
+    if EMAIL_REGEX.match(calendar_id):
+        return calendar_id
+    # Allow resource calendar IDs (contain @group.calendar.google.com etc.)
+    if re.match(r"^[a-zA-Z0-9._\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", calendar_id):
+        return calendar_id
+    # Fallback: if it looks like a bare ID (alphanumeric), allow it
+    if re.match(r"^[a-zA-Z0-9._\-@]+$", calendar_id):
+        return calendar_id
+    return "primary"
+
+
 def parse_event_window(start_time: str, end_time: str, timezone_str: str = "UTC"):
     """Parse and validate event start/end times.
 

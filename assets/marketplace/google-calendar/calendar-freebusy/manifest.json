@@ -1,0 +1,33 @@
+{
+  "name": "calendar_freebusy",
+  "display_name": "Find Free/Busy Times",
+  "description": "Find free and busy time slots across one or more Google Calendars. Useful for scheduling meetings by identifying available windows.",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "start_time": {
+      "type": "string",
+      "description": "Start of the time range to check in ISO 8601 format (e.g. '2026-03-22T09:00:00-07:00')",
+      "required": true
+    },
+    "end_time": {
+      "type": "string",
+      "description": "End of the time range to check in ISO 8601 format (e.g. '2026-03-22T17:00:00-07:00')",
+      "required": true
+    },
+    "calendar_ids": {
+      "type": "array",
+      "description": "List of calendar IDs to check (default: ['primary']). Use email addresses for shared calendars.",
+      "required": false
+    },
+    "min_duration_minutes": {
+      "type": "number",
+      "description": "Minimum free slot duration in minutes to include in results (default: 30)",
+      "required": false
+    }
+  },
+  "timeout_seconds": 20,
+  "source": "marketplace",
+  "marketplace_id": "google-calendar"
+}

@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from calendar_common import clamp_int
+from calendar_common import clamp_int, validate_calendar_id
 
 from chitty_sdk import tool_main, require_google_token, api_get
 
@@ -27,13 +27,14 @@ def main(args):
 
     max_results = clamp_int(args.get("max_results"), name="max_results", default=10, minimum=1, maximum=MAX_RESULTS_LIMIT)
     days_ahead = clamp_int(args.get("days_ahead"), name="days_ahead", default=7, minimum=1, maximum=MAX_DAYS_AHEAD)
+    calendar_id = validate_calendar_id(args.get("calendar_id"))
 
     now = datetime.now(timezone.utc)
     time_min = now.isoformat()
     time_max = (now + timedelta(days=days_ahead)).isoformat()
 
     data = api_get(
-        f"{CALENDAR_API}/calendars/primary/events",
+        f"{CALENDAR_API}/calendars/{calendar_id}/events",
         token=token,
         params={
             "timeMin": time_min,
