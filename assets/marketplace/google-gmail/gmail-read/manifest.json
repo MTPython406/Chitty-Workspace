@@ -1,0 +1,33 @@
+{
+  "name": "gmail_read",
+  "display_name": "Read Gmail",
+  "description": "Read, list, and search emails from your Gmail account. Actions: list (recent inbox), search (Gmail query syntax), read (full email by ID).",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "action": {
+      "type": "string",
+      "description": "Action to perform: 'list' (recent inbox emails), 'search' (search with Gmail query), or 'read' (get full email by message_id)",
+      "required": true
+    },
+    "query": {
+      "type": "string",
+      "description": "Gmail search query for 'search' action. Supports: from:, to:, subject:, has:attachment, is:unread, after:2024/01/01, label:, etc.",
+      "required": false
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Gmail message ID for 'read' action. Get this from list or search results.",
+      "required": false
+    },
+    "max_results": {
+      "type": "number",
+      "description": "Maximum number of emails to return (default 10, max 50)",
+      "required": false
+    }
+  },
+  "timeout_seconds": 30,
+  "source": "marketplace",
+  "marketplace_id": "google-gmail"
+}
