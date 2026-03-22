@@ -1,0 +1,77 @@
+# Chitty Workspace Feature List and Usage Guide
+
+This document inventories the feature sets that currently exist across the Chitty Workspace application, including the desktop app, embedded web UI, local HTTP server, browser extension, CLI entry points, and bundled local model sidecar support. It is organized by feature set so a user can quickly understand what each section of the product is for and how each feature is used.
+
+## Feature Sets Overview
+
+| Feature Set | Overall Description |
+|---|---|
+| Application Shell | The desktop shell starts the local server, opens the WebView UI, and keeps the app available from the system tray. |
+| Chat Workspace | The main multi-panel workspace where users open chat panels, pick agents/models, set project context, and talk to the assistant. |
+| Agents and Skills | User-defined or AI-generated agents combine persona, skills, model preferences, approval settings, and project scope. |
+| Tools and Automation | Native, custom, integration, marketplace, and browser-driven tools let the assistant search code, read/write files, use the terminal, browse, and load skills. |
+| Providers and Models | Chitty supports cloud BYOK providers and local runtimes, with model discovery, saved defaults, and secure API key storage. |
+| Marketplace and Connections | Installable packages expand the system with tools, optional setup steps, and background connections such as event listeners. |
+| Memory and Context | Persistent memory, project context files, token usage, and context-budget controls help the assistant retain useful information while staying within model limits. |
+| Scheduling and Background Services | The app can store recurring scheduled tasks and runs server-side background loops for schedules and package connections. |
+| Browser Extension | The browser extension reports connection status and enables browser automation commands against a real Chrome or Edge session. |
+| CLI and Local Services | Command-line entry points support starting the app, inspecting configuration, listing agents, and running limited tests; a HuggingFace sidecar enables local inference. |
+
+## Detailed Feature List
+
+| Feature Set | Feature | What it does | How to use |
+|---|---|---|---|
+| Application Shell | Desktop launch / default run mode | Starts storage, configuration, tool runtime, local server, and the embedded WebView UI. | Run `chitty-workspace` with no subcommand. The app launches the local HTTP server and opens the desktop window automatically. |
+| Application Shell | System tray presence | Keeps the app available from the tray even when the main window is closed. | Start the app, then use the tray icon menu to reopen the window with **Open** or fully exit with **Quit**. Closing the window hides it to the tray instead of exiting. |
+| Application Shell | Local embedded web UI | Loads the app UI from the local server into a native desktop window. | Launch the desktop app normally; the WebView automatically points at the local `http://127.0.0.1:8770` server. |
+| Chat Workspace | Multi-panel workspace | Lets users work in multiple side-by-side chat panels and switch focus between panels. | Click **+ New Panel** in the top bar to create another panel. Use panel focus and the carousel navigation to move between open panels. |
+| Chat Workspace | Theme toggle | Supports dark and light themes for the UI. | Use the top-bar theme button to switch between dark and light mode. |
+| Chat Workspace | Per-panel chat | Each panel acts as a separate chat surface with its own messages, input area, agent, model, and project path. | Open a panel, type into the message box, optionally choose an agent/model, and send your prompt. |
+| Chat Workspace | Project path prompt and field | Associates a project directory with a panel so the assistant can use project-scoped context and memories. | Enter a filesystem path in the project prompt or project path field shown in a panel header. |
+| Chat Workspace | Slash commands | Supports command-style workflows such as scheduling and help inside chat. | Type `/` in chat, then run commands such as `/schedule`, `/schedules`, or `/help`. |
+| Chat Workspace | Action panel | Provides a right-side workspace for secondary views such as agents, providers, marketplace, browser, builder, and activity. | Open the action panel and click the relevant tab to manage agents, providers, marketplace packages, browser tools, or activity details. |
+| Chat Workspace | Activity log and tool call cards | Shows tool execution history, status, duration, and expandable details inline with chat/activity. | Send a task that uses tools, then expand the tool call blocks or review the activity panel. |
+| Chat Workspace | Approval cards | Prompts the user before sensitive actions such as file writes, terminal use, or browser actions when approval is required. | When an approval card appears, choose approve, auto-approve for the session if offered by the workflow, or deny. |
+| Chat Workspace | Artifact cards | Renders generated artifacts in chat so users can inspect outputs the agent produced. | Click the artifact card that appears in a conversation after the assistant emits an artifact. |
+| Agents and Skills | Built-in Chitty agent | Provides the default system administrator-style assistant that understands the platform. | Open a chat panel and use the default assistant without creating a custom agent. |
+| Agents and Skills | Custom agent management | Create, edit, list, and delete agents with their own persona, skills, tags, project scope, provider/model preferences, and execution settings. | Open the **Agents** area from the action panel or use the API/UI agent forms to create or update an agent, then select that agent in a chat panel. |
+| Agents and Skills | Agent execution configuration | Agents can define max iterations, temperature, max tokens, approval mode, and context controls. | Configure these values when creating or editing an agent, then use that agent for future chats. |
+| Agents and Skills | Agent Builder | Provides an AI-assisted workflow for generating agents conversationally and previewing the resulting draft before saving. | Open the Agent Builder view in the action panel, describe the kind of agent you want, answer follow-up questions, review the preview, and save the draft. |
+| Agents and Skills | Skills catalog and on-demand loading | Discovers SKILL.md-based skills from bundled, user, project, and marketplace locations and loads full instructions only when needed. | Let an agent use discovered skills automatically, or explicitly load a skill through the skill tooling when deeper instructions are needed. |
+| Tools and Automation | Native file tools | Lets the assistant read and write files in the local workspace. | Ask the assistant to inspect or update a file; when approval is required, approve the requested action. |
+| Tools and Automation | Native terminal tool | Runs shell commands from the assistant workflow. | Ask the assistant to execute a command or workflow; review and approve the terminal action if the current agent is in prompt mode. |
+| Tools and Automation | Native code search tool | Searches project code and files for relevant symbols or content. | Ask the assistant to search the codebase, function names, or text across the project. |
+| Tools and Automation | Memory save tool | Stores useful user, project, feedback, or reference memories for later retrieval. | Ask the assistant to remember a preference, project rule, or reusable detail. |
+| Tools and Automation | Tool creation tool | Supports creating additional custom tools. | Use the assistant to generate a new custom tool when a repeated workflow should become reusable. |
+| Tools and Automation | Package install tool | Installs marketplace packages that provide new tools. | Use the marketplace UI or agent workflow to install a package, then complete any required setup steps. |
+| Tools and Automation | Browser automation tool | Sends browser commands through the browser bridge so an agent can navigate, click, type, read, execute JavaScript, and capture state. | Install the browser extension, keep Chitty running, then ask the assistant to perform browser work. Approve browser actions when prompted. |
+| Tools and Automation | Google productivity tools | Includes native Gmail read/send, Calendar list, and Drive search tool registrations. | Connect or configure the required Google authentication path, then ask the assistant to read mail, send mail, inspect calendars, or search Drive. |
+| Providers and Models | BYOK cloud providers | Supports OpenAI, Anthropic, Google AI, and xAI using user-supplied API keys. | Open **Settings** or the **Providers** panel, save the provider API key, discover models if needed, then choose the provider/model in chat. |
+| Providers and Models | Local runtimes | Supports Ollama and HuggingFace-based local model serving. | Enable/configure the local runtime, ensure the local service is available, and then select its model in the app. |
+| Providers and Models | Secure key storage | Stores API keys in the OS keyring rather than plain-text config files. | Save a provider key from the UI; Chitty stores it through the platform keyring automatically. |
+| Providers and Models | Model discovery and user model library | Lets users discover models from providers, add them to their local list, remove them, and set defaults. | Use the provider controls to discover models, then add desired models and optionally mark one as the default for that provider. |
+| Marketplace and Connections | Bundled marketplace packages | Seeds bundled marketplace packages such as web tools, social media, Slack, Google Gmail, Google Calendar, and Google Cloud into the local marketplace directory. | Open **Marketplace**, inspect the available packages, install or enable the package you need, then use its tools from chat. |
+| Marketplace and Connections | Package metadata and setup steps | Packages can expose descriptions, tools, vendor metadata, and installation/setup guidance. | From the marketplace, open a package card, review its tools and setup requirements, and complete any required install steps. |
+| Marketplace and Connections | Background package connections | Long-running package connections can run as subprocesses, send events, heartbeat, and restart on failure. | Install a package that declares connections, enable required features/credentials, and let the background connection manager keep it running. |
+| Memory and Context | Persistent memory types | Stores user, feedback, project, and reference memories in SQLite for reuse across sessions. | Ask the assistant to remember something important, or rely on the app to persist relevant memory created during use. |
+| Memory and Context | Project context files | Loads `chitty.md` or `.chitty/chitty.md` files from a project so the assistant understands local conventions and workflows. | Add a `chitty.md` file to your project, then set that project path in a panel before chatting. |
+| Memory and Context | Context budget controls | Agents can define context budget percentage, compaction strategy, and maximum conversation turns to control long-running conversations. | Set these options on an agent, then use that agent for chats that may become long or tool-heavy. |
+| Memory and Context | Token usage analytics | Tracks token usage by conversation, provider, and model and exposes usage views in the Settings modal. | Open **Settings** and switch to the **Usage** tab to review token totals and conversation usage. |
+| Memory and Context | Context usage indicator | Shows a token/context usage badge and progress bar in the chat UI. | Watch the context badge near the model controls and the panel progress indicator during longer conversations. |
+| Scheduling and Background Services | Scheduled task CRUD | Lets users create, list, edit, delete, and manually trigger scheduled tasks through the API and slash-command workflow. | Use `/schedule` or the schedules UI/API to create a task with an agent, prompt, cron expression, and optional project path. |
+| Scheduling and Background Services | Schedule polling loop | Polls for due tasks, computes next-run timestamps, and updates run metadata in the background. | Keep Chitty running so the background scheduler loop can monitor stored tasks. |
+| Scheduling and Background Services | Current schedule execution status | The scheduler currently updates timestamps and logs execution activity, but the code marks full agent execution as still pending. | Use scheduling today for task management and timing metadata, but expect the actual scheduled run path to remain incomplete until the execution TODO is implemented. |
+| Browser Extension | Connection status popup | Shows whether the extension can reach the local Chitty server. | Open the browser extension popup; it checks `http://127.0.0.1:8770/health` and reports connected or disconnected status. |
+| Browser Extension | Real-browser control surface | Acts as the browser-side counterpart for Chitty browser commands so agents can operate in a real browsing session. | Install the extension in Chrome/Edge, keep the desktop app running, and use browser-enabled tasks from Chitty. |
+| CLI and Local Services | `run` mode | Starts the full desktop application. | Run `chitty-workspace run`, or simply `chitty-workspace`. |
+| CLI and Local Services | `config` command | Prints the current data directory and serialized application config. | Run `chitty-workspace config` in a terminal. |
+| CLI and Local Services | `agents` command | Lists installed agents from the local database. | Run `chitty-workspace agents`. |
+| CLI and Local Services | `test` command | Sends a headless test prompt using a selected provider and optional model. | Run `chitty-workspace test "your prompt" --provider xai --model <model>` after configuring a supported key. |
+| CLI and Local Services | `test-agent-builder` command | Runs the agent builder flow from the command line for experimentation. | Run `chitty-workspace test-agent-builder "Describe the agent you want"`. |
+| CLI and Local Services | HuggingFace inference sidecar | Provides a Python sidecar process for local inference support when HuggingFace local models are enabled. | Install the sidecar requirements, start/configure the sidecar environment, and point Chitty at the configured sidecar port if using HuggingFace local models. |
+
+## Notes on Current Implementation Status
+
+- **Scheduling is partially implemented.** The application exposes schedule creation, storage, polling, timestamp updates, and manual run endpoints, but the scheduler source explicitly notes that full agent execution is still pending.
+- **Integrations are not yet a separate completed framework.** The `integrations` module is currently a TODO placeholder, so most practical extension behavior today comes from native tools, marketplace packages, and connection-managed package scripts.
+- **Browser automation depends on the extension/browser frontend being connected.** If no browser frontend is connected, browser-tool commands will fail until the extension side is available.

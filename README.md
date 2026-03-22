@@ -2,6 +2,10 @@
 
 A local-first AI assistant with agents, tools, marketplace packages, and bring-your-own-key (BYOK) provider support. Runs entirely on your machine — no cloud server required.
 
+## Documentation
+
+- [Application Feature List and Usage Guide](docs/application-feature-list.md)
+
 ## What is Chitty Workspace?
 
 Chitty Workspace is a standalone desktop AI assistant that gives you full control over your AI experience:
