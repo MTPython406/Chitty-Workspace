@@ -87,13 +87,19 @@ pub const SLACK: ProviderTemplate = ProviderTemplate {
     description: "Messages, Channels, Users",
     auth_url: "https://slack.com/oauth/v2/authorize",
     token_url: "https://slack.com/api/oauth.v2.access",
-    default_scopes: &["chat:write", "channels:read", "channels:history", "users:read"],
+    default_scopes: &[
+        "chat:write", "channels:read", "channels:history", "users:read",
+        "app_mentions:read", "im:history", "im:read", "commands",
+    ],
     setup_url: "https://api.slack.com/apps",
-    setup_instructions: "1. Go to api.slack.com/apps → Create New App\n\
-        2. Choose 'From scratch', name: Chitty Workspace\n\
-        3. OAuth & Permissions → Add redirect URL: http://localhost:8770/oauth/callback\n\
-        4. Add scopes: chat:write, channels:read, channels:history, users:read\n\
-        5. Install to workspace → Copy Bot Token and Client Secret",
+    setup_instructions: "1. Go to api.slack.com/apps → Create New App → From scratch\n\
+        2. Name: Chitty Workspace, select your workspace\n\
+        3. OAuth & Permissions → Redirect URLs → Add: http://localhost:8770/oauth/callback\n\
+        4. Bot Token Scopes → Add: chat:write, channels:read, channels:history, users:read, app_mentions:read, im:history, im:read, commands\n\
+        5. Socket Mode → Enable Socket Mode → Generate App-Level Token (scope: connections:write)\n\
+        6. Event Subscriptions → Enable → Subscribe to: app_mention, message.im\n\
+        7. Basic Information → Copy Client ID and Client Secret\n\
+        8. Install App to workspace",
 };
 
 /// All known provider templates

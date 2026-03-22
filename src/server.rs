@@ -268,6 +268,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/marketplace/packages/:vendor/config", get(get_package_config))
         .route("/api/marketplace/packages/:vendor/config", put(save_package_config))
         .route("/api/marketplace/packages/:vendor/resources/discover", post(discover_package_resources))
+        .route("/api/marketplace/packages/:vendor/disconnect", post(disconnect_package_auth))
         // Marketplace registry (remote — browse/search/install from chitty.ai)
         .route("/api/marketplace/registry/packages", get(registry_list_packages))
         .route("/api/marketplace/registry/search", get(registry_search))
@@ -3980,7 +3981,49 @@ async fn run_package_setup(
             }
         }
 
-        // 2. Determine the install command
+        // 2a. If step has credentials_key, store value in OS keyring instead of running command
+        if let Some(cred_key) = &step.credentials_key {
+            if let Some(val) = user_values.get(step_id).and_then(|v| v.as_str()) {
+                if !val.is_empty() {
+                    match crate::config::set_api_key(cred_key, val) {
+                        Ok(()) => {
+                            tracing::info!("Package setup [{}]: stored credential '{}'", step_id, cred_key);
+                            results.push(serde_json::json!({
+                                "step_id": step_id,
+                                "label": label,
+                                "status": "completed",
+                                "message": "Credential saved securely",
+                            }));
+                            continue;
+                        }
+                        Err(e) => {
+                            results.push(serde_json::json!({
+                                "step_id": step_id,
+                                "label": label,
+                                "status": "failed",
+                                "message": format!("Failed to save credential: {}", e),
+                            }));
+                            if step.required { all_success = false; break; }
+                            continue;
+                        }
+                    }
+                }
+            }
+            // No value provided — prompt user
+            results.push(serde_json::json!({
+                "step_id": step_id,
+                "label": label,
+                "status": "needs_input",
+                "prompt_label": step.prompt_label,
+                "prompt_placeholder": step.prompt_placeholder,
+                "prompt_help": step.prompt_help,
+                "message": "Credential required",
+            }));
+            all_success = false;
+            continue;
+        }
+
+        // 2b. Determine the install command
         let install_cmd = if let Some(template) = &step.install_command_template {
             // User must provide a value for this step
             if let Some(val) = user_values.get(step_id).and_then(|v| v.as_str()) {
@@ -4071,6 +4114,42 @@ async fn run_package_setup(
         "success": all_success,
         "steps": results,
     }))
+}
+
+/// POST /api/marketplace/packages/:vendor/disconnect — Clear OAuth tokens for a package
+async fn disconnect_package_auth(
+    Path(vendor): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let rt = state.tool_runtime.read().await;
+    let pkg = rt.list_marketplace_packages()
+        .into_iter()
+        .find(|p| p.manifest.name == vendor)
+        .cloned();
+    drop(rt);
+
+    let pkg = match pkg {
+        Some(p) => p,
+        None => return Json(serde_json::json!({ "success": false, "error": "Package not found" })),
+    };
+
+    // If package has an OAuth provider, disconnect it
+    if let Some(provider) = pkg.manifest.auth.as_ref().and_then(|a| a.oauth_provider.as_deref()) {
+        // Clear tokens from keyring
+        let keys = [
+            format!("oauth_{}_access_token", provider),
+            format!("oauth_{}_refresh_token", provider),
+            format!("oauth_{}_expires_at", provider),
+            format!("oauth_{}_scopes", provider),
+        ];
+        for key in &keys {
+            let _ = crate::config::delete_api_key(key);
+        }
+        tracing::info!("Disconnected OAuth for package '{}' (provider: {})", vendor, provider);
+        Json(serde_json::json!({ "success": true, "message": format!("Disconnected {}", provider) }))
+    } else {
+        Json(serde_json::json!({ "success": false, "error": "Package has no OAuth provider" }))
+    }
 }
 
 struct CommandResult {

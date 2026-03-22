@@ -1,0 +1,24 @@
+{
+  "name": "slack_send_message",
+  "display_name": "Send Slack Message",
+  "description": "Send a message to a Slack channel. The bot must be invited to the channel first. Supports Slack mrkdwn formatting.",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "channel": {
+      "type": "string",
+      "description": "Channel name (e.g. 'general') or channel ID (e.g. 'C01234567')",
+      "required": true
+    },
+    "text": {
+      "type": "string",
+      "description": "Message text to send. Supports Slack mrkdwn: *bold*, _italic_, `code`, ```code block```, <url|text>",
+      "required": true
+    }
+  },
+  "timeout_seconds": 15,
+  "source": "marketplace",
+  "marketplace_id": "slack",
+  "permission_tier": "moderate"
+}

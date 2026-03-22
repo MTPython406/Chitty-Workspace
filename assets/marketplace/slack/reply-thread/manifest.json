@@ -1,0 +1,29 @@
+{
+  "name": "slack_reply_thread",
+  "display_name": "Reply to Slack Thread",
+  "description": "Reply to a message thread in a Slack channel. Requires the thread timestamp (ts) from read_history.",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "channel": {
+      "type": "string",
+      "description": "Channel name or ID where the thread is",
+      "required": true
+    },
+    "thread_ts": {
+      "type": "string",
+      "description": "Thread timestamp (ts) of the parent message to reply to",
+      "required": true
+    },
+    "text": {
+      "type": "string",
+      "description": "Reply text. Supports Slack mrkdwn formatting.",
+      "required": true
+    }
+  },
+  "timeout_seconds": 15,
+  "source": "marketplace",
+  "marketplace_id": "slack",
+  "permission_tier": "moderate"
+}

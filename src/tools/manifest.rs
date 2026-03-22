@@ -397,6 +397,10 @@ pub struct SetupStep {
     pub prompt_placeholder: Option<String>,
     #[serde(default)]
     pub prompt_help: Option<String>,
+    /// If set, the user-entered value is stored in the OS keyring under this key
+    /// instead of running a shell command. Used for OAuth credentials, API tokens, etc.
+    #[serde(default)]
+    pub credentials_key: Option<String>,
     #[serde(default = "default_true")]
     pub required: bool,
 }

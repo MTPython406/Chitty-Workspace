@@ -1,0 +1,140 @@
+{
+  "name": "slack",
+  "display_name": "Slack",
+  "vendor": "Chitty",
+  "description": "Send messages, read channels, and receive real-time events from Slack",
+  "version": "1.0.0",
+  "icon": "message-square",
+  "color": "#4A154B",
+  "status": "not_installed",
+
+  "long_description": "Full Slack integration for Chitty Workspace. Send messages to channels, read conversation history, reply to threads, and receive real-time @mentions and DMs via Socket Mode.\n\n**Messaging** — Send messages to any channel the bot is invited to. Reply in threads. Format with Slack mrkdwn.\n\n**Reading** — List channels, read message history, search conversations. Summarize long threads.\n\n**Real-Time Events** — Enable Socket Mode for persistent WebSocket connection. Receive @mentions and DMs, route to an agent for automatic responses.\n\nRequires a Slack Developer App (free). Setup wizard guides you through app creation.",
+
+  "categories": ["productivity", "messaging", "collaboration"],
+  "docs_url": "https://api.slack.com/docs",
+  "repo_url": "https://github.com/MTPython406/Chitty-Workspace",
+
+  "tools": [
+    "list-channels",
+    "send-message",
+    "read-history",
+    "reply-thread"
+  ],
+
+  "auth": {
+    "type": "oauth",
+    "instructions": "This package uses OAuth to connect to your Slack workspace. You'll create a Slack App and authorize it.",
+    "oauth_provider": "slack",
+    "oauth_scopes": [
+      "chat:write",
+      "channels:read",
+      "channels:history",
+      "users:read",
+      "app_mentions:read",
+      "im:history",
+      "im:read",
+      "commands"
+    ]
+  },
+
+  "setup_steps": [
+    {
+      "id": "install_python_deps",
+      "label": "Install Python dependencies",
+      "check_command": "pip show slack_sdk",
+      "install_command": "pip install slack_sdk aiohttp keyring",
+      "help_text": "Python libraries needed for Slack API and secure credential storage.",
+      "required": true
+    },
+    {
+      "id": "create_slack_app",
+      "label": "Create Slack App",
+      "help_text": "Go to api.slack.com/apps and create a new app:\n1. Click 'Create New App' → 'From scratch'\n2. Name: Chitty Workspace, select your workspace\n3. OAuth & Permissions → Redirect URLs → Add: http://localhost:8770/oauth/callback\n4. Bot Token Scopes → Add all required scopes\n5. Socket Mode → Enable → Generate App-Level Token (connections:write)\n6. Event Subscriptions → Enable → Subscribe: app_mention, message.im\n7. Install App to workspace",
+      "help_url": "https://api.slack.com/apps",
+      "required": true
+    },
+    {
+      "id": "enter_client_id",
+      "label": "Enter Slack Client ID",
+      "prompt_user": true,
+      "prompt_label": "Client ID",
+      "prompt_placeholder": "Found in Basic Information → App Credentials",
+      "prompt_help": "Copy the Client ID from your Slack App's Basic Information page.",
+      "credentials_key": "oauth_slack_client_id",
+      "required": true
+    },
+    {
+      "id": "enter_client_secret",
+      "label": "Enter Slack Client Secret",
+      "prompt_user": true,
+      "prompt_label": "Client Secret",
+      "prompt_placeholder": "Found in Basic Information → App Credentials",
+      "prompt_help": "Copy the Client Secret from your Slack App's Basic Information page.",
+      "credentials_key": "oauth_slack_client_secret",
+      "required": true
+    },
+    {
+      "id": "oauth_connect",
+      "label": "Connect to Slack workspace",
+      "help_text": "Click 'Connect' to authorize the app in your Slack workspace. A browser window will open for authorization.",
+      "required": true
+    },
+    {
+      "id": "enter_app_token",
+      "label": "Enter App-Level Token (Socket Mode)",
+      "prompt_user": true,
+      "prompt_label": "App-Level Token",
+      "prompt_placeholder": "xapp-1-...",
+      "prompt_help": "From Basic Information → App-Level Tokens. Generate one with 'connections:write' scope. Starts with 'xapp-'.",
+      "credentials_key": "slack_app_token",
+      "required": false
+    }
+  ],
+
+  "configurable_resources": [
+    {
+      "id": "channels",
+      "label": "Allowed Channels",
+      "description": "Select which channels the agent can read and send messages to. Leave empty to allow all channels the bot is invited to.",
+      "placeholder": "e.g. general, engineering, random",
+      "multi": true,
+      "required_by_actions": ["send_message", "read_history", "reply_thread"]
+    }
+  ],
+
+  "feature_flags": [
+    {
+      "id": "allow_send_message",
+      "label": "Allow sending messages",
+      "description": "When enabled, the agent can post messages and reply to threads in Slack channels.",
+      "default_enabled": true,
+      "gates_actions": ["send_message", "reply_thread"],
+      "enable_warning": "The agent will be able to post messages as your Slack bot."
+    },
+    {
+      "id": "allow_socket_mode",
+      "label": "Enable real-time events (Socket Mode)",
+      "description": "When enabled, maintains a persistent WebSocket connection to receive @mentions and DMs.",
+      "default_enabled": false,
+      "gates_actions": ["socket_mode"],
+      "enable_warning": "Enables a persistent background connection to Slack. Requires an App-Level Token."
+    }
+  ],
+
+  "agent_config": {
+    "default_instructions": "You have access to Slack tools. Always list channels first to confirm access. Show message content to the user before sending. Never post without explicit confirmation.",
+    "suggested_prompts": [
+      "List my Slack channels",
+      "Show me the last 10 messages in #general",
+      "Send a message to #engineering: Weekly update is ready",
+      "Summarize the conversation in #project-alpha"
+    ],
+    "capabilities": [
+      "List and browse Slack channels",
+      "Read message history from channels",
+      "Send messages to channels",
+      "Reply to message threads",
+      "Receive real-time @mentions and DMs (Socket Mode)"
+    ]
+  }
+}

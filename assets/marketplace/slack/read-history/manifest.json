@@ -1,0 +1,33 @@
+{
+  "name": "slack_read_history",
+  "display_name": "Read Slack Channel History",
+  "description": "Read recent messages from a Slack channel. Returns message text, author, timestamp, and thread info.",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "channel": {
+      "type": "string",
+      "description": "Channel name (e.g. 'general') or channel ID",
+      "required": true
+    },
+    "limit": {
+      "type": "number",
+      "description": "Number of messages to retrieve (default 20, max 100)",
+      "required": false
+    },
+    "oldest": {
+      "type": "string",
+      "description": "Only messages after this Unix timestamp",
+      "required": false
+    },
+    "latest": {
+      "type": "string",
+      "description": "Only messages before this Unix timestamp",
+      "required": false
+    }
+  },
+  "timeout_seconds": 15,
+  "source": "marketplace",
+  "marketplace_id": "slack"
+}
