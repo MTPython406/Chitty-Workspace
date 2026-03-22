@@ -2,7 +2,7 @@
   "name": "gcloud_storage",
   "display_name": "Cloud Storage",
   "description": "Upload, download, list, and manage files in Google Cloud Storage buckets",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "tool_type": "custom",
   "runtime": "python",
   "entry_point": "tool.py",
@@ -19,12 +19,12 @@
     },
     "bucket": {
       "type": "string",
-      "description": "GCS bucket name (without gs:// prefix). Required for most actions.",
+      "description": "GCS bucket name (without gs:// prefix). Must be lowercase, 3-63 chars, alphanumeric + hyphens.",
       "required": false
     },
     "object_path": {
       "type": "string",
-      "description": "Object path within the bucket (e.g. 'data/file.csv'). Required for object operations.",
+      "description": "Object path within the bucket (e.g. 'data/file.csv'). No '..' or leading '/' allowed.",
       "required": false
     },
     "content": {
@@ -34,7 +34,7 @@
     },
     "local_path": {
       "type": "string",
-      "description": "Local file path for upload/download operations.",
+      "description": "Local file path for upload/download operations. Restricted to workspace and temp directories. Requires feature flag.",
       "required": false
     },
     "prefix": {
@@ -49,16 +49,16 @@
     },
     "max_results": {
       "type": "number",
-      "description": "Maximum number of results to return for list operations (default: 100).",
+      "description": "Maximum number of results to return for list operations (default: 100, max: 500).",
       "required": false
     }
   },
   "install_commands": [
-    "pip install google-cloud-storage google-auth"
+    "pip install chitty-sdk"
   ],
   "timeout_seconds": 60,
   "permission_tier": "moderate",
   "source": "marketplace",
   "marketplace_id": "google-cloud",
-  "instructions": "Use this tool to interact with Google Cloud Storage. The user authenticates via their own gcloud CLI login.\n\n**Available actions:**\n- `list_buckets` — List all buckets in the project\n- `create_bucket` — Create a new bucket (requires bucket name, optional location)\n- `list_objects` — List objects in a bucket (optional prefix filter)\n- `upload_object` — Upload content or a local file to a bucket\n- `download_object` — Download an object to a local path or return its text content\n- `delete_object` — Delete an object from a bucket\n- `get_object_metadata` — Get metadata (size, type, updated) for an object\n\n**Important:** Always check the user's allowed buckets in the package configuration before operating on a bucket. If no buckets are configured, ask the user which bucket to use."
+  "instructions": "Use this tool to interact with Google Cloud Storage. The user authenticates via their own gcloud CLI login.\n\n**Available actions:**\n- `list_buckets` — List all buckets in the project\n- `create_bucket` — Create a new bucket (requires bucket name, optional location). Requires allow_create_bucket flag.\n- `list_objects` — List objects in a bucket (optional prefix filter, max 500 results)\n- `upload_object` — Upload inline text content to a bucket. Local file uploads require allow_local_file_upload flag.\n- `download_object` — Download an object as text content. Saving to local file requires allow_local_file_download flag.\n- `delete_object` — Delete an object from a bucket. Requires allow_delete_objects flag.\n- `get_object_metadata` — Get metadata (size, type, updated) for an object\n\n**Security notes:**\n- Prefer read-only operations (list, get_object_metadata, download as text). Confirm with user before writes/deletes.\n- Bucket names are validated per GCS naming rules (lowercase, 3-63 chars).\n- Object paths are validated — no '..' traversal or absolute paths.\n- Local file access is sandboxed to workspace and temp directories.\n- Upload/download sizes are capped at 50 MB. Use gsutil for larger files."
 }

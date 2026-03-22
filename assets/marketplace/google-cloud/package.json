@@ -8,7 +8,7 @@
   "color": "#4285F4",
   "status": "not_installed",
 
-  "long_description": "Full Google Cloud Platform integration for Chitty Workspace. Query and manage BigQuery datasets, upload and organize files in Cloud Storage, and build data pipelines — all through natural language.\n\n**BigQuery** — Run SQL queries, explore schemas, create datasets and tables, insert data.\n\n**Cloud Storage** — Upload, download, list, and manage files in GCS buckets. Perfect for staging data for BigQuery or sharing results.\n\nAuthentication uses your existing `gcloud` CLI credentials. No passwords or service account keys are stored by Chitty.",
+  "long_description": "Full Google Cloud Platform integration for Chitty Workspace. Query and manage BigQuery datasets, upload and organize files in Cloud Storage, and build data pipelines — all through natural language.\n\n**BigQuery** — Run SQL queries, explore schemas, create datasets and tables, insert data.\n\n**Cloud Storage** — Upload, download, list, and manage files in GCS buckets. Perfect for staging data for BigQuery or sharing results.\n\nAuthentication uses your existing `gcloud` CLI credentials. No passwords or service account keys are stored by Chitty.\n\n**Security** — All mutating operations (write, delete, create) are disabled by default. Enable only the features you need via Feature Flags. Identifiers and paths are validated. Local file transfers are gated and sandboxed to workspace/temp directories.",
 
   "categories": ["cloud", "data", "analytics"],
   "docs_url": "https://cloud.google.com/docs",
@@ -63,9 +63,9 @@
     {
       "id": "install_python_deps",
       "label": "Install Python dependencies",
-      "check_command": "pip show google-cloud-bigquery",
-      "install_command": "pip install google-cloud-bigquery google-cloud-storage google-auth",
-      "help_text": "Python libraries needed for BigQuery and Cloud Storage operations.",
+      "check_command": "pip show chitty-sdk",
+      "install_command": "pip install chitty-sdk",
+      "help_text": "Chitty SDK provides authentication helpers and tool utilities for marketplace packages.",
       "required": true
     }
   ],
@@ -109,6 +109,14 @@
       "enable_warning": "Deleting a dataset permanently removes all tables and data. This cannot be undone."
     },
     {
+      "id": "allow_mutating_queries",
+      "label": "Allow mutating SQL queries",
+      "description": "When enabled, the agent can run INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, and TRUNCATE SQL statements. When disabled, only SELECT queries are allowed.",
+      "default_enabled": false,
+      "gates_actions": ["query_mutate", "insert_rows"],
+      "enable_warning": "Mutating queries can modify or delete data in your BigQuery datasets. Use with caution."
+    },
+    {
       "id": "allow_create_bucket",
       "label": "Allow creating new buckets",
       "description": "When enabled, the agent can create new Cloud Storage buckets.",
@@ -123,11 +131,27 @@
       "default_enabled": false,
       "gates_actions": ["delete_object"],
       "enable_warning": "Deleted objects cannot be recovered unless versioning is enabled on the bucket."
+    },
+    {
+      "id": "allow_local_file_upload",
+      "label": "Allow local file uploads to GCS",
+      "description": "When enabled, the agent can read files from your local filesystem and upload them to Cloud Storage. Files are restricted to workspace and temp directories.",
+      "default_enabled": false,
+      "gates_actions": ["upload_object"],
+      "enable_warning": "This allows the agent to read local files (within the workspace) and upload them to GCS."
+    },
+    {
+      "id": "allow_local_file_download",
+      "label": "Allow GCS downloads to local filesystem",
+      "description": "When enabled, the agent can download files from Cloud Storage and save them to your local filesystem. Files are restricted to workspace and temp directories.",
+      "default_enabled": false,
+      "gates_actions": ["download_object"],
+      "enable_warning": "This allows the agent to write files to your local filesystem (within the workspace)."
     }
   ],
 
   "agent_config": {
-    "default_instructions": "You have access to Google Cloud Platform tools. Always check the user's allowed datasets and buckets before performing operations. Prefer read-only operations unless the user explicitly asks to modify data.",
+    "default_instructions": "You have access to Google Cloud Platform tools. Always check the user's allowed datasets and buckets before performing operations. Prefer read-only operations (SELECT queries, list, describe) unless the user explicitly asks to modify data. Always confirm before running mutating queries, creating resources, or deleting anything. When querying BigQuery, add LIMIT clauses to avoid scanning excessive data.",
     "suggested_prompts": [
       "List my BigQuery datasets and show me the tables",
       "Run a SQL query on my dataset to find the top 10 rows",
@@ -136,11 +160,13 @@
     ],
     "recommended_model": "gpt-4o",
     "capabilities": [
-      "Run SQL queries on BigQuery datasets",
+      "Run read-only SQL queries on BigQuery datasets",
       "Explore table schemas and row counts",
-      "Upload and download files from Cloud Storage",
-      "List and organize bucket contents",
-      "Create and manage datasets and buckets (when enabled)"
+      "List bucket contents and object metadata",
+      "Upload inline text content to Cloud Storage",
+      "Upload/download local files (when enabled via feature flags)",
+      "Run mutating SQL queries (when enabled via feature flags)",
+      "Create and manage datasets and buckets (when enabled via feature flags)"
     ]
   }
 }
