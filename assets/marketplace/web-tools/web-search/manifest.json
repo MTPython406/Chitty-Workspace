@@ -1,7 +1,7 @@
 {
   "name": "web_search",
   "display_name": "Web Search",
-  "description": "Search the web using DuckDuckGo or Google. Returns titles, URLs, and snippets.",
+  "description": "Search the web using DuckDuckGo. Returns titles, URLs, and snippets.",
   "version": "1.0.0",
   "tool_type": "custom",
   "runtime": "python",
