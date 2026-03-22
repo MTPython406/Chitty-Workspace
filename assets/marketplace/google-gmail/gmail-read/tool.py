@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Gmail Read — List, search, and read emails via the Gmail API.
 
+Hardened input handling, safe base64 decoding, recursive attachment extraction.
 Uses chitty-sdk for auth, config, and HTTP helpers.
 """
 import base64
@@ -12,41 +13,69 @@ from chitty_sdk import tool_main, require_google_token, api_get
 
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
+# Valid actions (normalized to lowercase)
+VALID_ACTIONS = {"list", "search", "read"}
 
-def decode_body(payload):
-    """Extract plain text body from Gmail message payload (recursive)."""
+
+def safe_b64_decode(data: str) -> str:
+    """Safely decode Gmail's URL-safe base64 data."""
+    if not data:
+        return ""
+    try:
+        # Gmail uses URL-safe base64 without padding
+        padded = data + "=" * (-len(data) % 4)
+        return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def decode_body(payload, depth: int = 0) -> str:
+    """Extract plain text body from Gmail message payload (recursive, depth-limited)."""
+    if depth > 10:
+        return ""  # Prevent infinite recursion on malformed payloads
+
     mime = payload.get("mimeType", "")
 
     if mime == "text/plain":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            # Gmail uses URL-safe base64
-            padded = data + "=" * (4 - len(data) % 4)
-            try:
-                return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
-            except Exception:
-                return ""
+        text = safe_b64_decode(payload.get("body", {}).get("data", ""))
+        if text:
+            return text
 
     if mime == "text/html" and not payload.get("parts"):
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            padded = data + "=" * (4 - len(data) % 4)
-            try:
-                raw_html = base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
-                # Strip HTML tags for plain text
-                text = re.sub(r"<[^>]+>", " ", raw_html)
-                text = html_mod.unescape(text)
-                return re.sub(r"\s+", " ", text).strip()
-            except Exception:
-                return ""
+        raw_html = safe_b64_decode(payload.get("body", {}).get("data", ""))
+        if raw_html:
+            text = re.sub(r"<[^>]+>", " ", raw_html)
+            text = html_mod.unescape(text)
+            return re.sub(r"\s+", " ", text).strip()
 
-    # Recurse into multipart
+    # Recurse into multipart parts
     for part in payload.get("parts", []):
-        body = decode_body(part)
+        body = decode_body(part, depth + 1)
         if body:
             return body
 
     return ""
+
+
+def collect_attachments(payload, depth: int = 0) -> list:
+    """Recursively collect all attachments from nested parts."""
+    if depth > 10:
+        return []
+
+    attachments = []
+    filename = payload.get("filename", "")
+    if filename:
+        attachments.append({
+            "filename": filename,
+            "mimeType": payload.get("mimeType", ""),
+            "size": payload.get("body", {}).get("size", 0),
+            "attachmentId": payload.get("body", {}).get("attachmentId", ""),
+        })
+
+    for part in payload.get("parts", []):
+        attachments.extend(collect_attachments(part, depth + 1))
+
+    return attachments
 
 
 def get_headers(detail, *names):
@@ -60,14 +89,30 @@ def get_headers(detail, *names):
     return result
 
 
+def clamp_max_results(value, default: int = 10, maximum: int = 50) -> int:
+    """Safely parse and clamp max_results."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(1, min(n, maximum))
+
+
 @tool_main
 def main(args):
     token = require_google_token()
-    action = args.get("action", "list")
+
+    # Normalize action
+    action = str(args.get("action", "list")).strip().lower()
+    if action not in VALID_ACTIONS:
+        return {
+            "success": False,
+            "error": f"Unknown action: '{action}'. Use: {', '.join(sorted(VALID_ACTIONS))}",
+        }
 
     if action in ("list", "search"):
         query = args.get("query", "in:inbox") if action == "search" else "in:inbox"
-        max_results = min(int(args.get("max_results", 10)), 50)
+        max_results = clamp_max_results(args.get("max_results"))
 
         data = api_get(
             f"{GMAIL_API}/messages",
@@ -92,6 +137,7 @@ def main(args):
                 hdrs = get_headers(detail, "Subject", "From", "Date")
                 results.append({
                     "id": mid,
+                    "thread_id": detail.get("threadId", ""),
                     "subject": hdrs["subject"],
                     "from": hdrs["from"],
                     "date": hdrs["date"],
@@ -108,6 +154,9 @@ def main(args):
         if not message_id:
             return {"success": False, "error": "Missing message_id for 'read' action"}
 
+        # Sanitize message_id (should be alphanumeric)
+        message_id = re.sub(r"[^a-zA-Z0-9]", "", str(message_id))
+
         detail = api_get(
             f"{GMAIL_API}/messages/{message_id}",
             token=token,
@@ -117,19 +166,12 @@ def main(args):
         hdrs = get_headers(detail, "Subject", "From", "To", "Date", "Cc")
         body_text = decode_body(detail.get("payload", {}))
 
-        # Get attachment info
-        attachments = []
-        for part in detail.get("payload", {}).get("parts", []):
-            filename = part.get("filename", "")
-            if filename:
-                attachments.append({
-                    "filename": filename,
-                    "mimeType": part.get("mimeType", ""),
-                    "size": part.get("body", {}).get("size", 0),
-                })
+        # Recursively collect all attachments
+        attachments = collect_attachments(detail.get("payload", {}))
 
         return {
             "id": message_id,
+            "thread_id": detail.get("threadId", ""),
             "subject": hdrs["subject"],
             "from": hdrs["from"],
             "to": hdrs["to"],
@@ -140,6 +182,3 @@ def main(args):
             "labels": detail.get("labelIds", []),
             "attachments": attachments,
         }
-
-    else:
-        return {"success": False, "error": f"Unknown action: {action}. Use: list, search, read"}
