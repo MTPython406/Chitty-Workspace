@@ -1,36 +1,84 @@
 #!/usr/bin/env python3
 """Slack tool: Send a message to a channel."""
-import json
-import sys
 import os
+import sys
 import urllib.request
 import urllib.error
 
+# Add parent directory to path for shared helpers (fallback)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from auth import require_bot_token
-from config import check_channel_allowed, check_feature_allowed
 
-def main():
-    args = json.loads(sys.stdin.read())
-    token = require_bot_token()
+try:
+    from chitty_sdk import tool_main, require_slack_token, require_feature, error as sdk_error
+    from config import check_channel_allowed, normalize_channel
+except ImportError:
+    from auth import require_bot_token as require_slack_token
+    from config import check_channel_allowed, normalize_channel
 
-    channel = args.get("channel", "").lstrip("#")
-    text = args.get("text", "")
+    import json as _json
+    import functools
 
-    if not channel or not text:
-        print(json.dumps({"success": False, "error": "Both 'channel' and 'text' are required."}))
+    def tool_main(fn):
+        @functools.wraps(fn)
+        def wrapper():
+            try:
+                raw = sys.stdin.read()
+                args = _json.loads(raw) if raw.strip() else {}
+            except _json.JSONDecodeError:
+                args = {}
+            try:
+                result = fn(args)
+                if result is not None:
+                    print(_json.dumps({"success": True, "output": result}))
+            except SystemExit:
+                raise
+            except Exception as exc:
+                print(_json.dumps({"success": False, "error": str(exc)}))
+        if __name__ == "__main__":
+            wrapper()
+        return wrapper
+
+    def require_feature(fid):
+        from config import check_feature_allowed
+        allowed, err = check_feature_allowed(fid)
+        if not allowed:
+            print(_json.dumps({"success": False, "error": err}))
+            sys.exit(0)
+
+    def sdk_error(msg):
+        print(_json.dumps({"success": False, "error": msg}))
+        sys.exit(0)
+
+
+# Slack limit for chat.postMessage text field
+SLACK_MAX_TEXT_LENGTH = 4000
+
+
+@tool_main
+def main(args):
+    import json
+    token = require_slack_token()
+
+    channel = normalize_channel(args.get("channel", ""))
+    text = args.get("text", "").strip()
+
+    if not channel:
+        sdk_error("'channel' is required.")
+        return
+    if not text:
+        sdk_error("'text' is required and cannot be empty.")
+        return
+    if len(text) > SLACK_MAX_TEXT_LENGTH:
+        sdk_error(f"Message too long ({len(text)} chars). Slack limit is {SLACK_MAX_TEXT_LENGTH} characters.")
         return
 
     # Check feature flag
-    allowed, err = check_feature_allowed("allow_send_message")
-    if not allowed:
-        print(json.dumps({"success": False, "error": err}))
-        return
+    require_feature("allow_send_message")
 
     # Check channel allowlist
     allowed, err = check_channel_allowed(channel)
     if not allowed:
-        print(json.dumps({"success": False, "error": err}))
+        sdk_error(err)
         return
 
     payload = json.dumps({"channel": channel, "text": text}).encode()
@@ -48,26 +96,20 @@ def main():
             data = json.loads(resp.read().decode())
 
         if not data.get("ok"):
-            error = data.get("error", "Unknown error")
-            if error == "channel_not_found":
-                error = f"Channel '{channel}' not found. Make sure the bot is invited to the channel."
-            elif error == "not_in_channel":
-                error = f"Bot is not a member of '{channel}'. Invite the bot first with /invite @ChittyWorkspace"
-            print(json.dumps({"success": False, "error": error}))
+            error_msg = data.get("error", "Unknown error")
+            if error_msg == "channel_not_found":
+                error_msg = f"Channel '{channel}' not found. Make sure the bot is invited to the channel."
+            elif error_msg == "not_in_channel":
+                error_msg = f"Bot is not a member of '{channel}'. Invite the bot first with /invite @ChittyWorkspace"
+            sdk_error(error_msg)
             return
 
-        print(json.dumps({
-            "success": True,
-            "output": {
-                "channel": data.get("channel"),
-                "ts": data.get("ts"),
-                "message": f"Message sent to #{channel}",
-            }
-        }))
+        return {
+            "channel": data.get("channel"),
+            "ts": data.get("ts"),
+            "message": f"Message sent to #{channel}",
+        }
     except urllib.error.URLError as e:
-        print(json.dumps({"success": False, "error": f"Network error: {e}"}))
+        sdk_error(f"Network error: {e}")
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
-
-if __name__ == "__main__":
-    main()
+        sdk_error(str(e))

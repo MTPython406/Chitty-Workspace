@@ -3,7 +3,7 @@
   "display_name": "Slack",
   "vendor": "Chitty",
   "description": "Send messages, read channels, and receive real-time events from Slack",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "icon": "message-square",
   "color": "#4A154B",
   "status": "not_installed",
@@ -41,9 +41,9 @@
     {
       "id": "install_python_deps",
       "label": "Install Python dependencies",
-      "check_command": "pip show slack_sdk",
-      "install_command": "pip install slack_sdk aiohttp keyring",
-      "help_text": "Python libraries needed for Slack API and secure credential storage.",
+      "check_command": "pip show slack_sdk && pip show chitty_sdk",
+      "install_command": "pip install slack_sdk aiohttp keyring chitty-sdk",
+      "help_text": "Python libraries needed for Slack API, secure credential storage, and Chitty SDK helpers.",
       "required": true
     },
     {
@@ -95,8 +95,8 @@
     {
       "id": "channels",
       "label": "Allowed Channels",
-      "description": "Select which channels the agent can read and send messages to. Leave empty to allow all channels the bot is invited to.",
-      "placeholder": "e.g. general, engineering, random",
+      "description": "Select which channels the agent can read and send messages to. Accepts both #channel-name and channel IDs (e.g. C01ABC23DEF). Leave empty to allow all channels the bot is invited to.",
+      "placeholder": "e.g. general, engineering, random, C01ABC23DEF",
       "multi": true,
       "required_by_actions": ["send_message", "read_history", "reply_thread"]
     }
@@ -110,6 +110,14 @@
       "default_enabled": true,
       "gates_actions": ["send_message", "reply_thread"],
       "enable_warning": "The agent will be able to post messages as your Slack bot."
+    },
+    {
+      "id": "allow_read_history",
+      "label": "Allow reading channel history",
+      "description": "When enabled, the agent can read message history from Slack channels. Disable to restrict the agent to sending only.",
+      "default_enabled": true,
+      "gates_actions": ["read_history"],
+      "enable_warning": "The agent will be able to read message history from allowed channels."
     },
     {
       "id": "allow_socket_mode",
@@ -158,7 +166,7 @@
   ],
 
   "agent_config": {
-    "default_instructions": "You have access to Slack tools. Always list channels first to confirm access. Show message content to the user before sending. Never post without explicit confirmation.",
+    "default_instructions": "You have access to Slack tools. Always list channels first to confirm access. Show message content to the user before sending. Never post without explicit confirmation. Respect channel allowlists and feature flags -- do not attempt to bypass them.",
     "suggested_prompts": [
       "List my Slack channels",
       "Show me the last 10 messages in #general",
@@ -167,8 +175,8 @@
     ],
     "capabilities": [
       "List and browse Slack channels",
-      "Read message history from channels",
-      "Send messages to channels",
+      "Read message history from channels (when allow_read_history is enabled)",
+      "Send messages to channels (when allow_send_message is enabled)",
       "Reply to message threads",
       "Receive real-time @mentions and DMs (Socket Mode)"
     ]

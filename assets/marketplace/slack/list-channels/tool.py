@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """Slack tool: List channels in the connected workspace."""
-import json
-import sys
 import os
+import sys
 import urllib.request
 import urllib.error
 
-# Add parent directory to path for shared helpers
+# Add parent directory to path for shared helpers (fallback)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from auth import require_bot_token
 
-def main():
-    args = json.loads(sys.stdin.read())
-    token = require_bot_token()
+try:
+    from chitty_sdk import tool_main, require_slack_token
+except ImportError:
+    from auth import require_bot_token as require_slack_token
+    from chitty_sdk_shim import tool_main
+
+
+@tool_main
+def main(args):
+    import json
+    token = require_slack_token()
 
     exclude_archived = args.get("exclude_archived", True)
     limit = min(args.get("limit", 100), 1000)
@@ -29,7 +35,8 @@ def main():
             data = json.loads(resp.read().decode())
 
         if not data.get("ok"):
-            print(json.dumps({"success": False, "error": data.get("error", "Unknown Slack API error")}))
+            from chitty_sdk import error
+            error(data.get("error", "Unknown Slack API error"))
             return
 
         channels = []
@@ -43,17 +50,13 @@ def main():
                 "is_member": ch.get("is_member", False),
             })
 
-        print(json.dumps({
-            "success": True,
-            "output": {
-                "channels": channels,
-                "count": len(channels),
-            }
-        }))
+        return {
+            "channels": channels,
+            "count": len(channels),
+        }
     except urllib.error.URLError as e:
-        print(json.dumps({"success": False, "error": f"Network error: {e}"}))
+        from chitty_sdk import error
+        error(f"Network error: {e}")
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
-
-if __name__ == "__main__":
-    main()
+        from chitty_sdk import error
+        error(str(e))
