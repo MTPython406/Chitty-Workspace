@@ -968,6 +968,55 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   border-radius: 50%; animation: spin 0.8s linear infinite;
 }
 
+/* ── Builder Question Cards ──────────────────────────────────────── */
+.builder-question-card {
+  align-self: flex-start; max-width: 95%; width: 100%;
+  background: var(--bg-card); border: 1px solid var(--accent);
+  border-radius: 10px; padding: 14px; margin: 4px 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.builder-question-text {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  margin-bottom: 10px; line-height: 1.4;
+}
+.builder-question-options {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.builder-question-option {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 14px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg-page);
+  cursor: pointer; text-align: left; transition: all 0.15s ease;
+}
+.builder-question-option:hover {
+  border-color: var(--accent); background: rgba(59,130,246,0.04);
+}
+.builder-question-option.recommended {
+  border-color: var(--accent); background: rgba(59,130,246,0.06);
+}
+.builder-question-option.selected {
+  border-color: var(--accent); background: var(--accent);
+}
+.builder-question-option.selected .option-label,
+.builder-question-option.selected .option-desc { color: #fff; }
+.builder-question-option.selected .recommended-badge { background: rgba(255,255,255,0.25); color: #fff; }
+.builder-question-option:disabled {
+  opacity: 0.6; cursor: default; pointer-events: none;
+}
+.builder-question-option .option-label {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  display: flex; align-items: center; gap: 6px;
+}
+.builder-question-option .option-desc {
+  font-size: 11px; color: var(--text-muted); line-height: 1.3;
+}
+.recommended-badge {
+  display: inline-block; padding: 1px 6px; border-radius: 8px;
+  background: rgba(59,130,246,0.12); color: var(--accent);
+  font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
 /* ── Marketplace tiles ──────────────────────────────────────────── */
 .marketplace-tile {
   border: 1px solid var(--border);
@@ -1314,6 +1363,7 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
         <button class="action-tab active" data-action-tab="activity">Activity</button>
         <button class="action-tab" data-action-tab="agents">Agents</button>
         <button class="action-tab" data-action-tab="providers">Providers</button>
+        <button class="action-tab" data-action-tab="marketplace">Marketplace</button>
       </div>
       <div id="action-body">
         <div class="activity-header">
@@ -1333,13 +1383,14 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
             <span id="dynamic-view-icon" style="font-size:14px;"></span>
             <span id="dynamic-view-title" style="font-size:12px;font-weight:600;color:var(--text-primary);"></span>
           </div>
-          <button onclick="app.closeDynamicView()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:2px 6px;">&times;</button>
+          <button onclick="App.closeDynamicView()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:2px 6px;">&times;</button>
         </div>
         <div id="dynamic-view-content" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;"></div>
       </div>
       <div id="agents-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
       <div id="builder-body" style="display:none;flex:1;overflow-y:auto;padding:0;"></div>
       <div id="providers-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
+      <div id="marketplace-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
     </div>
   </div>
 </div>
@@ -2253,11 +2304,13 @@ const App = {
     const agentsBody = document.getElementById('agents-body');
     const builderBody = document.getElementById('builder-body');
     const providersBody = document.getElementById('providers-body');
+    const marketplaceBody = document.getElementById('marketplace-body');
     if (actionBody) actionBody.style.display = tabName === 'activity' ? '' : 'none';
     if (dynamicView) dynamicView.style.display = tabName === 'dynamic' ? 'flex' : 'none';
     if (agentsBody) agentsBody.style.display = tabName === 'agents' ? 'block' : 'none';
     if (builderBody) builderBody.style.display = tabName === 'builder' ? 'flex' : 'none';
     if (providersBody) providersBody.style.display = tabName === 'providers' ? 'block' : 'none';
+    if (marketplaceBody) marketplaceBody.style.display = tabName === 'marketplace' ? 'block' : 'none';
     // Toggle wider panel for builder
     const panel = document.getElementById('action-panel');
     if (panel) panel.classList.toggle('builder-mode', tabName === 'builder');
@@ -2274,6 +2327,9 @@ const App = {
     if (tabName === 'providers') {
       this.renderProvidersPanel();
     }
+    if (tabName === 'marketplace') {
+      this.renderMarketplacePanel();
+    }
   },
 
   /* ── Dynamic View — opens components on demand ─────────────────── */
@@ -2288,11 +2344,13 @@ const App = {
     const agentsBody = document.getElementById('agents-body');
     const builderBody = document.getElementById('builder-body');
     const providersBody = document.getElementById('providers-body');
+    const marketplaceBody = document.getElementById('marketplace-body');
     const dynamicView = document.getElementById('dynamic-view');
     if (actionBody) actionBody.style.display = 'none';
     if (agentsBody) agentsBody.style.display = 'none';
     if (builderBody) builderBody.style.display = 'none';
     if (providersBody) providersBody.style.display = 'none';
+    if (marketplaceBody) marketplaceBody.style.display = 'none';
     if (dynamicView) dynamicView.style.display = 'flex';
     this.toggleActionPanel(true);
   },
@@ -2332,9 +2390,9 @@ const App = {
       <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
         <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
           <span style="font-size:12px;font-weight:600;color:var(--text-primary);flex:1;">${esc(artifact.title)}</span>
-          <button onclick="app.toggleArtifactView('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;" id="artifact-toggle-btn">Code</button>
-          <button onclick="app.copyArtifact('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Copy</button>
-          <button onclick="app.downloadArtifact('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Download</button>
+          <button onclick="App.toggleArtifactView('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;" id="artifact-toggle-btn">Code</button>
+          <button onclick="App.copyArtifact('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Copy</button>
+          <button onclick="App.downloadArtifact('${id}')" style="padding:3px 8px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Download</button>
         </div>
         <div id="artifact-content-area" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
           ${previewHTML}
@@ -2342,7 +2400,7 @@ const App = {
         </div>
         <div style="display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--border);flex-shrink:0;">
           <input id="artifact-iterate-input" placeholder="Describe changes..." style="flex:1;padding:6px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;" />
-          <button onclick="app.iterateArtifact('${id}')" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Update</button>
+          <button onclick="App.iterateArtifact('${id}')" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Update</button>
         </div>
       </div>`;
 
@@ -2449,7 +2507,7 @@ const App = {
               Your agent can now control your browser.<br>
               Ask it to open a website or automate a task.
             </div>
-            <button onclick="app.openMarketplace()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Browse Marketplace</button>
+            <button onclick="App.openMarketplace()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Browse Marketplace</button>
           </div>
         </div>
         <img id="browser-screenshot" style="display:none;width:100%;border-radius:6px;border:1px solid var(--border);" />
@@ -2486,7 +2544,7 @@ const App = {
               <div style="margin-bottom:8px;"><b>Provider:</b> ${esc(agent.preferred_provider || 'Default')}</div>
               <div style="margin-bottom:8px;"><b>Model:</b> ${esc(agent.preferred_model || 'Default')}</div>
             </div>
-            <button onclick="app.showAgentFormInPanel('${esc(agent.id)}')" style="margin-top:12px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Edit Agent</button>
+            <button onclick="App.showAgentFormInPanel('${esc(agent.id)}')" style="margin-top:12px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Edit Agent</button>
           </div>`;
       }
     } else {
@@ -2494,7 +2552,7 @@ const App = {
         <div style="text-align:center;padding:32px;color:var(--text-muted);">
           <div style="font-size:13px;font-weight:500;margin-bottom:4px;color:var(--text-secondary);">Chitty — System Agent</div>
           <div style="font-size:12px;margin-bottom:16px;">The default system administrator with access to all tools.</div>
-          <button onclick="app.switchActionTab('builder');app.toggleActionPanel(true);" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Open Agent Builder</button>
+          <button onclick="App.switchActionTab('builder');App.toggleActionPanel(true);" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Open Agent Builder</button>
         </div>`;
     }
     this.openDynamicView('⚙️', 'Agent Configuration', content);
@@ -2502,18 +2560,8 @@ const App = {
 
   /* ── Open Marketplace in Browser ──────────────────────────────────── */
   openMarketplace() {
-    // Open browser view first, then load the marketplace URL
-    this.openBrowserView();
-    // Now the DOM has the browser elements — set them up
-    setTimeout(() => {
-      const iframe = document.getElementById('browser-iframe');
-      const urlBar = document.getElementById('browser-url');
-      const empty = document.getElementById('browser-empty');
-      const url = 'https://chitty.ai/marketplace';
-      if (iframe) { iframe.src = url; iframe.style.display = 'block'; }
-      if (empty) empty.style.display = 'none';
-      if (urlBar) urlBar.value = url;
-    }, 50);
+    this.switchActionTab('marketplace');
+    this.toggleActionPanel(true);
     this.activityLog('info', '<span class="hl">Opened Marketplace</span>');
   },
 
@@ -2807,7 +2855,7 @@ const App = {
             </select>
           </div>
           <div class="input-footer-right">
-            <span class="context-token-badge" title="Click to compact context" onclick="app.manualCompact('${panel.id}')"></span>
+            <span class="context-token-badge" title="Click to compact context" onclick="App.manualCompact('${panel.id}')"></span>
             <select class="panel-model-select input-footer-select" title="Select Model">
               ${this.modelOptionsHTML()}
             </select>
@@ -2830,13 +2878,13 @@ const App = {
       <div class="welcome-sub">${esc(subtitle)}</div>`;
     if (isChitty) {
       html += `<div class="welcome-actions">
-        <button class="welcome-action-btn" onclick="app.switchActionTab('builder');app.toggleActionPanel(true);">
+        <button class="welcome-action-btn" onclick="App.switchActionTab('builder');App.toggleActionPanel(true);">
           <span style="font-size:16px;">🛠</span> Build an Agent
         </button>
-        <button class="welcome-action-btn" onclick="app.openMarketplace()">
+        <button class="welcome-action-btn" onclick="App.openMarketplace()">
           <span style="font-size:16px;">📦</span> Marketplace
         </button>
-        <button class="welcome-action-btn" onclick="app.switchActionTab('agents');app.toggleActionPanel(true);">
+        <button class="welcome-action-btn" onclick="App.switchActionTab('agents');App.toggleActionPanel(true);">
           <span style="font-size:16px;">🤖</span> Browse Agents
         </button>
       </div>`;
@@ -3623,7 +3671,7 @@ const App = {
                 <div style="font-size:10px;color:var(--text-muted);">${sizeGb} GB${quant}${loaded}</div>
               </div>
               <div style="display:flex;gap:4px;">
-                ${!m.loaded ? `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="app.loadGgufModel('${safeName}')">Load</button>` : `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="app.unloadGgufModel()">Unload</button>`}
+                ${!m.loaded ? `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App.loadGgufModel('${safeName}')">Load</button>` : `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App.unloadGgufModel()">Unload</button>`}
               </div>
             </div>`;
           }).join('');
@@ -4604,7 +4652,7 @@ const App = {
           if (status.authenticated) {
             badgeHtml = '<span class="status-badge ready">Ready</span>';
           } else {
-            badgeHtml = `<span class="status-badge not-auth" onclick="app.openPackageSetup('${esc(pkg)}')" title="Click to complete setup">Setup Required</span>`;
+            badgeHtml = `<span class="status-badge not-auth" onclick="App.openPackageSetup('${esc(pkg)}')" title="Click to complete setup">Setup Required</span>`;
           }
         }
         // Fetch status if not yet checked
@@ -4755,8 +4803,8 @@ const App = {
                 typingDiv.textContent = assistantText;
                 messagesDiv.scrollTop = messagesDiv.scrollHeight;
               } else if (currentEvent === 'tool_call_start' && data.tool_name) {
-                if (data.tool_name !== 'update_agent_draft') {
-                  // Show activity in chat for non-draft tools
+                if (data.tool_name !== 'update_agent_draft' && data.tool_name !== 'ask_user_question') {
+                  // Show activity in chat for non-draft, non-question tools
                   const sysMsg = document.createElement('div');
                   sysMsg.className = 'builder-msg system';
                   const labels = {
@@ -4774,6 +4822,52 @@ const App = {
                     const result = JSON.parse(data.content);
                     if (result.field && result.value !== undefined) {
                       this.updateBuilderDraft(result.field, result.value);
+                    }
+                  } catch {}
+                } else if (data.tool_name === 'ask_user_question' && data.content) {
+                  // Render interactive question card
+                  try {
+                    const q = JSON.parse(data.content);
+                    if (q.type === 'question' && q.question && q.options) {
+                      // Hide the streaming text div temporarily
+                      typingDiv.style.display = 'none';
+                      // Create question card
+                      const qCard = document.createElement('div');
+                      qCard.className = 'builder-question-card';
+                      let qHtml = `<div class="builder-question-text">${esc(q.question)}</div><div class="builder-question-options">`;
+                      q.options.forEach((opt, idx) => {
+                        const recommended = idx === 0 ? ' recommended' : '';
+                        qHtml += `<button class="builder-question-option${recommended}" data-option-idx="${idx}">` +
+                          `<span class="option-label">${esc(opt.label)}${idx === 0 ? ' <span class="recommended-badge">Recommended</span>' : ''}</span>` +
+                          `<span class="option-desc">${esc(opt.description)}</span>` +
+                          `</button>`;
+                      });
+                      qHtml += `</div>`;
+                      qCard.innerHTML = qHtml;
+                      messagesDiv.insertBefore(qCard, typingDiv);
+                      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+                      // When user clicks an option, auto-send as next message
+                      const self = this;
+                      qCard.querySelectorAll('.builder-question-option').forEach(btn => {
+                        btn.addEventListener('click', () => {
+                          const idx = parseInt(btn.dataset.optionIdx);
+                          const chosen = q.options[idx];
+                          // Highlight selected option
+                          qCard.querySelectorAll('.builder-question-option').forEach(b => b.classList.remove('selected'));
+                          btn.classList.add('selected');
+                          // Disable all buttons
+                          qCard.querySelectorAll('.builder-question-option').forEach(b => b.disabled = true);
+                          // Auto-send the answer as the next builder message
+                          setTimeout(() => {
+                            const input = document.getElementById('builder-input');
+                            if (input) {
+                              input.value = chosen.label;
+                              self.sendBuilderMessage();
+                            }
+                          }, 300);
+                        });
+                      });
                     }
                   } catch {}
                 }
@@ -4914,9 +5008,19 @@ const App = {
   },
 
   /* ── Marketplace ─────────────────────────────────────────────── */
+  async renderMarketplacePanel() {
+    const container = document.getElementById('marketplace-body');
+    if (!container) return;
+    return this._renderMarketplace(container);
+  },
+
   async renderMarketplaceSettings() {
     const container = document.getElementById('marketplace-settings');
     if (!container) return;
+    return this._renderMarketplace(container);
+  },
+
+  async _renderMarketplace(container) {
     container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px;">Loading marketplace...</div>';
 
     try {
@@ -5158,7 +5262,7 @@ const App = {
 
   // ── Package Detail & Configuration Page ─────────────────────────
   async renderPackageDetail(vendor) {
-    const container = document.getElementById('marketplace-settings');
+    const container = document.getElementById('marketplace-body') || document.getElementById('marketplace-settings');
     if (!container) return;
     container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px;">Loading package details...</div>';
 
@@ -5358,7 +5462,13 @@ const App = {
       const self = this;
 
       // Back button
-      document.getElementById('pkg-back').addEventListener('click', () => self.renderMarketplaceSettings());
+      document.getElementById('pkg-back').addEventListener('click', () => {
+        if (document.getElementById('marketplace-body')?.style.display !== 'none') {
+          self.renderMarketplacePanel();
+        } else {
+          self.renderMarketplaceSettings();
+        }
+      });
 
       // Connect/Disconnect OAuth
       const connectBtn = document.getElementById('pkg-connect-toggle');
@@ -5599,7 +5709,7 @@ function formatContent(text) {
       const placeholder = `__ARTIFACT_${artifactPlaceholders.length}__`;
       const icon = type === 'html' ? '\u{1F310}' : type === 'code' ? '\u{1F4BB}' : type === 'svg' ? '\u{1F3A8}' : type === 'markdown' ? '\u{1F4C4}' : '\u{1F4E6}';
       artifactPlaceholders.push(
-        `<div class="artifact-card" onclick="app.showArtifact('${id}')">` +
+        `<div class="artifact-card" onclick="App.showArtifact('${id}')">` +
         `<span class="artifact-icon">${icon}</span>` +
         `<span class="artifact-title">${esc(title)}</span>` +
         `<span class="artifact-badge">${esc(type)}</span>` +

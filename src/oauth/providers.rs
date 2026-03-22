@@ -144,6 +144,9 @@ pub fn get_config(provider: &str) -> Option<OAuthConfig> {
         auth_url: template.auth_url.to_string(),
         token_url: template.token_url.to_string(),
         scopes: template.default_scopes.iter().map(|s| s.to_string()).collect(),
-        redirect_uri: "http://localhost:8770/oauth/callback".to_string(),
+        redirect_uri: format!("{}://localhost:{}/oauth/callback",
+            if provider == "slack" { "https" } else { "http" },
+            if provider == "slack" { 8771 } else { 8770 },
+        ),
     })
 }
