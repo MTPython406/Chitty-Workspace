@@ -22,12 +22,16 @@ Show event details clearly with times, locations, and attendees.
 When scheduling, use `calendar_freebusy` first to find available time slots.
 Always confirm the event summary, time, and attendees before making changes.
 
-## Listing Events
+## Listing & Searching Events
 
-- Use `calendar_list` to show upcoming events
+- Use `calendar_list` to show upcoming events OR search past/future events
 - Default is next 7 days, adjustable with `days_ahead` (max 365)
+- **Search by person**: `query="Mike Miller"` with `days_back=90`
+- **Search by topic**: `query="budget review"` with `days_back=30`
+- **Past events**: Use `days_back` to look backward in time
+- **Custom range**: Use `start_time` + `end_time` for specific date windows
 - Optional `calendar_id` to query a specific calendar (default: "primary")
-- Events returned in chronological order with title, time, location, attendees
+- Search matches across event titles, descriptions, locations, and attendee names/emails
 
 ## Finding Free Time
 

@@ -1,11 +1,16 @@
 {
   "name": "calendar_list",
-  "display_name": "List Calendar Events",
-  "description": "List upcoming events from your Google Calendar. Returns event titles, times, locations, descriptions, and attendees.",
+  "display_name": "List & Search Calendar Events",
+  "description": "List upcoming events, search past events, and find events by attendee, title, or keyword. Supports free-text search and date range queries.",
   "tool_type": "custom",
   "runtime": "python",
   "entry_point": "tool.py",
   "parameters": {
+    "query": {
+      "type": "string",
+      "description": "Search query — find events by title, description, location, or attendee name/email. Examples: 'Mike Miller', 'design review', 'budget meeting'",
+      "required": false
+    },
     "max_results": {
       "type": "number",
       "description": "Maximum number of events to return (default 10, max 50)",
@@ -13,16 +18,32 @@
     },
     "days_ahead": {
       "type": "number",
-      "description": "Number of days ahead to look for events (default 7, max 90)",
+      "description": "Number of days ahead to search (default 7, max 365). Used when looking for upcoming events.",
+      "required": false
+    },
+    "days_back": {
+      "type": "number",
+      "description": "Number of days back to search (max 365). Used when searching past events like 'when was my last meeting with X'.",
+      "required": false
+    },
+    "start_time": {
+      "type": "string",
+      "description": "Explicit start of search range (ISO 8601). Use with end_time for custom date ranges.",
+      "required": false
+    },
+    "end_time": {
+      "type": "string",
+      "description": "Explicit end of search range (ISO 8601). Use with start_time for custom date ranges.",
       "required": false
     },
     "calendar_id": {
       "type": "string",
-      "description": "Calendar ID to list events from (default: 'primary'). Use an email address for shared calendars.",
+      "description": "Calendar ID (default: 'primary'). Use email for shared calendars.",
       "required": false
     }
   },
   "timeout_seconds": 20,
   "source": "marketplace",
-  "marketplace_id": "google-calendar"
+  "marketplace_id": "google-calendar",
+  "instructions": "Use this tool to list upcoming events OR search for past/future events.\n\n**Upcoming events:** Just call with defaults or set days_ahead.\n**Search by person:** Use query='Mike Miller' with days_back=90 to find past meetings.\n**Search by topic:** Use query='budget review' to find events by title/description.\n**Date range:** Use start_time + end_time for a specific window.\n\nThe query parameter searches across event titles, descriptions, locations, and attendee names/emails."
 }
