@@ -15,6 +15,11 @@
       "type": "number",
       "description": "Number of days ahead to look for events (default 7, max 90)",
       "required": false
+    },
+    "calendar_id": {
+      "type": "string",
+      "description": "Calendar ID to list events from (default: 'primary'). Use an email address for shared calendars.",
+      "required": false
     }
   },
   "timeout_seconds": 20,

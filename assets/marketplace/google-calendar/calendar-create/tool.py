@@ -11,7 +11,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from calendar_common import (
     clamp_int, parse_bool, sanitize_text,
-    normalize_attendees, parse_event_window,
+    normalize_attendees, parse_event_window, validate_calendar_id,
 )
 
 from chitty_sdk import tool_main, require_google_token, require_feature, check_feature, api_post
@@ -30,6 +30,7 @@ MAX_ATTENDEES = 50
 def main(args):
     require_feature("allow_create_event")
     token = require_google_token()
+    calendar_id = validate_calendar_id(args.get("calendar_id"))
 
     # Validate summary
     summary = sanitize_text(args.get("summary", ""), max_length=MAX_SUMMARY_LENGTH)
@@ -88,7 +89,7 @@ def main(args):
 
     # Create the event
     result = api_post(
-        f"{CALENDAR_API}/calendars/primary/events",
+        f"{CALENDAR_API}/calendars/{calendar_id}/events",
         token=token,
         json_data=event,
         params={"sendUpdates": send_updates},

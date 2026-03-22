@@ -1,0 +1,29 @@
+{
+  "name": "calendar_delete",
+  "display_name": "Delete Calendar Event",
+  "description": "Delete or cancel an existing Google Calendar event. Optionally notify attendees of the cancellation.",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "event_id": {
+      "type": "string",
+      "description": "The ID of the event to delete (from calendar_list results)",
+      "required": true
+    },
+    "calendar_id": {
+      "type": "string",
+      "description": "Calendar ID (default: 'primary'). Use an email address for shared calendars.",
+      "required": false
+    },
+    "notify_attendees": {
+      "type": "boolean",
+      "description": "Whether to send cancellation notifications to attendees (default: false)",
+      "required": false
+    }
+  },
+  "timeout_seconds": 20,
+  "source": "marketplace",
+  "marketplace_id": "google-calendar",
+  "permission_tier": "dangerous"
+}
