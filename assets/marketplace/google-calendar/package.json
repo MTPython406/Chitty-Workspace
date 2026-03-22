@@ -1,0 +1,76 @@
+{
+  "name": "google-calendar",
+  "display_name": "Google Calendar",
+  "vendor": "Chitty",
+  "description": "List upcoming events and create new events on your Google Calendar",
+  "version": "1.0.0",
+  "icon": "calendar",
+  "color": "#4285F4",
+  "status": "not_installed",
+
+  "long_description": "Full Google Calendar integration for Chitty Workspace. View your upcoming schedule and create new events — all through natural language.\n\n**Viewing** — List upcoming events with title, time, location, description, and attendees. Filter by number of days ahead.\n\n**Creating** — Create new events with summary, times, location, description, and attendees. Supports setting event duration and inviting people.\n\nAuthentication uses Google OAuth. Your credentials are stored securely in the OS keyring.",
+
+  "categories": ["scheduling", "productivity", "communication"],
+  "docs_url": "https://developers.google.com/calendar/api",
+  "repo_url": "https://github.com/MTPython406/chitty-pkg-google-calendar",
+
+  "tools": [
+    "calendar-list",
+    "calendar-create"
+  ],
+
+  "auth": {
+    "type": "oauth",
+    "instructions": "This package uses Google OAuth to access your Google Calendar. You'll authorize Chitty Workspace to read and create events on your behalf.",
+    "oauth_provider": "google",
+    "oauth_scopes": [
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/calendar.events"
+    ]
+  },
+
+  "setup_steps": [
+    {
+      "id": "install_python_deps",
+      "label": "Install Python dependencies",
+      "check_command": "pip show keyring",
+      "install_command": "pip install keyring requests",
+      "help_text": "Python libraries needed for Google Calendar API and secure credential storage.",
+      "required": true
+    },
+    {
+      "id": "oauth_connect",
+      "label": "Connect to Google account",
+      "help_text": "Click 'Connect' to authorize Chitty Workspace to access your Google Calendar. A browser window will open for Google OAuth authorization.",
+      "required": true
+    }
+  ],
+
+  "feature_flags": [
+    {
+      "id": "allow_create_event",
+      "label": "Allow creating events",
+      "description": "When enabled, the agent can create new events on your Google Calendar.",
+      "default_enabled": true,
+      "gates_actions": ["create"],
+      "enable_warning": "The agent will be able to create events and send invitations from your Google Calendar."
+    }
+  ],
+
+  "agent_config": {
+    "default_instructions": "You have access to Google Calendar tools. Show event details clearly with times, locations, and attendees. Always confirm event details with the user before creating. Never create an event without explicit user confirmation.",
+    "suggested_prompts": [
+      "What's on my calendar today?",
+      "Show me my schedule for this week",
+      "Create a meeting tomorrow at 2pm with the team",
+      "Schedule a 1-hour review meeting on Friday at 10am",
+      "What events do I have next week?"
+    ],
+    "capabilities": [
+      "List upcoming calendar events",
+      "View event details (time, location, attendees, description)",
+      "Create new calendar events",
+      "Invite attendees to new events"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "calendar_list",
+  "display_name": "List Calendar Events",
+  "description": "List upcoming events from your Google Calendar. Returns event titles, times, locations, descriptions, and attendees.",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "max_results": {
+      "type": "number",
+      "description": "Maximum number of events to return (default 10, max 50)",
+      "required": false
+    },
+    "days_ahead": {
+      "type": "number",
+      "description": "Number of days ahead to look for events (default 7, max 90)",
+      "required": false
+    }
+  },
+  "timeout_seconds": 20,
+  "source": "marketplace",
+  "marketplace_id": "google-calendar"
+}

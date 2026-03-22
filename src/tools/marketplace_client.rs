@@ -145,6 +145,38 @@ impl MarketplaceClient {
         // Clean up the tar.gz
         let _ = std::fs::remove_file(&tar_path);
 
+        // GitHub archives extract to a subdirectory like "chitty-pkg-slack-main/"
+        // Move contents from subdirectory up to the package root
+        if let Ok(entries) = std::fs::read_dir(&pkg_dir) {
+            let subdirs: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir() && e.file_name().to_string_lossy().ends_with("-main"))
+                .collect();
+
+            if subdirs.len() == 1 {
+                let subdir = subdirs[0].path();
+                tracing::info!("Moving contents from GitHub archive subdirectory: {:?}", subdir);
+
+                // Move all files from subdirectory to package root
+                if let Ok(sub_entries) = std::fs::read_dir(&subdir) {
+                    for entry in sub_entries.filter_map(|e| e.ok()) {
+                        let src = entry.path();
+                        let dst = pkg_dir.join(entry.file_name());
+                        if dst.exists() {
+                            if dst.is_dir() {
+                                let _ = std::fs::remove_dir_all(&dst);
+                            } else {
+                                let _ = std::fs::remove_file(&dst);
+                            }
+                        }
+                        let _ = std::fs::rename(&src, &dst);
+                    }
+                }
+                // Remove the now-empty subdirectory
+                let _ = std::fs::remove_dir_all(&subdir);
+            }
+        }
+
         tracing::info!("Installed {}@{} to {:?}", name, version, pkg_dir);
         Ok(pkg_dir)
     }

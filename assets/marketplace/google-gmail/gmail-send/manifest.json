@@ -1,0 +1,39 @@
+{
+  "name": "gmail_send",
+  "display_name": "Send Gmail",
+  "description": "Send an email or reply to a thread from your Gmail account. Composes RFC 2822 messages and sends via Gmail API.",
+  "tool_type": "custom",
+  "runtime": "python",
+  "entry_point": "tool.py",
+  "parameters": {
+    "to": {
+      "type": "string",
+      "description": "Recipient email address (e.g. 'user@example.com' or 'Name <user@example.com>')",
+      "required": true
+    },
+    "subject": {
+      "type": "string",
+      "description": "Email subject line",
+      "required": true
+    },
+    "body": {
+      "type": "string",
+      "description": "Email body text (plain text)",
+      "required": true
+    },
+    "cc": {
+      "type": "string",
+      "description": "CC recipients (comma-separated email addresses)",
+      "required": false
+    },
+    "reply_to_id": {
+      "type": "string",
+      "description": "Message ID to reply to (for threading). Get this from gmail_read results.",
+      "required": false
+    }
+  },
+  "timeout_seconds": 20,
+  "source": "marketplace",
+  "marketplace_id": "google-gmail",
+  "permission_tier": "moderate"
+}

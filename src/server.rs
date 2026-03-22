@@ -154,7 +154,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
 
         if let Some(assets_marketplace) = assets_base {
             tracing::info!("Marketplace assets found at: {:?}", assets_marketplace);
-            let packages = ["google-cloud", "web-tools", "social-media", "slack"];
+            let packages = ["google-cloud", "web-tools", "social-media", "slack", "google-gmail", "google-calendar"];
             for pkg_name in &packages {
                 let pkg_dir = marketplace_dir.join(pkg_name);
                 if !pkg_dir.exists() {
