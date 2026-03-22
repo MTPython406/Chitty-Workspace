@@ -5,14 +5,14 @@ This script maintains a persistent WebSocket connection to Slack via Socket Mode
 It receives events (@mentions, DMs, slash commands) and communicates with the
 Chitty Workspace platform via stdin/stdout NDJSON protocol.
 
-Protocol (stdout → platform):
+Protocol (stdout -> platform):
   {"type":"ready","message":"Connected to Slack workspace XYZ"}
   {"type":"heartbeat"}
   {"type":"event","event_id":"mention","correlation_id":"uuid","data":{...}}
   {"type":"log","level":"info","message":"..."}
   {"type":"error","message":"...","fatal":false}
 
-Protocol (stdin ← platform):
+Protocol (stdin <- platform):
   {"type":"response","correlation_id":"uuid","data":{"text":"agent response","channel":"C123","thread_ts":"123.456"}}
   {"type":"shutdown"}
 """
@@ -25,8 +25,19 @@ import uuid
 import signal
 from datetime import datetime
 
+# Add parent directory to path for config helpers
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from config import check_channel_allowed, check_feature_allowed
+
 # Ensure stdout is line-buffered for NDJSON
 sys.stdout.reconfigure(line_buffering=True)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+PENDING_WARN_THRESHOLD = 100
+SLACK_MAX_TEXT_LENGTH = 4000
 
 # ---------------------------------------------------------------------------
 # NDJSON helpers
@@ -88,7 +99,7 @@ def get_app_token() -> str:
     return token
 
 # ---------------------------------------------------------------------------
-# Stdin reader — receives responses from platform
+# Stdin reader -- receives responses from platform
 # ---------------------------------------------------------------------------
 
 class ResponseRouter:
@@ -96,7 +107,7 @@ class ResponseRouter:
 
     def __init__(self, web_client):
         self.web_client = web_client
-        self.pending = {}  # correlation_id → event metadata
+        self.pending = {}  # correlation_id -> event metadata
 
     def register_event(self, correlation_id: str, channel: str, thread_ts: str = None, user: str = None):
         self.pending[correlation_id] = {
@@ -104,9 +115,22 @@ class ResponseRouter:
             "thread_ts": thread_ts,
             "user": user,
         }
+        # TTL/cleanup hint: warn if pending queue is growing too large
+        if len(self.pending) > PENDING_WARN_THRESHOLD:
+            send_log(
+                f"Pending response queue is large ({len(self.pending)} entries). "
+                f"Possible correlation leak -- consider restarting.",
+                "warn"
+            )
 
     async def handle_response(self, msg: dict):
-        """Handle a response from the platform and post it to Slack."""
+        """Handle a response from the platform and post it to Slack.
+
+        SECURITY: The destination channel is always taken from the original
+        event metadata (self.pending). The response data's channel/thread_ts
+        fields are IGNORED to prevent cross-channel override attacks where
+        an agent response tries to redirect output to a different channel.
+        """
         correlation_id = msg.get("correlation_id", "")
         data = msg.get("data", {})
         text = data.get("text", "")
@@ -115,18 +139,36 @@ class ResponseRouter:
             send_log(f"Empty response for correlation {correlation_id}", "warn")
             return
 
-        # Look up where to send the response
+        # Truncate oversized responses
+        if len(text) > SLACK_MAX_TEXT_LENGTH:
+            text = text[:SLACK_MAX_TEXT_LENGTH - 20] + "\n\n[...truncated]"
+            send_log(f"Response truncated to {SLACK_MAX_TEXT_LENGTH} chars", "warn")
+
+        # Look up where to send the response -- ONLY use registered event metadata
         event_meta = self.pending.pop(correlation_id, None)
         if not event_meta:
-            # Fallback: use channel/thread from response data
-            channel = data.get("channel")
-            thread_ts = data.get("thread_ts")
-        else:
-            channel = data.get("channel") or event_meta.get("channel")
-            thread_ts = data.get("thread_ts") or event_meta.get("thread_ts")
+            send_log(f"No pending event for correlation {correlation_id} -- dropping response", "warn")
+            return
+
+        # CRITICAL: Always use the channel from the original event, never from
+        # the agent response. This prevents cross-channel override attacks.
+        channel = event_meta.get("channel")
+        thread_ts = event_meta.get("thread_ts")
 
         if not channel:
-            send_log(f"No channel for response {correlation_id}", "error")
+            send_log(f"No channel in event metadata for {correlation_id}", "error")
+            return
+
+        # Re-check allow_send_message feature flag before posting
+        allowed, err = check_feature_allowed("allow_send_message")
+        if not allowed:
+            send_log(f"Dropping auto-reply: {err}", "warn")
+            return
+
+        # Re-check channel allowlist before posting
+        allowed, err = check_channel_allowed(channel)
+        if not allowed:
+            send_log(f"Dropping auto-reply to disallowed channel {channel}: {err}", "warn")
             return
 
         try:
@@ -141,7 +183,7 @@ class ResponseRouter:
 
 
 async def stdin_reader(router: ResponseRouter, shutdown_event: asyncio.Event):
-    """Read NDJSON messages from stdin (platform → script)."""
+    """Read NDJSON messages from stdin (platform -> script)."""
     loop = asyncio.get_event_loop()
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
@@ -151,7 +193,7 @@ async def stdin_reader(router: ResponseRouter, shutdown_event: asyncio.Event):
         try:
             line = await asyncio.wait_for(reader.readline(), timeout=1.0)
             if not line:
-                # stdin closed — platform is shutting down
+                # stdin closed -- platform is shutting down
                 send_log("stdin closed, shutting down")
                 shutdown_event.set()
                 break

@@ -1,41 +1,90 @@
 #!/usr/bin/env python3
 """Slack tool: Read channel message history."""
-import json
-import sys
 import os
+import sys
 import urllib.request
 import urllib.error
+import urllib.parse
 from datetime import datetime
 
+# Add parent directory to path for shared helpers (fallback)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from auth import require_bot_token
-from config import check_channel_allowed
 
-def main():
-    args = json.loads(sys.stdin.read())
-    token = require_bot_token()
+try:
+    from chitty_sdk import tool_main, require_slack_token, require_feature, error as sdk_error
+    from config import check_channel_allowed, normalize_channel
+except ImportError:
+    from auth import require_bot_token as require_slack_token
+    from config import check_channel_allowed, normalize_channel
 
-    channel = args.get("channel", "").lstrip("#")
-    limit = min(args.get("limit", 20), 100)
+    import json as _json
+    import functools
+
+    def tool_main(fn):
+        @functools.wraps(fn)
+        def wrapper():
+            try:
+                raw = sys.stdin.read()
+                args = _json.loads(raw) if raw.strip() else {}
+            except _json.JSONDecodeError:
+                args = {}
+            try:
+                result = fn(args)
+                if result is not None:
+                    print(_json.dumps({"success": True, "output": result}))
+            except SystemExit:
+                raise
+            except Exception as exc:
+                print(_json.dumps({"success": False, "error": str(exc)}))
+        if __name__ == "__main__":
+            wrapper()
+        return wrapper
+
+    def require_feature(fid):
+        from config import check_feature_allowed
+        allowed, err = check_feature_allowed(fid)
+        if not allowed:
+            print(_json.dumps({"success": False, "error": err}))
+            sys.exit(0)
+
+    def sdk_error(msg):
+        print(_json.dumps({"success": False, "error": msg}))
+        sys.exit(0)
+
+
+MAX_LIMIT = 100
+
+
+@tool_main
+def main(args):
+    import json
+    token = require_slack_token()
+
+    # Check allow_read_history feature flag
+    require_feature("allow_read_history")
+
+    channel_raw = args.get("channel", "")
+    channel = normalize_channel(channel_raw)
+    limit = max(1, min(args.get("limit", 20), MAX_LIMIT))
 
     if not channel:
-        print(json.dumps({"success": False, "error": "'channel' is required."}))
+        sdk_error("'channel' is required.")
         return
 
     # Check channel allowlist
     allowed, err = check_channel_allowed(channel)
     if not allowed:
-        print(json.dumps({"success": False, "error": err}))
+        sdk_error(err)
         return
 
-    # Build URL with optional time filters
-    params = f"channel={channel}&limit={limit}"
+    # Build URL with safely encoded query parameters
+    params = {"channel": channel, "limit": str(limit)}
     if args.get("oldest"):
-        params += f"&oldest={args['oldest']}"
+        params["oldest"] = str(args["oldest"])
     if args.get("latest"):
-        params += f"&latest={args['latest']}"
+        params["latest"] = str(args["latest"])
 
-    url = f"https://slack.com/api/conversations.history?{params}"
+    url = "https://slack.com/api/conversations.history?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -46,10 +95,10 @@ def main():
             data = json.loads(resp.read().decode())
 
         if not data.get("ok"):
-            error = data.get("error", "Unknown error")
-            if error == "channel_not_found":
-                error = f"Channel '{channel}' not found. Use a channel ID or ensure the bot is invited."
-            print(json.dumps({"success": False, "error": error}))
+            error_msg = data.get("error", "Unknown error")
+            if error_msg == "channel_not_found":
+                error_msg = f"Channel '{channel}' not found. Use a channel ID or ensure the bot is invited."
+            sdk_error(error_msg)
             return
 
         # Fetch user names for display
@@ -82,19 +131,13 @@ def main():
         # Reverse to show oldest first
         messages.reverse()
 
-        print(json.dumps({
-            "success": True,
-            "output": {
-                "channel": channel,
-                "messages": messages,
-                "count": len(messages),
-                "has_more": data.get("has_more", False),
-            }
-        }))
+        return {
+            "channel": channel,
+            "messages": messages,
+            "count": len(messages),
+            "has_more": data.get("has_more", False),
+        }
     except urllib.error.URLError as e:
-        print(json.dumps({"success": False, "error": f"Network error: {e}"}))
+        sdk_error(f"Network error: {e}")
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
-
-if __name__ == "__main__":
-    main()
+        sdk_error(str(e))
