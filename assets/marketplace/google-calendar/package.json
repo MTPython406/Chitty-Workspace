@@ -3,7 +3,7 @@
   "display_name": "Google Calendar",
   "vendor": "Chitty",
   "description": "List upcoming events and create new events on your Google Calendar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "icon": "calendar",
   "color": "#4285F4",
   "status": "not_installed",
@@ -53,7 +53,15 @@
       "description": "When enabled, the agent can create new events on your Google Calendar.",
       "default_enabled": true,
       "gates_actions": ["create"],
-      "enable_warning": "The agent will be able to create events and send invitations from your Google Calendar."
+      "enable_warning": "The agent will be able to create events on your Google Calendar."
+    },
+    {
+      "id": "allow_invite_attendees",
+      "label": "Allow inviting attendees",
+      "description": "When enabled, the agent can add attendees to events. Attendees are only notified if notify_attendees is also set to true.",
+      "default_enabled": false,
+      "gates_actions": ["invite"],
+      "enable_warning": "The agent will be able to invite people to calendar events, potentially sharing meeting details externally."
     }
   ],
 
