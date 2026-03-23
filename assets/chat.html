@@ -110,7 +110,8 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   flex: 1; position: relative; overflow: hidden; height: 100%;
   transition: margin-right var(--carousel-duration) var(--carousel-ease);
 }
-#carousel-rail.action-open { margin-right: 36%; }
+#carousel-rail.resizing { transition: none; }
+#carousel-rail.action-open { margin-right: var(--action-panel-width, 36%); }
 #carousel-rail.action-open.builder-open { margin-right: 50%; }
 
 /* ── Panel ──────────────────────────────────────────────────────── */
@@ -382,16 +383,30 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 /* ── Action panel ───────────────────────────────────────────────── */
 #action-panel {
   position: absolute; top: 0; right: 0; bottom: 0;
-  width: 36%; background: var(--bg-panel); border: 2px solid var(--border);
+  width: var(--action-panel-width, 36%); background: var(--bg-panel); border: 2px solid var(--border);
   border-radius: 12px; z-index: 10; display: flex; flex-direction: column;
   transform: translateX(calc(100% + 20px));
-  transition: transform 0.3s var(--carousel-ease);
+  transition: transform 0.3s var(--carousel-ease), width 0.3s var(--carousel-ease);
   overflow: hidden;
   box-shadow: -4px 0 24px rgba(0,0,0,0.15);
 }
 #action-panel.open { transform: translateX(0); }
+#action-panel.resizing { transition: none; } /* Disable animation during drag */
 #action-panel.builder-mode { width: 50%; }
 #action-panel.builder-mode.open { transform: translateX(0); }
+
+/* Resize handle on left edge of action panel */
+.action-panel-resize-handle {
+  position: absolute; left: -4px; top: 0; bottom: 0; width: 8px;
+  cursor: col-resize; z-index: 11;
+  display: flex; align-items: center; justify-content: center;
+}
+.action-panel-resize-handle::after {
+  content: ''; width: 3px; height: 32px; border-radius: 2px;
+  background: var(--border); opacity: 0; transition: opacity 0.15s;
+}
+.action-panel-resize-handle:hover::after,
+.action-panel-resize-handle.dragging::after { opacity: 1; background: var(--accent); }
 
 #action-header {
   display: flex; align-items: center; padding: 12px 16px;
@@ -1303,6 +1318,62 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .activity-msg .hl { color: var(--text-primary); font-weight: 500; }
 .activity-msg .dim { color: var(--text-muted); }
 
+/* Agent grouping in activity log */
+.activity-agent-group {
+  margin: 4px 0; border-left: 3px solid #3bbaba; border-radius: 0 6px 6px 0;
+  background: rgba(59,186,186,0.04); overflow: hidden;
+}
+.activity-agent-group-header {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+  cursor: pointer; user-select: none; font-size: 12px;
+}
+.activity-agent-group-header:hover { background: rgba(59,186,186,0.08); }
+.activity-agent-group-header .agent-grp-icon { font-size: 13px; }
+.activity-agent-group-header .agent-grp-name { font-weight: 600; color: var(--text-primary); font-size: 12px; flex: 1; }
+.activity-agent-group-header .agent-grp-status {
+  font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 500;
+}
+.activity-agent-group-header .agent-grp-status.working { background: #3b82f620; color: #3b82f6; }
+.activity-agent-group-header .agent-grp-status.done { background: #22c55e20; color: #22c55e; }
+.activity-agent-group-header .agent-grp-status.error { background: #ef444420; color: #ef4444; }
+.activity-agent-group-header .agent-grp-chevron {
+  font-size: 9px; color: var(--text-muted); transition: transform 0.15s;
+}
+.activity-agent-group-header .agent-grp-chevron.open { transform: rotate(90deg); }
+.activity-agent-group-body { padding: 0 0 2px 12px; }
+.activity-agent-group-body.collapsed { display: none; }
+.activity-agent-group-body .activity-entry { border-bottom: none; padding: 2px 8px; }
+
+/* Expandable activity entries */
+.activity-entry.expandable { cursor: pointer; flex-wrap: wrap; }
+.activity-entry.expandable .activity-chevron {
+  font-size: 8px; color: var(--text-muted); margin-left: 4px; transition: transform 0.15s; display: inline;
+}
+.activity-entry.expandable.open .activity-chevron { transform: rotate(90deg); }
+.activity-detail {
+  display: none; width: 100%; margin-top: 4px; padding: 6px 8px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+  background: var(--bg-page); border-radius: 4px; border: 1px solid var(--border);
+  max-height: 150px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+}
+.activity-entry.expandable.open .activity-detail { display: block; }
+
+/* Error highlighting */
+.activity-entry.error-highlight {
+  background: rgba(239,68,68,0.06); border-left: 3px solid #ef4444;
+}
+
+/* Agent tag color */
+.activity-tag.agent { background: rgba(59,186,186,0.15); color: #3bbaba; }
+/* Dynamic tool-name tags — fallback for any unrecognized tag */
+.activity-tag.tool-dyn { background: rgba(232,168,76,0.10); color: #c89040; font-size: 9px; }
+
+/* Friendly tool labels in chat */
+.tool-call-label {
+  font-size: 11px; color: var(--text-muted); font-style: italic;
+  padding: 2px 0 0 0; margin-bottom: -2px;
+}
+
 .activity-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 0; margin-bottom: 4px; border-bottom: 1px solid var(--border);
@@ -1388,6 +1459,7 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     </div>
     <button id="action-toggle"><svg viewBox="0 0 24 24"><path d="M4 15h16v-2H4v2zm0 4h16v-2H4v2zm0-8h16V9H4v2zm0-6v2h16V5H4z"/></svg></button>
     <div id="action-panel">
+      <div class="action-panel-resize-handle" id="action-panel-resize"></div>
       <div id="action-header">
         <div><div id="action-title">Action Panel</div><div id="action-subtitle">Idle</div></div>
         <button id="action-close">&times;</button>
@@ -1570,6 +1642,70 @@ const App = {
       if (e.ctrlKey && e.key === '[') { e.preventDefault(); this.focusPrev(); }
       if (e.key === 'Escape' && this.state.actionPanelOpen) { this.toggleActionPanel(false); }
     });
+
+    // Action Panel resize handle
+    const resizeHandle = document.getElementById('action-panel-resize');
+    const actionPanel = document.getElementById('action-panel');
+    if (resizeHandle && actionPanel) {
+      // Restore saved width
+      const workspace = document.getElementById('workspace');
+      const savedWidth = localStorage.getItem('chitty-action-panel-width');
+      if (savedWidth) {
+        workspace.style.setProperty('--action-panel-width', savedWidth);
+        actionPanel.style.width = savedWidth;
+      }
+
+      const carouselRail = document.getElementById('carousel-rail');
+      let dragging = false;
+      resizeHandle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        dragging = true;
+        resizeHandle.classList.add('dragging');
+        actionPanel.classList.add('resizing');
+        if (carouselRail) carouselRail.classList.add('resizing');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+      });
+      const setWidth = (px) => {
+        const val = px + 'px';
+        workspace.style.setProperty('--action-panel-width', val);
+        // Directly set both elements to stay perfectly in sync
+        actionPanel.style.width = val;
+        if (carouselRail && carouselRail.classList.contains('action-open')) {
+          carouselRail.style.marginRight = val;
+        }
+      };
+      const clearWidth = () => {
+        workspace.style.removeProperty('--action-panel-width');
+        actionPanel.style.width = '';
+        if (carouselRail) carouselRail.style.marginRight = '';
+      };
+
+      document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const maxW = window.innerWidth - 480;
+        const minW = 300;
+        setWidth(Math.max(minW, Math.min(maxW, window.innerWidth - e.clientX)));
+        App.layoutCarousel(); // Reflow chat panel live during drag
+      });
+      document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        resizeHandle.classList.remove('dragging');
+        actionPanel.classList.remove('resizing');
+        if (carouselRail) carouselRail.classList.remove('resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        // Persist
+        const w = actionPanel.style.width;
+        if (w) localStorage.setItem('chitty-action-panel-width', w);
+      });
+      // Double-click to reset
+      resizeHandle.addEventListener('dblclick', () => {
+        clearWidth();
+        localStorage.removeItem('chitty-action-panel-width');
+      });
+    }
   },
 
   /* ── Data loading ───────────────────────────────────────────────── */
@@ -1698,9 +1834,9 @@ const App = {
     const fi = this.state.focusedIndex;
 
     if (n === 1) {
-      // Single panel — centered, max 800px
-      const w = Math.min(railW - 20, 800);
-      const left = (railW - w) / 2;
+      // Single panel — fills available width (with small margin)
+      const w = railW - 20;
+      const left = 10;
       panels[0].style.left = left + 'px';
       panels[0].style.width = w + 'px';
       panels[0].className = 'panel focused';
@@ -1960,21 +2096,40 @@ const App = {
               } else if (tc.startsWith('LLM returned:')) {
                 this.activityLog('info', `${esc(tc)}`);
               } else if (tc.startsWith('Tool call:')) {
-                this.activityLog('tool', `<span class="dim">${esc(tc)}</span>`);
+                // Extract tool name from "Tool call: tool_name args=..."
+                const toolMatch = tc.match(/^Tool call:\s*(\S+)/);
+                const toolTag = toolMatch ? toolMatch[1].substring(0, 12) : 'tool';
+                const argsDetail = tc.replace(/^Tool call:\s*\S+\s*args=/, '');
+                this.activityLog(toolTag, `<span class="dim">${esc(tc)}</span>`, argsDetail.length > 50 ? argsDetail : null);
               } else if (tc.startsWith('WARNING:')) {
                 this.activityLog('error', `${esc(tc)}`);
+              } else if (tc.startsWith('Loaded ') || tc.startsWith('Context assembled')) {
+                this.activityLog('meta', `${esc(tc)}`);
               } else {
                 this.activityLog('llm', `<span class="dim">${esc(tc)}</span>`);
               }
-              if (!tc.startsWith('PROMPT[') && !tc.startsWith('LLM returned') && !tc.startsWith('Tool call:') && !tc.startsWith('WARNING:')) {
+              if (!tc.startsWith('PROMPT[') && !tc.startsWith('LLM returned') && !tc.startsWith('Tool call:') && !tc.startsWith('WARNING:') && !tc.startsWith('Loaded ') && !tc.startsWith('Context assembled')) {
                 this.appendToolBlockInPanel(panelId,
                   `<div class="thinking-indicator">${esc(tc)}</div>`);
               }
             } else if (evType === 'tool_call_start') {
               toolCalls[parsed.tool_call_id] = { name: parsed.tool_name, args: '', result: null };
-              this.activityLog('tool', `<span class="hl">Calling ${esc(parsed.tool_name)}</span> <span class="dim">id=${esc(parsed.tool_call_id)}</span>`);
+              // Use tool name as tag for specificity
+              const toolTag = (parsed.tool_name || 'tool').substring(0, 12);
+              this.activityLog(toolTag, `<span class="hl">Calling ${esc(parsed.tool_name)}</span> <span class="dim">id=${esc(parsed.tool_call_id)}</span>`);
+              // Friendly label for chat panel
+              const toolLabels = {
+                'web_search': 'Searching the web', 'web_scraper': 'Reading web page',
+                'file_reader': 'Reading file', 'file_writer': 'Writing file',
+                'terminal': 'Running command', 'browser': 'Using browser',
+                'save_memory': 'Saving to memory', 'load_skill': 'Loading skill',
+                'code_search': 'Searching code', 'create_tool': 'Creating tool',
+                'execute_package_tool': 'Running package tool', 'dispatch_agents': 'Dispatching agents',
+              };
+              const friendlyLabel = toolLabels[parsed.tool_name] || ('Using ' + parsed.tool_name);
               this.appendToolBlockInPanel(panelId,
-                `<div class="tool-call-block" data-tool-id="${parsed.tool_call_id}">
+                `<div class="tool-call-label">${esc(friendlyLabel)}...</div>
+                <div class="tool-call-block" data-tool-id="${parsed.tool_call_id}">
                   <div class="tool-call-header" onclick="this.querySelector('.tool-call-chevron').classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
                     <span class="tool-call-chevron">&#9654;</span>
                     <span class="tool-call-name">${esc(parsed.tool_name)}</span>
@@ -1987,7 +2142,12 @@ const App = {
                 toolCalls[parsed.tool_call_id].args += parsed.arguments || '';
               }
             } else if (evType === 'tool_result') {
-              this.activityLog('result', `<span class="hl">${esc(parsed.tool_name || '?')}</span> ${parsed.success ? '<span style="color:#6a6">OK</span>' : '<span style="color:#e55">FAIL</span>'} <span class="dim">${parsed.duration_ms || 0}ms, ${(parsed.content || '').length} chars</span>`);
+              const resultTag = parsed.success ? 'result' : 'error';
+              const resultDetail = !parsed.success && parsed.content ? parsed.content.substring(0, 500) : null;
+              const entry = this.activityLog(resultTag,
+                `<span class="hl">${esc(parsed.tool_name || '?')}</span> ${parsed.success ? '<span style="color:#6a6">OK</span>' : '<span style="color:#e55">FAIL</span>'} <span class="dim">${parsed.duration_ms || 0}ms, ${(parsed.content || '').length} chars</span>`,
+                resultDetail);
+              if (!parsed.success && entry) entry.classList.add('error-highlight');
               const tc = toolCalls[parsed.tool_call_id];
               if (tc) {
                 tc.result = parsed.content;
@@ -2220,7 +2380,8 @@ const App = {
             } else if (evType === 'agent_start') {
               const agentName = parsed.agent_name || 'Agent';
               const instruction = parsed.instruction || '';
-              this.activityLog('info', `🤖 <b>${esc(agentName)}</b> started`);
+              // Create agent group in activity tab (instead of flat entry)
+              this.activityAgentLog(agentName, 'agent', `<span class="hl">Started</span> <span class="dim">${esc(instruction.substring(0, 100))}</span>`);
               this.appendToolBlockInPanel(panelId,
                 `<div class="agent-block" data-agent="${esc(agentName)}">
                   <div class="agent-header">
@@ -2248,7 +2409,7 @@ const App = {
             } else if (evType === 'agent_tool_call') {
               const agentName = parsed.agent_name || 'Agent';
               const toolName = parsed.tool_name || '?';
-              this.activityLog('tool', `📦 <b>${esc(agentName)}</b> → <span class="hl">${esc(toolName)}</span>`);
+              this.activityAgentLog(agentName, 'tool', `<span class="hl">${esc(toolName)}</span>`);
               const actDiv = document.querySelector(`[data-agent-activity="${CSS.escape(agentName)}"]`);
               if (actDiv) {
                 const el = document.createElement('div');
@@ -2266,7 +2427,7 @@ const App = {
               const ok = parsed.success;
               const dur = parsed.duration_ms || 0;
               const preview = parsed.result_preview || '';
-              this.activityLog('result', `📦 <b>${esc(agentName)}</b> → ${esc(toolName)} ${ok ? '✅' : '❌'} ${dur}ms`);
+              this.activityAgentLog(agentName, ok ? 'result' : 'error', `${esc(toolName)} ${ok ? '<span style="color:#6a6">OK</span>' : '<span style="color:#e55">FAIL</span>'} <span class="dim">${dur}ms</span>`);
               const actDiv = document.querySelector(`[data-agent-activity="${CSS.escape(agentName)}"]`);
               if (actDiv) {
                 const toolEl = actDiv.querySelector(`.agent-tool-call[data-tool-name="${CSS.escape(toolName)}"] .agent-tool-status`);
@@ -2285,7 +2446,8 @@ const App = {
               }
             } else if (evType === 'agent_complete') {
               const agentName = parsed.agent_name || 'Agent';
-              this.activityLog('info', `✅ <b>${esc(agentName)}</b> completed`);
+              this.activityAgentLog(agentName, 'agent', `<span style="color:#22c55e">✅ Completed</span>`);
+              this.activityAgentDone(agentName, true);
               const agentBlock = document.querySelector(`.agent-block[data-agent="${CSS.escape(agentName)}"]`);
               if (agentBlock) {
                 const statusEl = agentBlock.querySelector('.agent-status');
@@ -2415,21 +2577,85 @@ const App = {
     if (rail) {
       rail.classList.toggle('action-open', open);
       rail.classList.toggle('builder-open', open && ap.classList.contains('builder-mode'));
+      // Apply saved custom width to carousel margin when opening
+      if (open) {
+        const savedW = localStorage.getItem('chitty-action-panel-width');
+        if (savedW) rail.style.marginRight = savedW;
+      } else {
+        rail.style.marginRight = '';
+      }
     }
     this.layoutCarousel();
   },
 
   /* ── Activity Log ──────────────────────────────────────────────── */
-  activityLog(tag, msg) {
+  activityLog(tag, msg, detail) {
     const log = document.getElementById('activity-log');
     if (!log) return;
     const now = new Date();
     const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const entry = document.createElement('div');
-    entry.className = 'activity-entry';
-    entry.innerHTML = `<span class="activity-time">${time}</span><span class="activity-tag ${tag}">${tag}</span><span class="activity-msg">${msg}</span>`;
+    // Use 'tool-dyn' class for dynamic tool-name tags that aren't standard
+    const stdTags = ['iter','tool','result','error','llm','info','meta','agent'];
+    const tagClass = stdTags.includes(tag) ? tag : 'tool-dyn';
+    entry.className = 'activity-entry' + (detail ? ' expandable' : '');
+    entry.innerHTML = `<span class="activity-time">${time}</span><span class="activity-tag ${tagClass}">${tag}</span><span class="activity-msg">${msg}${detail ? ' <span class="activity-chevron">&#9654;</span>' : ''}</span>`;
+    if (detail) {
+      const detailDiv = document.createElement('div');
+      detailDiv.className = 'activity-detail';
+      detailDiv.textContent = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
+      entry.appendChild(detailDiv);
+      entry.onclick = () => entry.classList.toggle('open');
+    }
     log.appendChild(entry);
     log.scrollTop = log.scrollHeight;
+    return entry;
+  },
+
+  // Log an activity entry nested under an agent group
+  activityAgentLog(agentName, tag, msg) {
+    const log = document.getElementById('activity-log');
+    if (!log) return;
+    // Find or create the agent group
+    let group = log.querySelector(`.activity-agent-group[data-agent="${CSS.escape(agentName)}"]`);
+    if (!group) {
+      group = document.createElement('div');
+      group.className = 'activity-agent-group';
+      group.dataset.agent = agentName;
+      group.innerHTML = `
+        <div class="activity-agent-group-header" onclick="const b=this.nextElementSibling;b.classList.toggle('collapsed');this.querySelector('.agent-grp-chevron').classList.toggle('open')">
+          <span class="agent-grp-chevron open">&#9654;</span>
+          <span class="agent-grp-icon">📦</span>
+          <span class="agent-grp-name">${esc(agentName)}</span>
+          <span class="agent-grp-status working">working</span>
+        </div>
+        <div class="activity-agent-group-body"></div>`;
+      log.appendChild(group);
+    }
+    const body = group.querySelector('.activity-agent-group-body');
+    const now = new Date();
+    const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const entry = document.createElement('div');
+    entry.className = 'activity-entry';
+    const stdTags = ['iter','tool','result','error','llm','info','meta','agent'];
+    const tagClass = stdTags.includes(tag) ? tag : 'tool-dyn';
+    entry.innerHTML = `<span class="activity-time">${time}</span><span class="activity-tag ${tagClass}">${tag}</span><span class="activity-msg">${msg}</span>`;
+    body.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+    return entry;
+  },
+
+  // Update agent group status (done/error)
+  activityAgentDone(agentName, success) {
+    const log = document.getElementById('activity-log');
+    if (!log) return;
+    const group = log.querySelector(`.activity-agent-group[data-agent="${CSS.escape(agentName)}"]`);
+    if (!group) return;
+    const badge = group.querySelector('.agent-grp-status');
+    if (badge) {
+      badge.className = 'agent-grp-status ' + (success ? 'done' : 'error');
+      badge.textContent = success ? 'done' : 'error';
+    }
   },
 
   activitySetStatus(active, text) {

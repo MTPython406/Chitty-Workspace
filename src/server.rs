@@ -154,7 +154,9 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
 
         if let Some(assets_marketplace) = assets_base {
             tracing::info!("Marketplace assets found at: {:?}", assets_marketplace);
-            let packages = ["google-cloud", "web-tools", "social-media", "slack", "google-gmail", "google-calendar"];
+            // Note: web-tools is now a native system tool (web_search, web_scraper) — not seeded from marketplace
+            // "chitty" is the built-in orchestrator package (persona + config, tools are native)
+            let packages = ["chitty", "google-cloud", "social-media", "slack", "google-gmail", "google-calendar"];
             for pkg_name in &packages {
                 let pkg_dir = marketplace_dir.join(pkg_name);
                 if !pkg_dir.exists() {
@@ -1262,6 +1264,25 @@ async fn process_chat(
         .await;
 
     tracing::info!("Chat: conv={}, agent={:?}, tools={}", conversation_id, agent_id, context.tools.len());
+
+    // Send context assembly stats to activity log
+    {
+        let sp = &context.system_prompt;
+        let has_project = sp.contains("## Project Context");
+        let has_memories = sp.contains("## Active Memories") || sp.contains("## Memories");
+        let has_skills = sp.contains("<skill ") || sp.contains("## Available Skills");
+        let has_packages = sp.contains("## Available Package Agents");
+        let parts: Vec<&str> = [
+            if has_memories { Some("memories") } else { None },
+            if has_skills { Some("skills") } else { None },
+            if has_packages { Some("packages") } else { None },
+            if has_project { Some("project context") } else { None },
+        ].iter().filter_map(|x| *x).collect();
+        let loaded_str = if parts.is_empty() { String::new() } else { format!("Loaded {}", parts.join(", ")) };
+        if !loaded_str.is_empty() {
+            let _ = sse_tx.send(StreamChunk::Thinking(loaded_str)).await;
+        }
+    }
 
     // 2. Create provider
     let provider = match create_provider(&state, &provider_str).await {

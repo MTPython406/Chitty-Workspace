@@ -14,6 +14,7 @@
 pub mod manifest;
 pub mod executor;
 pub mod google;
+pub mod web;
 pub mod runtime;
 pub mod marketplace_client;
 #[cfg(feature = "cdp-browser")]
@@ -156,6 +157,10 @@ impl ToolRegistry {
         registry.register(Box::new(BrowserTool { bridge: browser_bridge }));
         registry.register(Box::new(LoadSkillTool { skill_registry }));
 
+        // Web tools (search + scraper — critical system tools)
+        registry.register(Box::new(web::WebSearchTool));
+        registry.register(Box::new(web::WebScraperTool));
+
         // Google API tools (require OAuth integration)
         registry.register(Box::new(google::GmailReadTool));
         registry.register(Box::new(google::GmailSendTool));
@@ -223,7 +228,7 @@ impl ToolRegistry {
                 "properties": {
                     "package": {
                         "type": "string",
-                        "description": "Package name (e.g., 'slack', 'google-calendar', 'google-gmail', 'web-tools', 'google-cloud')"
+                        "description": "Package name (e.g., 'slack', 'google-calendar', 'google-gmail', 'google-cloud')"
                     },
                     "tool": {
                         "type": "string",

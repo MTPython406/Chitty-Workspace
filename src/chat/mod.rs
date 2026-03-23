@@ -22,6 +22,93 @@ use crate::providers::ChatMessage;
 use crate::agents::AgentsManager;
 use crate::tools::ToolDefinition;
 
+/// Load Chitty orchestrator config from its marketplace package on disk.
+/// Returns (persona, allowed_tools, exec_config) or None if files not found.
+fn load_chitty_package() -> Option<(String, Vec<String>, ExecutionConfig)> {
+    let chitty_dir = crate::storage::default_data_dir()
+        .join("tools")
+        .join("marketplace")
+        .join("chitty");
+
+    // Load SKILL.md → persona (body) + allowed-tools (frontmatter)
+    let skill_path = chitty_dir.join("SKILL.md");
+    let skill_content = std::fs::read_to_string(&skill_path).ok()?;
+
+    // Parse YAML frontmatter
+    let (persona, allowed_tools) = parse_skill_md(&skill_content)?;
+
+    // Load package.json → execution config
+    let pkg_path = chitty_dir.join("package.json");
+    let exec_config = if let Ok(pkg_content) = std::fs::read_to_string(&pkg_path) {
+        parse_chitty_exec_config(&pkg_content)
+    } else {
+        ExecutionConfig { max_iterations: 25, ..ExecutionConfig::default() }
+    };
+
+    tracing::info!(
+        "Loaded Chitty package: {} tools, {} char persona",
+        allowed_tools.len(),
+        persona.len()
+    );
+
+    Some((persona, allowed_tools, exec_config))
+}
+
+/// Parse a SKILL.md file into (body_text, allowed_tools_list)
+fn parse_skill_md(content: &str) -> Option<(String, Vec<String>)> {
+    // Split frontmatter from body
+    let trimmed = content.trim();
+    if !trimmed.starts_with("---") {
+        return Some((content.to_string(), vec![]));
+    }
+
+    let after_first = &trimmed[3..];
+    let end = after_first.find("---")?;
+    let frontmatter = &after_first[..end];
+    let body = after_first[end + 3..].trim().to_string();
+
+    // Extract allowed-tools from frontmatter
+    let mut allowed_tools = Vec::new();
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if line.starts_with("allowed-tools:") {
+            let tools_str = line.strip_prefix("allowed-tools:")?.trim();
+            allowed_tools = tools_str.split_whitespace().map(|s| s.to_string()).collect();
+        }
+    }
+
+    if body.is_empty() {
+        return None;
+    }
+
+    Some((body, allowed_tools))
+}
+
+/// Parse execution config from Chitty's package.json
+fn parse_chitty_exec_config(content: &str) -> ExecutionConfig {
+    let default = ExecutionConfig { max_iterations: 25, ..ExecutionConfig::default() };
+
+    let json: serde_json::Value = match serde_json::from_str(content) {
+        Ok(v) => v,
+        Err(_) => return default,
+    };
+
+    let ac = match json.get("agent_config") {
+        Some(v) => v,
+        None => return default,
+    };
+
+    ExecutionConfig {
+        max_iterations: ac.get("max_iterations").and_then(|v| v.as_u64()).unwrap_or(25) as u32,
+        temperature: ac.get("temperature").and_then(|v| v.as_f64()),
+        max_tokens: ac.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+        auto_approve: ac.get("approval_mode").and_then(|v| v.as_str()) == Some("auto"),
+        context_budget_pct: ac.get("context_budget_pct").and_then(|v| v.as_u64()).unwrap_or(75) as u32,
+        compaction_strategy: ac.get("compaction_strategy").and_then(|v| v.as_str()).unwrap_or("truncate").to_string(),
+        max_conversation_turns: ac.get("max_conversation_turns").and_then(|v| v.as_u64()).map(|v| v as u32),
+    }
+}
+
 /// A chat conversation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
@@ -156,7 +243,7 @@ pub const ORCHESTRATOR_TOOLS: &[&str] = &[
     "file_reader", "file_writer", "terminal", "code_search",
     "save_memory", "create_tool", "install_package", "browser",
     "load_skill", "dispatch_agents", "execute_package_tool", "ask_user_questions",
-    "open_agent_panel",
+    "open_agent_panel", "web_search", "web_scraper",
 ];
 
 /// Chat engine — stateless functions that operate on a database connection.
@@ -376,12 +463,19 @@ impl ChatEngine {
                 ),
             }
         } else {
-            (
-                CHITTY_SYSTEM_PROMPT.to_string(),
-                vec![], // empty = all skills available (default Chitty agent)
-                ExecutionConfig { max_iterations: 25, ..ExecutionConfig::default() },
-                None,
-            )
+            // Load Chitty config from marketplace package (editable on disk)
+            // Falls back to hardcoded constants if package files are missing
+            if let Some((persona, _tools, exec_cfg)) = load_chitty_package() {
+                (persona, vec![], exec_cfg, None)
+            } else {
+                tracing::warn!("Chitty package not found on disk, using hardcoded defaults");
+                (
+                    CHITTY_SYSTEM_PROMPT.to_string(),
+                    vec![],
+                    ExecutionConfig { max_iterations: 25, ..ExecutionConfig::default() },
+                    None,
+                )
+            }
         };
 
         // Effective project path: request's project_path takes priority, then agent's
@@ -457,11 +551,22 @@ impl ChatEngine {
         let is_package_agent = agent_id.map(|id| id.starts_with("pkg-")).unwrap_or(false);
 
         let filtered_defs: Vec<&ToolDefinition> = if is_orchestrator {
-            // Chitty orchestrator: system tools only (package tools accessed via dispatch_agents)
-            all_tool_defs
-                .iter()
-                .filter(|d| ORCHESTRATOR_TOOLS.contains(&d.name.as_str()))
-                .collect()
+            // Chitty orchestrator: tools from package SKILL.md allowed-tools, fallback to hardcoded
+            let allowed = load_chitty_package()
+                .map(|(_, tools, _)| tools)
+                .unwrap_or_default();
+            if allowed.is_empty() {
+                // Fallback to hardcoded constant
+                all_tool_defs
+                    .iter()
+                    .filter(|d| ORCHESTRATOR_TOOLS.contains(&d.name.as_str()))
+                    .collect()
+            } else {
+                all_tool_defs
+                    .iter()
+                    .filter(|d| allowed.iter().any(|t| t == &d.name))
+                    .collect()
+            }
         } else if is_package_agent || agent_skills.is_empty() {
             // Package agent or agent with no skill filter: all tools available
             all_tool_defs.iter().collect()

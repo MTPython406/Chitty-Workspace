@@ -1,0 +1,39 @@
+{
+  "name": "chitty",
+  "display_name": "Chitty",
+  "vendor": "DataVisions",
+  "description": "System orchestrator — the swiss army knife agent that coordinates packages, manages files, searches the web, controls the browser, and builds other agents.",
+  "version": "1.0.0",
+  "icon": "robot",
+  "color": "#3b82f6",
+  "status": "installed",
+  "tools": [],
+  "setup_steps": [],
+  "agent_config": {
+    "default_instructions": null,
+    "suggested_prompts": [
+      "What's on my calendar today?",
+      "Check my recent Slack messages",
+      "Search the web for...",
+      "Help me build an agent for...",
+      "What packages are available?"
+    ],
+    "capabilities": [
+      "File operations (read, write, search code)",
+      "Web search and page scraping",
+      "Terminal / shell commands",
+      "Browser control (Chrome extension)",
+      "Memory management (save, recall, search)",
+      "Agent orchestration (dispatch to package agents)",
+      "Package installation from marketplace",
+      "Skill loading and activation",
+      "Custom tool creation",
+      "Artifact generation (HTML apps, charts, code)"
+    ],
+    "max_iterations": 25,
+    "approval_mode": "prompt",
+    "context_budget_pct": 75,
+    "compaction_strategy": "truncate"
+  },
+  "categories": ["system", "orchestrator"]
+}
