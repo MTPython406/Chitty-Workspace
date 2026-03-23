@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 11;
+const SCHEMA_VERSION: i32 = 12;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -53,6 +53,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if current < 11 {
         migrate_v11(conn)?;
+    }
+    if current < 12 {
+        migrate_v12(conn)?;
     }
 
     conn.execute(
@@ -521,5 +524,37 @@ fn migrate_v11(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("Database migrated to v11 (package-centric agents + presets)");
+    Ok(())
+}
+
+/// V12: Sub-agent architecture — parent/child relationships + scoped tool configs
+///
+/// Packages can now generate focused sub-agents at configuration time.
+/// Example: Google Cloud package creates a "WMS Data" sub-agent scoped
+/// to a specific BigQuery dataset with locked tool parameters.
+fn migrate_v12(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "-- Parent/child relationship for sub-agents
+        ALTER TABLE agents ADD COLUMN parent_agent_id TEXT;
+        CREATE INDEX IF NOT EXISTS idx_agents_parent ON agents(parent_agent_id);
+
+        -- Scoped tool configurations for sub-agents
+        -- Each row binds a tool to a sub-agent with locked-in parameter defaults
+        -- that are auto-merged into every tool call the sub-agent makes.
+        CREATE TABLE IF NOT EXISTS sub_agent_tools (
+            id              TEXT PRIMARY KEY,
+            agent_id        TEXT NOT NULL,
+            tool_name       TEXT NOT NULL,
+            display_name    TEXT,
+            locked_params   TEXT DEFAULT '{}',
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(agent_id, tool_name),
+            FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_sub_agent_tools_agent ON sub_agent_tools(agent_id);",
+    )?;
+
+    tracing::info!("Database migrated to v12 (sub-agent architecture)");
     Ok(())
 }

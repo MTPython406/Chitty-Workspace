@@ -372,6 +372,65 @@ def run_query(params, headers):
     }
 
 
+def sample_table(params, headers):
+    """Sample rows from a table to understand data shape."""
+    dataset_id = params.get("dataset_id")
+    table_id = params.get("table_id")
+
+    valid, err = validate_dataset_id(dataset_id)
+    if not valid:
+        return {"success": False, "error": err}
+    valid, err = validate_table_id(table_id)
+    if not valid:
+        return {"success": False, "error": err}
+
+    project, err = resolve_project(params)
+    if err:
+        return {"success": False, "error": err}
+
+    max_results = normalize_max_results(params)
+    if max_results > 50:
+        max_results = 50  # Cap samples at 50 rows
+
+    sql = f"SELECT * FROM `{project}.{dataset_id}.{table_id}` LIMIT {max_results}"
+
+    body = {
+        "query": sql,
+        "useLegacySql": False,
+        "maxResults": max_results,
+    }
+
+    data, status = make_request(
+        "POST", f"{BASE_URL}/projects/{project}/queries", headers, body
+    )
+    if status != 200:
+        return {"success": False, "error": data.get("error", f"HTTP {status}")}
+
+    schema = data.get("schema", {}).get("fields", [])
+    col_names = [f["name"] for f in schema]
+    col_types = [f["type"] for f in schema]
+
+    rows = []
+    for row in data.get("rows", []):
+        values = row.get("f", [])
+        row_dict = {}
+        for i, val in enumerate(values):
+            if i < len(col_names):
+                row_dict[col_names[i]] = val.get("v")
+        rows.append(row_dict)
+
+    return {
+        "success": True,
+        "output": {
+            "table": f"{dataset_id}.{table_id}",
+            "columns": [{"name": n, "type": t} for n, t in zip(col_names, col_types)],
+            "sample_rows": rows,
+            "row_count": len(rows),
+            "total_rows": data.get("totalRows"),
+        }
+    }
+
+
 def insert_rows(params, headers):
     dataset_id = params.get("dataset_id")
     table_id = params.get("table_id")
@@ -421,6 +480,7 @@ ACTIONS = {
     "describe_table": describe_table,
     "query": run_query,
     "insert_rows": insert_rows,
+    "sample": sample_table,
 }
 
 
