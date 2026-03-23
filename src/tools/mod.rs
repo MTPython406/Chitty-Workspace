@@ -15,6 +15,7 @@ pub mod manifest;
 pub mod executor;
 pub mod google;
 pub mod web;
+pub mod diagnostic;
 pub mod runtime;
 pub mod marketplace_client;
 #[cfg(feature = "cdp-browser")]
@@ -160,6 +161,9 @@ impl ToolRegistry {
         // Web tools (search + scraper — critical system tools)
         registry.register(Box::new(web::WebSearchTool));
         registry.register(Box::new(web::WebScraperTool));
+
+        // Self-diagnostic tool
+        registry.register(Box::new(diagnostic::DiagnosticTool));
 
         // Google API tools (require OAuth integration)
         registry.register(Box::new(google::GmailReadTool));
