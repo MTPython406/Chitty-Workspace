@@ -286,6 +286,13 @@ pub struct PackageManifest {
     #[serde(default = "default_agent_config")]
     pub agent_config: AgentConfig,
 
+    // ── Sub-Agent Template ──────────────────────────────────────
+    /// Template for auto-generating sub-agents from configured resources.
+    /// Defines form fields, scoped tools, and persona template.
+    /// When present, the Package Editor UI shows a "Add Dataset Agent" form.
+    #[serde(default)]
+    pub sub_agent_template: Option<serde_json::Value>,
+
     // ── Persistent Connections ───────────────────────────────────
     /// Background processes that receive external events (WebSockets, listeners, etc.)
     /// Each connection is a long-running script managed by the platform.

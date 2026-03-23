@@ -256,6 +256,8 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/agents/:id", get(get_agent))
         .route("/api/agents/:id", put(update_agent))
         .route("/api/agents/:id", delete(delete_agent))
+        .route("/api/agents/:id/children", get(list_agent_children))
+        .route("/api/agents/:id/sub-agents", post(create_sub_agent))
         // Skills
         .route("/api/skills", get(list_skills))
         .route("/api/skills/:name", get(get_skill))
@@ -2923,6 +2925,7 @@ async fn create_agent(
         compaction_strategy: req.compaction_strategy,
         max_conversation_turns: req.max_conversation_turns,
         package_id: None, // User-created agents have no package link
+        parent_agent_id: None,
     };
 
     let db = state.db.clone();
@@ -2965,6 +2968,7 @@ async fn update_agent(
         compaction_strategy: req.compaction_strategy,
         max_conversation_turns: req.max_conversation_turns,
         package_id: None, // Preserved on update — package agents keep their link
+        parent_agent_id: None,
     };
 
     let db = state.db.clone();
@@ -2991,6 +2995,97 @@ async fn delete_agent(
         .await
     {
         Ok(_) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sub-Agent API
+// ---------------------------------------------------------------------------
+
+async fn list_agent_children(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    match db
+        .with_conn(move |conn| AgentsManager::list_children(conn, &id))
+        .await
+    {
+        Ok(children) => Json(children).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateSubAgentRequest {
+    name: String,
+    description: String,
+    persona: String,
+    scoped_tools: Vec<SubAgentToolRequest>,
+    preferred_provider: Option<String>,
+    preferred_model: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SubAgentToolRequest {
+    tool_name: String,
+    display_name: Option<String>,
+    locked_params: serde_json::Value,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool { true }
+
+async fn create_sub_agent(
+    State(state): State<Arc<AppState>>,
+    Path(parent_id): Path<String>,
+    Json(req): Json<CreateSubAgentRequest>,
+) -> impl IntoResponse {
+    use crate::agents::SubAgentTool;
+
+    let scoped_tools: Vec<SubAgentTool> = req.scoped_tools.iter().map(|t| SubAgentTool {
+        id: String::new(), // Will be generated in create_sub_agent
+        agent_id: String::new(),
+        tool_name: t.tool_name.clone(),
+        display_name: t.display_name.clone(),
+        locked_params: t.locked_params.clone(),
+        enabled: t.enabled,
+    }).collect();
+
+    let db = state.db.clone();
+    let prov = req.preferred_provider.clone();
+    let model = req.preferred_model.clone();
+    match db
+        .with_conn(move |conn| {
+            AgentsManager::create_sub_agent(
+                conn,
+                &parent_id,
+                &req.name,
+                &req.description,
+                &req.persona,
+                &scoped_tools,
+                prov,
+                model,
+            )
+        })
+        .await
+    {
+        Ok(agent) => Json(serde_json::json!({
+            "ok": true,
+            "id": agent.id,
+            "name": agent.name,
+            "parent_agent_id": agent.parent_agent_id,
+        })).into_response(),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -4516,9 +4611,25 @@ async fn run_shell_command(cmd: &str) -> CommandResult {
     let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
     let flag = if cfg!(target_os = "windows") { "/C" } else { "-c" };
 
+    // Extend PATH with common tool locations (gcloud, python, node, etc.)
+    let mut path_env = std::env::var("PATH").unwrap_or_default();
+    if cfg!(target_os = "windows") {
+        let extra_paths = [
+            r"C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin",
+            r"C:\Program Files\Google\Cloud SDK\google-cloud-sdk\bin",
+            r"C:\Users\Default\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin",
+        ];
+        for p in &extra_paths {
+            if std::path::Path::new(p).exists() && !path_env.contains(p) {
+                path_env = format!("{};{}", p, path_env);
+            }
+        }
+    }
+
     match tokio::process::Command::new(shell)
         .arg(flag)
         .arg(cmd)
+        .env("PATH", &path_env)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()

@@ -150,6 +150,27 @@
     }
   ],
 
+  "sub_agent_template": {
+    "resource_type": "datasets",
+    "name_template": "{display_name}",
+    "description_template": "Focused BigQuery agent for the {display_name} dataset ({project_id}.{dataset_id})",
+    "persona_template": "You are a focused data analyst for the {display_name} BigQuery dataset ({project_id}.{dataset_id}).\nYour tools are pre-scoped to this dataset.\n\nStrategy:\n1. Sample tables first to understand data shape (saves tokens and cost)\n2. Use aggregations and metrics unless the user asks for specific records\n3. Always add LIMIT clauses to avoid scanning excessive data\n4. Format results as markdown tables for readability\n\nWhen dispatched by parent agent: return concise data results.\nWhen chatting directly with user: provide analysis and explanations.",
+    "scoped_tools": [
+      { "tool_name": "gcloud_bigquery", "action_filter": "query", "display_name": "Query {display_name}", "default_enabled": true },
+      { "tool_name": "gcloud_bigquery", "action_filter": "list_tables", "display_name": "List tables in {display_name}", "default_enabled": true },
+      { "tool_name": "gcloud_bigquery", "action_filter": "describe_table", "display_name": "Describe table in {display_name}", "default_enabled": true },
+      { "tool_name": "gcloud_bigquery", "action_filter": "sample", "display_name": "Sample rows from {display_name}", "default_enabled": true },
+      { "tool_name": "gcloud_bigquery", "action_filter": "insert_rows", "display_name": "Insert rows into {display_name}", "default_enabled": false },
+      { "tool_name": "gcloud_bigquery", "action_filter": "create_dataset", "display_name": "Create tables in {display_name}", "default_enabled": false }
+    ],
+    "form_fields": [
+      { "id": "display_name", "label": "Friendly Name", "type": "text", "placeholder": "e.g. WMS Data", "required": true },
+      { "id": "project_id", "label": "Project ID", "type": "text", "placeholder": "e.g. my-project-12345", "required": true, "discover": "gcloud config get-value project" },
+      { "id": "dataset_id", "label": "Dataset ID", "type": "text", "placeholder": "e.g. dematic_wms_pilot", "required": true, "discover": "gcloud bq ls --format=json" },
+      { "id": "location", "label": "Location", "type": "select", "options": ["US", "EU", "asia-east1", "asia-northeast1", "europe-west1"], "default": "US" }
+    ]
+  },
+
   "agent_config": {
     "default_instructions": "You have access to Google Cloud Platform tools. Always check the user's allowed datasets and buckets before performing operations. Prefer read-only operations (SELECT queries, list, describe) unless the user explicitly asks to modify data. Always confirm before running mutating queries, creating resources, or deleting anything. When querying BigQuery, add LIMIT clauses to avoid scanning excessive data.",
     "suggested_prompts": [

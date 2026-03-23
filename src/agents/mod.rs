@@ -69,6 +69,11 @@ pub struct Agent {
     /// Package agents have ID format "pkg-{package_name}"
     #[serde(default)]
     pub package_id: Option<String>,
+    /// Parent agent ID for sub-agents (None = top-level agent)
+    /// Sub-agents are created by packages at configuration time.
+    /// Example: Google Cloud package creates "WMS Data" sub-agent scoped to a dataset.
+    #[serde(default)]
+    pub parent_agent_id: Option<String>,
 }
 
 /// Summary for listing agents (lightweight)
@@ -88,6 +93,20 @@ pub struct AgentSummary {
     pub approval_mode: String,
     #[serde(default)]
     pub package_id: Option<String>,
+    /// Parent agent ID for sub-agents (None = top-level)
+    #[serde(default)]
+    pub parent_agent_id: Option<String>,
+}
+
+/// Scoped tool configuration for a sub-agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentTool {
+    pub id: String,
+    pub agent_id: String,
+    pub tool_name: String,
+    pub display_name: Option<String>,
+    pub locked_params: serde_json::Value,
+    pub enabled: bool,
 }
 
 /// Agents CRUD manager
@@ -100,8 +119,8 @@ impl AgentsManager {
         let tags_json = serde_json::to_string(&agent.tags)?;
 
         conn.execute(
-            "INSERT INTO agents (id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            "INSERT INTO agents (id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id, parent_agent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
@@ -121,6 +140,7 @@ impl AgentsManager {
                 compaction_strategy = excluded.compaction_strategy,
                 max_conversation_turns = excluded.max_conversation_turns,
                 package_id = excluded.package_id,
+                parent_agent_id = excluded.parent_agent_id,
                 updated_at = datetime('now')",
             rusqlite::params![
                 agent.id,
@@ -142,6 +162,7 @@ impl AgentsManager {
                 agent.compaction_strategy,
                 agent.max_conversation_turns.map(|v| v as i32),
                 agent.package_id,
+                agent.parent_agent_id,
             ],
         )?;
         Ok(())
@@ -150,7 +171,7 @@ impl AgentsManager {
     /// Load an agent by ID
     pub fn load(conn: &Connection, id: &str) -> Result<Option<Agent>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id
+            "SELECT id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id, parent_agent_id
              FROM agents WHERE id = ?1",
         )?;
 
@@ -178,6 +199,7 @@ impl AgentsManager {
                     compaction_strategy: row.get(16)?,
                     max_conversation_turns: row.get::<_, Option<i32>>(17)?.map(|v| v as u32),
                     package_id: row.get(18)?,
+                    parent_agent_id: row.get(19)?,
                 })
             })
             .ok();
@@ -188,7 +210,7 @@ impl AgentsManager {
     /// List all agents (summaries)
     pub fn list(conn: &Connection) -> Result<Vec<AgentSummary>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, skills, tags, max_iterations, project_path, preferred_provider, preferred_model, approval_mode, package_id FROM agents ORDER BY name",
+            "SELECT id, name, description, skills, tags, max_iterations, project_path, preferred_provider, preferred_model, approval_mode, package_id, parent_agent_id FROM agents ORDER BY name",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -206,6 +228,7 @@ impl AgentsManager {
                 preferred_model: row.get(8)?,
                 approval_mode: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "prompt".to_string()),
                 package_id: row.get(10)?,
+                parent_agent_id: row.get(11)?,
             })
         })?;
 
@@ -263,9 +286,143 @@ impl AgentsManager {
             compaction_strategy: None,
             max_conversation_turns: None,
             package_id: Some(manifest.name.clone()),
+            parent_agent_id: None,
         };
 
         Self::save(conn, &agent)?;
         Ok(agent)
+    }
+
+    /// List child sub-agents for a parent agent
+    pub fn list_children(conn: &Connection, parent_id: &str) -> Result<Vec<AgentSummary>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, skills, tags, max_iterations, project_path, preferred_provider, preferred_model, approval_mode, package_id, parent_agent_id
+             FROM agents WHERE parent_agent_id = ?1 ORDER BY name",
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![parent_id], |row| {
+            let skills_str: String = row.get(3)?;
+            let tags_str: String = row.get(4)?;
+            Ok(AgentSummary {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                skills: serde_json::from_str(&skills_str).unwrap_or_default(),
+                tags: serde_json::from_str(&tags_str).unwrap_or_default(),
+                max_iterations: row.get::<_, Option<i32>>(5)?.map(|v| v as u32),
+                project_path: row.get(6)?,
+                preferred_provider: row.get(7)?,
+                preferred_model: row.get(8)?,
+                approval_mode: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "prompt".to_string()),
+                package_id: row.get(10)?,
+                parent_agent_id: row.get(11)?,
+            })
+        })?;
+
+        let mut agents = Vec::new();
+        for row in rows {
+            agents.push(row?);
+        }
+        Ok(agents)
+    }
+
+    /// Create a sub-agent with scoped tools.
+    /// Sub-agents are children of a parent package agent and have locked tool parameters.
+    pub fn create_sub_agent(
+        conn: &Connection,
+        parent_id: &str,
+        name: &str,
+        description: &str,
+        persona: &str,
+        scoped_tools: &[SubAgentTool],
+        preferred_provider: Option<String>,
+        preferred_model: Option<String>,
+    ) -> Result<Agent> {
+        // Load parent to inherit package_id
+        let parent = Self::load(conn, parent_id)?
+            .ok_or_else(|| anyhow::anyhow!("Parent agent '{}' not found", parent_id))?;
+
+        // Generate deterministic ID from parent + slugified name
+        let slug = name.to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        let slug = slug.trim_matches('-').to_string();
+        let agent_id = format!("{}-{}", parent_id, slug);
+
+        let agent = Agent {
+            id: agent_id.clone(),
+            name: name.to_string(),
+            description: description.to_string(),
+            persona: persona.to_string(),
+            skills: vec![],
+            project_path: parent.project_path.clone(),
+            preferred_provider,
+            preferred_model,
+            tags: vec!["sub-agent".to_string(), "auto-created".to_string()],
+            version: "1.0".to_string(),
+            ai_generated: false,
+            max_iterations: parent.max_iterations.or(Some(10)),
+            temperature: parent.temperature,
+            max_tokens: parent.max_tokens,
+            approval_mode: parent.approval_mode.clone(),
+            context_budget_pct: parent.context_budget_pct,
+            compaction_strategy: parent.compaction_strategy.clone(),
+            max_conversation_turns: parent.max_conversation_turns,
+            package_id: parent.package_id.clone(),
+            parent_agent_id: Some(parent_id.to_string()),
+        };
+
+        Self::save(conn, &agent)?;
+
+        // Insert scoped tool configurations
+        for tool in scoped_tools {
+            let tool_id = format!("sat-{}-{}", agent_id, tool.tool_name);
+            let locked_json = serde_json::to_string(&tool.locked_params)?;
+            conn.execute(
+                "INSERT INTO sub_agent_tools (id, agent_id, tool_name, display_name, locked_params, enabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(agent_id, tool_name) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    locked_params = excluded.locked_params,
+                    enabled = excluded.enabled",
+                rusqlite::params![
+                    tool_id,
+                    agent_id,
+                    tool.tool_name,
+                    tool.display_name,
+                    locked_json,
+                    tool.enabled,
+                ],
+            )?;
+        }
+
+        Ok(agent)
+    }
+
+    /// Load scoped tool configurations for a sub-agent
+    pub fn load_sub_agent_tools(conn: &Connection, agent_id: &str) -> Result<Vec<SubAgentTool>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, tool_name, display_name, locked_params, enabled
+             FROM sub_agent_tools WHERE agent_id = ?1 AND enabled = 1",
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![agent_id], |row| {
+            let locked_str: String = row.get(4)?;
+            Ok(SubAgentTool {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                tool_name: row.get(2)?,
+                display_name: row.get(3)?,
+                locked_params: serde_json::from_str(&locked_str).unwrap_or_default(),
+                enabled: row.get(5)?,
+            })
+        })?;
+
+        let mut tools = Vec::new();
+        for row in rows {
+            tools.push(row?);
+        }
+        Ok(tools)
     }
 }

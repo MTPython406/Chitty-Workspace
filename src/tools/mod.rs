@@ -656,12 +656,23 @@ impl NativeTool for TerminalTool {
                     c
                 };
                 cmd.current_dir(&working_dir);
-                // On Windows, prevent a console window from flashing
+                // Extend PATH with common tool locations (gcloud, etc.)
+                let mut path_env = std::env::var("PATH").unwrap_or_default();
                 #[cfg(target_os = "windows")]
                 {
+                    let extra_paths = [
+                        r"C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin",
+                        r"C:\Program Files\Google\Cloud SDK\google-cloud-sdk\bin",
+                    ];
+                    for p in &extra_paths {
+                        if std::path::Path::new(p).exists() && !path_env.contains(p) {
+                            path_env = format!("{};{}", p, path_env);
+                        }
+                    }
                     use std::os::windows::process::CommandExt;
                     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
                 }
+                cmd.env("PATH", &path_env);
                 cmd.output()
             },
         )

@@ -9,7 +9,7 @@
   "parameters": {
     "action": {
       "type": "string",
-      "description": "The BigQuery action to perform: list_datasets, create_dataset, delete_dataset, list_tables, describe_table, query, insert_rows",
+      "description": "The BigQuery action to perform: list_datasets, create_dataset, delete_dataset, list_tables, describe_table, query, insert_rows, sample",
       "required": true
     },
     "project_id": {
@@ -55,5 +55,5 @@
   "permission_tier": "moderate",
   "source": "marketplace",
   "marketplace_id": "google-cloud",
-  "instructions": "Use this tool to interact with Google BigQuery. The user authenticates via their own gcloud CLI login.\n\n**Available actions:**\n- `list_datasets` — List all datasets in a project\n- `create_dataset` — Create a new dataset (requires dataset_id, optional location). Requires allow_create_dataset flag.\n- `delete_dataset` — Delete a dataset (requires dataset_id). Requires allow_delete_dataset flag.\n- `list_tables` — List tables in a dataset (requires dataset_id)\n- `describe_table` — Get table schema (requires dataset_id + table_id)\n- `query` — Run a SQL query (requires sql). Returns up to 1000 rows. Only SELECT allowed unless allow_mutating_queries is enabled.\n- `insert_rows` — Insert rows into a table (requires dataset_id + table_id + rows). Requires allow_mutating_queries flag.\n\n**Security notes:**\n- Prefer read-only SELECT queries. Confirm with the user before mutations.\n- Always add LIMIT to queries to avoid scanning excessive data and costs.\n- Dataset and table IDs are validated (alphanumeric + underscores only).\n- Queries are checked against the allowed datasets list.\n- Mutating SQL (INSERT, UPDATE, DELETE, DROP, etc.) is blocked unless the feature flag is enabled."
+  "instructions": "Use this tool to interact with Google BigQuery. The user authenticates via their own gcloud CLI login.\n\n**Available actions:**\n- `list_datasets` — List all datasets in a project\n- `create_dataset` — Create a new dataset (requires dataset_id, optional location). Requires allow_create_dataset flag.\n- `delete_dataset` — Delete a dataset (requires dataset_id). Requires allow_delete_dataset flag.\n- `list_tables` — List tables in a dataset (requires dataset_id)\n- `describe_table` — Get table schema (requires dataset_id + table_id)\n- `query` — Run a SQL query (requires sql). Returns up to 1000 rows. Only SELECT allowed unless allow_mutating_queries is enabled.\n- `insert_rows` — Insert rows into a table (requires dataset_id + table_id + rows). Requires allow_mutating_queries flag.\n- `sample` — Get sample rows from a table (requires dataset_id + table_id, optional max_results default 10). Useful for understanding data shape before writing queries.\n\n**Security notes:**\n- Prefer read-only SELECT queries. Confirm with the user before mutations.\n- Always add LIMIT to queries to avoid scanning excessive data and costs.\n- Dataset and table IDs are validated (alphanumeric + underscores only).\n- Queries are checked against the allowed datasets list.\n- Mutating SQL (INSERT, UPDATE, DELETE, DROP, etc.) is blocked unless the feature flag is enabled."
 }

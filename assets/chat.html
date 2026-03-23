@@ -295,18 +295,55 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .message-role.assistant { color: var(--text-secondary); }
 .message-content {
   font-size: 14px; line-height: 1.65; color: var(--text-primary);
-  white-space: pre-wrap; word-wrap: break-word;
+  word-wrap: break-word;
 }
+.message-content p { margin: 0 0 12px 0; }
+.message-content p:last-child { margin-bottom: 0; }
+.message-content h1, .message-content h2, .message-content h3 {
+  margin: 18px 0 8px 0; font-weight: 700; color: var(--text-primary); line-height: 1.3;
+}
+.message-content h1 { font-size: 18px; }
+.message-content h2 { font-size: 16px; }
+.message-content h3 { font-size: 14px; }
 .message-content code {
-  font-family: var(--font-mono); font-size: 13px; background: var(--bg-card);
-  padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: 12px; background: var(--bg-card);
+  padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);
+  color: var(--text-primary);
 }
 .message-content pre {
-  background: var(--bg-page); border: 1px solid var(--border); border-radius: 6px;
-  padding: 12px 16px; margin: 8px 0; overflow-x: auto;
-  font-family: var(--font-mono); font-size: 13px; line-height: 1.5;
+  background: #1e1e2e; border: 1px solid var(--border); border-radius: 8px;
+  padding: 0; margin: 10px 0; overflow: hidden; position: relative;
 }
-.message-content pre code { background: transparent; border: none; padding: 0; }
+.message-content pre .code-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 12px; background: #181825; border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 11px; color: #a6adc8; font-family: var(--font-mono);
+}
+.message-content pre .code-header .copy-btn {
+  cursor: pointer; padding: 2px 8px; border-radius: 4px; font-size: 11px;
+  background: transparent; border: 1px solid rgba(255,255,255,0.1); color: #a6adc8;
+}
+.message-content pre .code-header .copy-btn:hover { background: rgba(255,255,255,0.08); color: #cdd6f4; }
+.message-content pre code {
+  display: block; padding: 14px 16px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 13px; line-height: 1.5;
+  background: transparent; border: none; color: #cdd6f4;
+}
+.message-content ul, .message-content ol {
+  margin: 8px 0; padding-left: 24px;
+}
+.message-content li { margin: 4px 0; line-height: 1.5; }
+.message-content li > ul, .message-content li > ol { margin: 2px 0; }
+.message-content hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.message-content a { color: var(--accent); text-decoration: none; }
+.message-content a:hover { text-decoration: underline; }
+.message-content blockquote {
+  border-left: 3px solid var(--accent); margin: 8px 0; padding: 4px 12px;
+  color: var(--text-muted); font-style: italic;
+}
+.message-content table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 13px; }
+.message-content th, .message-content td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.message-content th { background: var(--bg-card); font-weight: 600; }
 .message-error { color: var(--danger); font-size: 12px; }
 
 .streaming-cursor::after {
@@ -378,6 +415,8 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .input-footer-select:hover { background-color: var(--bg-card); border-color: var(--border); color: var(--text-primary); }
 .input-footer-select:focus { border-color: var(--border-hover); color: var(--text-primary); }
 .input-footer-select option { background: var(--bg-card); color: var(--text-primary); }
+.input-footer-select optgroup { font-weight: 600; font-size: 11px; color: var(--text-muted); background: var(--bg-card); }
+.input-footer-select optgroup option { font-weight: 400; font-size: 12px; color: var(--text-primary); padding-left: 8px; }
 
 /* ── Resize divider ─────────────────────────────────────────────── */
 /* ── Action panel ───────────────────────────────────────────────── */
@@ -592,31 +631,41 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   padding: 2px 6px; background: var(--bg-card); border-radius: 3px; margin-left: 6px;
 }
 
-/* ── Tool call display ─────────────────────────────────────────── */
+/* ── Tool call display (inline status lines, not heavy blocks) ─── */
 .tool-call-block {
-  margin: 8px 0; border: 1px solid var(--border); border-radius: 6px;
-  overflow: hidden; font-size: 12px;
+  margin: 4px 0; border-radius: 6px; overflow: hidden; font-size: 13px;
 }
 .tool-call-header {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-  background: var(--bg-card); cursor: pointer; user-select: none;
+  cursor: pointer; user-select: none; border-radius: 6px;
+  transition: background 0.15s;
 }
-.tool-call-header:hover { background: var(--bg-card-hover); }
-.tool-call-chevron { font-size: 10px; color: var(--text-muted); transition: transform 0.15s; }
+.tool-call-header:hover { background: var(--bg-card); }
+.tool-call-icon { font-size: 14px; flex-shrink: 0; }
+.tool-call-chevron { font-size: 9px; color: var(--text-muted); transition: transform 0.15s; }
 .tool-call-chevron.open { transform: rotate(90deg); }
-.tool-call-name { font-family: var(--font-mono); color: var(--accent); font-weight: 500; }
-.tool-call-status { margin-left: auto; font-size: 10px; padding: 1px 6px; border-radius: 3px; }
-.tool-call-status.running { color: #e8a84c; background: rgba(232,168,76,0.1); }
-.tool-call-status.success { color: #6a6; background: rgba(102,170,102,0.1); }
-.tool-call-status.error { color: var(--danger); background: rgba(204,68,68,0.1); }
+.tool-call-label-text { color: var(--text-secondary); flex: 1; font-size: 13px; }
+.tool-call-name { font-family: var(--font-mono); color: var(--text-muted); font-size: 11px; }
+.tool-call-status { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+.tool-call-status.running { color: #e8a84c; }
+.tool-call-status.success { color: #6a6; }
+.tool-call-status.error { color: var(--danger); }
 .tool-call-duration { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
 .tool-call-body {
-  display: none; padding: 8px 10px; border-top: 1px solid var(--border);
-  font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);
+  display: none; padding: 8px 12px; margin: 0 10px 4px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
   max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
-  background: var(--bg-page);
+  background: var(--bg-page); border-radius: 6px; border: 1px solid var(--border);
 }
 .tool-call-body.open { display: block; }
+
+/* Spinning indicator for running tools */
+@keyframes tool-spin { to { transform: rotate(360deg); } }
+.tool-call-spinner {
+  width: 12px; height: 12px; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: tool-spin 0.8s linear infinite; flex-shrink: 0;
+}
 
 /* Artifact cards (rendered in chat when agent produces <artifact> output) */
 .artifact-card { display:flex; align-items:center; gap:10px; padding:10px 14px; margin:8px 0; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; cursor:pointer; transition:border-color 0.15s,background 0.15s; }
@@ -1223,6 +1272,29 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .pkg-tool-card-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .pkg-tool-card-desc { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
 
+/* ── Sub-Agent Cards ─────────────────────────────────────────── */
+.pkg-sub-agent-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; margin-bottom: 6px;
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px;
+}
+.pkg-sub-agent-form { padding: 16px; }
+.pkg-sub-agent-form label { display: block; font-size: 12px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; margin-top: 12px; }
+.pkg-sub-agent-form label:first-child { margin-top: 0; }
+.pkg-sub-agent-form input[type="text"], .pkg-sub-agent-form select, .pkg-sub-agent-form textarea {
+  width: 100%; padding: 8px 10px; font-size: 12px;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-primary); box-sizing: border-box;
+}
+.pkg-sub-agent-form textarea { min-height: 80px; resize: vertical; font-family: inherit; }
+.pkg-sub-agent-form .tool-toggle-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+.pkg-sub-agent-form .tool-toggle-row input[type="checkbox"] { margin: 0; }
+.pkg-sub-agent-form .tool-toggle-label { flex: 1; color: var(--text-primary); }
+.pkg-sub-agent-form .tool-toggle-desc { font-size: 11px; color: var(--text-muted); }
+.pkg-sub-agent-form .form-actions { display: flex; gap: 8px; margin-top: 16px; }
+.pkg-sub-agent-form .form-actions button { padding: 8px 20px; border-radius: 6px; font-size: 12px; cursor: pointer; border: 1px solid var(--border); }
+.pkg-sub-agent-form .form-actions .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 /* ── Resource Config ──────────────────────────────────────────── */
 .pkg-resource-section {
   border: 1px solid var(--border); border-radius: 8px; padding: 14px;
@@ -1369,10 +1441,7 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .activity-tag.tool-dyn { background: rgba(232,168,76,0.10); color: #c89040; font-size: 9px; }
 
 /* Friendly tool labels in chat */
-.tool-call-label {
-  font-size: 11px; color: var(--text-muted); font-style: italic;
-  padding: 2px 0 0 0; margin-bottom: -2px;
-}
+/* tool-call-label is now integrated into the tool-call-header as .tool-call-label-text */
 
 .activity-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -1647,12 +1716,12 @@ const App = {
     const resizeHandle = document.getElementById('action-panel-resize');
     const actionPanel = document.getElementById('action-panel');
     if (resizeHandle && actionPanel) {
-      // Restore saved width
+      // Restore saved width — only set CSS variable, not direct style
+      // Direct style is applied when panel opens via toggleActionPanel
       const workspace = document.getElementById('workspace');
       const savedWidth = localStorage.getItem('chitty-action-panel-width');
       if (savedWidth) {
         workspace.style.setProperty('--action-panel-width', savedWidth);
-        actionPanel.style.width = savedWidth;
       }
 
       const carouselRail = document.getElementById('carousel-rail');
@@ -2062,6 +2131,7 @@ const App = {
       const decoder = new TextDecoder();
       let buffer = '';
       let assistantText = '';
+      let lastEventWasToolResult = false;
       let toolCalls = {};  // id -> { name, args, result, success, duration }
 
       while (true) {
@@ -2108,7 +2178,8 @@ const App = {
               } else {
                 this.activityLog('llm', `<span class="dim">${esc(tc)}</span>`);
               }
-              if (!tc.startsWith('PROMPT[') && !tc.startsWith('LLM returned') && !tc.startsWith('Tool call:') && !tc.startsWith('WARNING:') && !tc.startsWith('Loaded ') && !tc.startsWith('Context assembled')) {
+              // Only show thinking in chat if it's not a system/tool message (those go to Activity only)
+              if (!tc.startsWith('PROMPT[') && !tc.startsWith('LLM returned') && !tc.startsWith('Tool call:') && !tc.startsWith('WARNING:') && !tc.startsWith('Loaded ') && !tc.startsWith('Context assembled') && !tc.startsWith('Executing ')) {
                 this.appendToolBlockInPanel(panelId,
                   `<div class="thinking-indicator">${esc(tc)}</div>`);
               }
@@ -2128,13 +2199,19 @@ const App = {
                 'check_session': 'Checking session health', 'install_package': 'Installing package',
               };
               const friendlyLabel = toolLabels[parsed.tool_name] || ('Using ' + parsed.tool_name);
+              const toolIcons = {
+                'web_search': '🔍', 'web_scraper': '🌐', 'file_reader': '📄', 'file_writer': '✏️',
+                'terminal': '💻', 'browser': '🌐', 'save_memory': '💾', 'load_skill': '📦',
+                'code_search': '🔎', 'create_tool': '🔧', 'check_session': '🩺',
+                'execute_package_tool': '📦', 'dispatch_agents': '🤖', 'install_package': '📥',
+              };
+              const icon = toolIcons[parsed.tool_name] || '⚡';
               this.appendToolBlockInPanel(panelId,
-                `<div class="tool-call-label">${esc(friendlyLabel)}...</div>
-                <div class="tool-call-block" data-tool-id="${parsed.tool_call_id}">
-                  <div class="tool-call-header" onclick="this.querySelector('.tool-call-chevron').classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
-                    <span class="tool-call-chevron">&#9654;</span>
-                    <span class="tool-call-name">${esc(parsed.tool_name)}</span>
-                    <span class="tool-call-status running">running</span>
+                `<div class="tool-call-block" data-tool-id="${parsed.tool_call_id}">
+                  <div class="tool-call-header" onclick="this.querySelector('.tool-call-chevron')?.classList.toggle('open');this.parentElement.querySelector('.tool-call-body')?.classList.toggle('open')">
+                    <span class="tool-call-icon">${icon}</span>
+                    <span class="tool-call-label-text">${esc(friendlyLabel)}...</span>
+                    <span class="tool-call-spinner"></span>
                   </div>
                   <div class="tool-call-body"></div>
                 </div>`);
@@ -2154,6 +2231,40 @@ const App = {
                 tc.result = parsed.content;
                 tc.success = parsed.success;
                 tc.duration = parsed.duration_ms;
+              }
+              // Update chat panel tool block: replace spinner with status, update label
+              const toolBlock = document.querySelector(`[data-panel-id="${panelId}"] .tool-call-block[data-tool-id="${parsed.tool_call_id}"]`);
+              if (toolBlock) {
+                const spinner = toolBlock.querySelector('.tool-call-spinner');
+                if (spinner) {
+                  if (parsed.success) {
+                    spinner.outerHTML = `<span class="tool-call-status success">✓ ${parsed.duration_ms || 0}ms</span>`;
+                  } else {
+                    spinner.outerHTML = `<span class="tool-call-status error">✗ failed</span>`;
+                  }
+                }
+                // Update label text from "Searching..." to past tense
+                const labelEl = toolBlock.querySelector('.tool-call-label-text');
+                if (labelEl) {
+                  const txt = labelEl.textContent.replace('...', '');
+                  labelEl.textContent = parsed.success ? txt : txt + ' — failed';
+                  if (!parsed.success) labelEl.style.color = 'var(--danger)';
+                }
+                // Add chevron for expand
+                const header = toolBlock.querySelector('.tool-call-header');
+                if (header && !header.querySelector('.tool-call-chevron')) {
+                  const chevron = document.createElement('span');
+                  chevron.className = 'tool-call-chevron';
+                  chevron.innerHTML = '&#9654;';
+                  header.appendChild(chevron);
+                }
+                // Populate body with result preview
+                const body = toolBlock.querySelector('.tool-call-body');
+                if (body && tc) {
+                  const argsStr = tc.args ? tc.args.substring(0, 200) : '';
+                  const resultStr = (parsed.content || '').substring(0, 500);
+                  body.textContent = argsStr ? `Args: ${argsStr}\n\nResult: ${resultStr}` : resultStr;
+                }
               }
               // When the browser tool opens a URL, show it in the Action Panel
               if ((parsed.tool_name === 'browser') && parsed.success && tc) {
@@ -2314,7 +2425,13 @@ const App = {
                   }
                 }
               }
+              lastEventWasToolResult = true;
             } else if (evType === 'text' && parsed.content) {
+              // Insert paragraph break between iterations (after tool results)
+              if (lastEventWasToolResult && assistantText.length > 0) {
+                assistantText += '\n\n';
+              }
+              lastEventWasToolResult = false;
               assistantText += parsed.content;
               const last = panel.messages[panel.messages.length - 1];
               if (last?.role === 'assistant') last.content = assistantText;
@@ -4558,13 +4675,27 @@ const App = {
   },
 
   renderAgentSelect() {
-    // Update agent dropdowns in all panel input footers — show Chitty + installed packages
+    // Update agent dropdowns in all panel input footers — show Chitty + packages (with nested sub-agents)
+    const agents = this.state.agents || [];
     document.querySelectorAll('.panel-agent-select').forEach(sel => {
       const current = sel.value;
       let html = '<option value="">Chitty</option>';
       for (const pkg of this.state.packages) {
-        const pkgId = pkg.name;
-        html += `<option value="${esc(pkgId)}" ${current === pkgId ? 'selected' : ''}>${esc(pkg.display_name || pkg.name)}</option>`;
+        const pkgAgentId = 'pkg-' + pkg.name;
+        // Find sub-agents that belong to this package
+        const children = agents.filter(a => a.parent_agent_id === pkgAgentId);
+        if (children.length > 0) {
+          // Package with sub-agents — show as optgroup
+          html += `<optgroup label="${esc(pkg.display_name || pkg.name)}">`;
+          html += `<option value="${esc(pkgAgentId)}" ${current === pkgAgentId ? 'selected' : ''}>${esc(pkg.display_name || pkg.name)}</option>`;
+          for (const child of children) {
+            html += `<option value="${esc(child.id)}" ${current === child.id ? 'selected' : ''}>  \u2514 ${esc(child.name)}</option>`;
+          }
+          html += '</optgroup>';
+        } else {
+          // Package without sub-agents — flat option
+          html += `<option value="${esc(pkg.name)}" ${current === pkg.name ? 'selected' : ''}>${esc(pkg.display_name || pkg.name)}</option>`;
+        }
       }
       sel.innerHTML = html;
     });
@@ -5909,6 +6040,35 @@ const App = {
       }
       html += '</div>';
 
+      // ── Configured Sub-Agents (Datasets / Resources) ────────────
+      const subAgentTemplate = pkg.sub_agent_template;
+      if (subAgentTemplate) {
+        let childAgents = [];
+        try {
+          const cr = await fetch('/api/agents/pkg-' + encodeURIComponent(vendor) + '/children');
+          if (cr.ok) childAgents = await cr.json();
+        } catch (_) {}
+
+        html += '<div class="pkg-detail-section">' +
+          '<div class="pkg-detail-section-title">Configured Agents <span style="font-size:11px;color:var(--text-muted);font-weight:400;">' + childAgents.length + '</span></div>' +
+          '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Each configured dataset creates a focused sub-agent with scoped tools. Select it from the chat dropdown.</div>';
+
+        for (const child of childAgents) {
+          html += '<div class="pkg-sub-agent-card">' +
+            '<div style="flex:1;">' +
+              '<div style="font-weight:600;font-size:13px;">' + esc(child.name) + '</div>' +
+              '<div style="font-size:11px;color:var(--text-muted);">' + esc(child.description || '') + '</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:4px;">' +
+              '<button class="discover-btn pkg-sub-agent-delete" data-child-id="' + esc(child.id) + '" style="color:var(--danger);border-color:var(--danger);">Remove</button>' +
+            '</div>' +
+          '</div>';
+        }
+
+        html += '<button class="provider-card-btn" id="pkg-add-sub-agent" style="margin-top:8px;">+ Add Dataset Agent</button>' +
+          '</div>';
+      }
+
       // ── Configuration: Allowed Resources ──────────────────────────
       if (configurableResources.length) {
         html += '<div class="pkg-detail-section">' +
@@ -6098,6 +6258,27 @@ const App = {
       });
 
       // Save button
+      // ── Sub-Agent: Add button → opens form in dynamic view ─────
+      const addSubAgentBtn = document.getElementById('pkg-add-sub-agent');
+      if (addSubAgentBtn) {
+        addSubAgentBtn.addEventListener('click', () => {
+          self.openSubAgentForm(vendor, pkg.sub_agent_template);
+        });
+      }
+      // Sub-Agent: Remove buttons
+      container.querySelectorAll('.pkg-sub-agent-delete').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const childId = btn.dataset.childId;
+          if (!confirm('Remove this sub-agent? This cannot be undone.')) return;
+          try {
+            await fetch('/api/agents/' + encodeURIComponent(childId), { method: 'DELETE' });
+            self.renderPackageDetail(vendor);
+            await self.loadAgents();
+          } catch (err) { console.error('Delete sub-agent:', err); }
+        });
+      });
+
       const saveBtn = document.getElementById('pkg-save-config');
       if (saveBtn) {
         saveBtn.addEventListener('click', async () => {
@@ -6144,6 +6325,172 @@ const App = {
     } catch (e) {
       container.innerHTML = '<div style="color:var(--danger);font-size:12px;">Error: ' + e.message + '</div>';
     }
+  },
+
+  // Open form to create a sub-agent from a package template
+  openSubAgentForm(vendor, template) {
+    const formFields = template.form_fields || [];
+    const scopedTools = template.scoped_tools || [];
+
+    let html = '<div class="pkg-sub-agent-form">';
+    html += '<div style="font-size:14px;font-weight:600;margin-bottom:4px;">Configure Dataset Agent</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Create a focused sub-agent scoped to a specific BigQuery dataset.</div>';
+
+    // Form fields from template
+    for (const field of formFields) {
+      html += '<label for="sa-field-' + esc(field.id) + '">' + esc(field.label) + (field.required ? ' *' : '') + '</label>';
+      if (field.type === 'select') {
+        html += '<select id="sa-field-' + esc(field.id) + '">';
+        for (const opt of (field.options || [])) {
+          html += '<option value="' + esc(opt) + '"' + (opt === field.default ? ' selected' : '') + '>' + esc(opt) + '</option>';
+        }
+        html += '</select>';
+      } else {
+        html += '<input type="text" id="sa-field-' + esc(field.id) + '" placeholder="' + esc(field.placeholder || '') + '" />';
+      }
+    }
+
+    // Tool toggles
+    html += '<label style="margin-top:16px;">Tools</label>';
+    for (const tool of scopedTools) {
+      const toolLabel = tool.display_name ? tool.display_name.replace(/\{display_name\}/g, '') : tool.action_filter;
+      html += '<div class="tool-toggle-row">' +
+        '<input type="checkbox" id="sa-tool-' + esc(tool.action_filter) + '"' + (tool.default_enabled ? ' checked' : '') + ' />' +
+        '<span class="tool-toggle-label">' + esc(tool.action_filter) + '</span>' +
+        '<span class="tool-toggle-desc">' + esc(toolLabel.trim()) + '</span>' +
+      '</div>';
+    }
+
+    // Persona (pre-filled from template)
+    html += '<label>Agent Persona</label>';
+    html += '<textarea id="sa-persona" placeholder="Describe what this agent does...">' + esc(template.persona_template || '') + '</textarea>';
+
+    // Provider/Model selects
+    html += '<label>Model (optional)</label>';
+    html += '<select id="sa-model"><option value="">Use default</option>';
+    for (const prov of (this.state.providers || [])) {
+      if (!prov.enabled) continue;
+      for (const m of (prov.models || [])) {
+        html += '<option value="' + esc(prov.id + '/' + m.model_id) + '">' + esc(prov.display_name + ' / ' + m.display_name) + '</option>';
+      }
+    }
+    html += '</select>';
+
+    // Actions
+    html += '<div class="form-actions">' +
+      '<button class="primary" id="sa-create">Create Agent</button>' +
+      '<button id="sa-cancel">Cancel</button>' +
+    '</div>';
+    html += '<div id="sa-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>';
+    html += '</div>';
+
+    this.openDynamicView('\u2699\ufe0f', 'Configure Dataset Agent', html);
+
+    const self = this;
+
+    // Cancel
+    document.getElementById('sa-cancel').addEventListener('click', () => {
+      self.closeDynamicView();
+      self.renderPackageDetail(vendor);
+    });
+
+    // Create
+    document.getElementById('sa-create').addEventListener('click', async () => {
+      const statusEl = document.getElementById('sa-status');
+      const createBtn = document.getElementById('sa-create');
+
+      // Collect form values
+      const values = {};
+      for (const field of formFields) {
+        const el = document.getElementById('sa-field-' + field.id);
+        values[field.id] = el ? el.value.trim() : '';
+        if (field.required && !values[field.id]) {
+          statusEl.textContent = field.label + ' is required';
+          statusEl.style.color = '#ef4444';
+          return;
+        }
+      }
+
+      // Collect enabled tools
+      const enabledTools = [];
+      for (const tool of scopedTools) {
+        const cb = document.getElementById('sa-tool-' + tool.action_filter);
+        if (cb && cb.checked) {
+          enabledTools.push({
+            tool_name: tool.tool_name,
+            display_name: (tool.display_name || tool.action_filter).replace(/\{display_name\}/g, values.display_name || ''),
+            locked_params: {
+              dataset_id: values.dataset_id || '',
+              project_id: values.project_id || '',
+            },
+            enabled: true,
+          });
+        }
+      }
+
+      // Build persona from template
+      let persona = (document.getElementById('sa-persona')?.value || template.persona_template || '');
+      for (const [key, val] of Object.entries(values)) {
+        persona = persona.replace(new RegExp('\\{' + key + '\\}', 'g'), val);
+      }
+
+      // Build description
+      let description = (template.description_template || '{display_name} sub-agent');
+      for (const [key, val] of Object.entries(values)) {
+        description = description.replace(new RegExp('\\{' + key + '\\}', 'g'), val);
+      }
+
+      const payload = {
+        name: values.display_name || 'Dataset Agent',
+        description,
+        persona,
+        scoped_tools: enabledTools,
+        preferred_provider: null,
+        preferred_model: null,
+      };
+
+      // Parse model selection
+      const modelVal = document.getElementById('sa-model')?.value;
+      if (modelVal) {
+        const parts = modelVal.split('/');
+        if (parts.length === 2) {
+          payload.preferred_provider = parts[0];
+          payload.preferred_model = parts[1];
+        }
+      }
+
+      createBtn.disabled = true;
+      createBtn.textContent = 'Creating...';
+      statusEl.textContent = '';
+
+      try {
+        const resp = await fetch('/api/agents/pkg-' + encodeURIComponent(vendor) + '/sub-agents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const result = await resp.json();
+        if (result.ok) {
+          statusEl.textContent = '\u2713 Agent created: ' + result.name;
+          statusEl.style.color = '#22c55e';
+          await self.loadAgents();
+          setTimeout(() => {
+            self.closeDynamicView();
+            self.renderPackageDetail(vendor);
+          }, 800);
+        } else {
+          statusEl.textContent = 'Error: ' + (result.error || 'Unknown');
+          statusEl.style.color = '#ef4444';
+          createBtn.disabled = false;
+          createBtn.textContent = 'Create Agent';
+        }
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e.message;
+        statusEl.style.color = '#ef4444';
+        createBtn.disabled = false;
+        createBtn.textContent = 'Create Agent';
+      }
+    });
   },
 
   // Add a resource tag to the list
@@ -6239,13 +6586,95 @@ function formatContent(text) {
     }
   );
 
-  let h = esc(processed);
-  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, l, c) => `<pre><code>${c}</code></pre>`);
-  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
-  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  h = h.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  // Extract code blocks before escaping (preserve raw content)
+  const codeBlocks = [];
+  processed = processed.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push({ lang: lang || '', code: code.replace(/\n$/, '') });
+    return `__CODEBLOCK_${idx}__`;
+  });
 
-  // Restore artifact cards (they were placeholder'd before escaping)
+  let h = esc(processed);
+
+  // Restore code blocks with header + copy button
+  for (let i = 0; i < codeBlocks.length; i++) {
+    const { lang, code } = codeBlocks[i];
+    const langLabel = lang || 'code';
+    const copyId = 'copy-' + Math.random().toString(36).substr(2, 6);
+    const codeHtml = `<pre><div class="code-header"><span>${esc(langLabel)}</span><button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('${copyId}').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div><code id="${copyId}">${esc(code)}</code></pre>`;
+    h = h.replace(`__CODEBLOCK_${i}__`, codeHtml);
+  }
+
+  // Inline code
+  h = h.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+  // Bold and italic
+  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+
+  // Headings (### before ## before #)
+  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Horizontal rules
+  h = h.replace(/^---$/gm, '<hr>');
+
+  // Unordered lists (- or *)
+  h = h.replace(/^(?:- |\* )(.+)$/gm, '<li>$1</li>');
+  h = h.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+  // Ordered lists (1. 2. etc)
+  h = h.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> not inside <ul> into <ol>
+  h = h.replace(/(<li>.*<\/li>(?:\n<li>.*<\/li>)*)/g, (match) => {
+    if (match.includes('<ul>')) return match; // already wrapped
+    return match;
+  });
+
+  // Links [text](url)
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+
+  // Blockquotes
+  h = h.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Tables: | col | col |
+  h = h.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)+)/gm, (_, header, sep, body) => {
+    const thCells = header.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
+    const rows = body.trim().split('\n').map(row => {
+      const cells = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    return `<table><thead><tr>${thCells}</tr></thead><tbody>${rows}</tbody></table>`;
+  });
+
+  // Paragraphs: convert double newlines to paragraph breaks
+  h = h.replace(/\n\n+/g, '</p><p>');
+  // Single newlines within paragraphs become <br>
+  h = h.replace(/\n/g, '<br>');
+  // Wrap in paragraph tags (but not if it starts with a block element)
+  if (!/^<(h[1-3]|ul|ol|pre|table|hr|blockquote|div)/.test(h.trim())) {
+    h = '<p>' + h + '</p>';
+  }
+  // Clean up empty paragraphs and bad nesting
+  h = h.replace(/<p><\/p>/g, '');
+  h = h.replace(/<p>(<h[1-3]>)/g, '$1');
+  h = h.replace(/(<\/h[1-3]>)<\/p>/g, '$1');
+  h = h.replace(/<p>(<ul>)/g, '$1');
+  h = h.replace(/(<\/ul>)<\/p>/g, '$1');
+  h = h.replace(/<p>(<ol>)/g, '$1');
+  h = h.replace(/(<\/ol>)<\/p>/g, '$1');
+  h = h.replace(/<p>(<pre>)/g, '$1');
+  h = h.replace(/(<\/pre>)<\/p>/g, '$1');
+  h = h.replace(/<p>(<table>)/g, '$1');
+  h = h.replace(/(<\/table>)<\/p>/g, '$1');
+  h = h.replace(/<p>(<hr>)/g, '$1');
+  h = h.replace(/(<hr>)<\/p>/g, '$1');
+  h = h.replace(/<p>(<blockquote>)/g, '$1');
+  h = h.replace(/(<\/blockquote>)<\/p>/g, '$1');
+  h = h.replace(/<p>(<div)/g, '$1');
+
+  // Restore artifact cards
   for (let i = 0; i < artifactPlaceholders.length; i++) {
     h = h.replace(`__ARTIFACT_${i}__`, artifactPlaceholders[i]);
   }
