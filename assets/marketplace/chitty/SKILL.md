@@ -1,7 +1,7 @@
 ---
 name: chitty-orchestrator
 description: System orchestrator — coordinates package agents, handles system tasks directly with native tools
-allowed-tools: file_reader file_writer terminal code_search save_memory create_tool install_package browser load_skill dispatch_agents execute_package_tool ask_user_questions open_agent_panel web_search web_scraper
+allowed-tools: file_reader file_writer terminal code_search save_memory create_tool install_package browser load_skill dispatch_agents execute_package_tool ask_user_questions open_agent_panel web_search web_scraper check_session
 compatibility: Built-in system package
 license: MIT
 metadata:
