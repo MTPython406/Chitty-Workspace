@@ -1347,7 +1347,19 @@ async fn process_chat(
         };
 
         // 4. Context budget check & compaction (model-aware)
-        let prompt_chars: usize = current_messages.iter().map(|m| m.content.len()).sum();
+        // Count ALL content: message text + tool_calls JSON + tool definitions
+        let prompt_chars: usize = current_messages.iter().map(|m| {
+            let mut size = m.content.len();
+            // Tool calls are serialized as JSON in the API payload — count them
+            if let Some(ref tc) = m.tool_calls {
+                size += serde_json::to_string(tc).map(|s| s.len()).unwrap_or(0);
+            }
+            size
+        }).sum::<usize>()
+            // Tool definitions (schemas) are also sent in every API call
+            + current_tools.iter().map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(200)).sum::<usize>()
+            // System prompt is already in current_messages[0]
+            ;
         let estimated_tokens = (prompt_chars / 4) as u32;
 
         // Send context usage info to UI
@@ -1837,7 +1849,25 @@ async fn process_chat(
                 .await;
             drop(tool_runtime);
 
-            let result_content = result.as_content_string();
+            let mut result_content = result.as_content_string();
+
+            // Size-limit tool results to prevent context bloat
+            // Browser screenshots (base64) can be 100K+ chars
+            if result_content.contains("data:image/") || result_content.contains("base64,") {
+                if let Some(start) = result_content.find("data:image/") {
+                    let preview = result_content[..start.min(500)].to_string();
+                    result_content = format!("{}[screenshot captured — image data stripped from context to save tokens]", preview);
+                }
+            }
+            // Cap any single tool result at 20K chars (prevents full HTML pages, huge JSON, etc.)
+            if result_content.len() > 20_000 {
+                let safe_end = result_content.char_indices().nth(15_000).map(|(i,_)|i).unwrap_or(15_000.min(result_content.len()));
+                result_content = format!(
+                    "{}\n\n[... result truncated: {} chars total, showing first 15000 to save context]",
+                    &result_content[..safe_end], result_content.len()
+                );
+            }
+
             tracing::info!("  Tool {} completed: success={}, {}ms, result_len={}", tc.name, result.success, duration_ms, result_content.len());
             let result_preview = if result_content.len() > 200 {
                 format!("{}...", &result_content[..200])
@@ -3038,7 +3068,28 @@ fn truncate_compact(messages: &mut Vec<ChatMessage>, target_chars: usize) {
     let preserve_last = 5.min(messages.len() - 1);
     let compact_end = messages.len() - preserve_last;
 
-    // Pass 1: Truncate long tool results and assistant messages
+    // Pass 0: Immediately strip base64/screenshot data from ALL messages (even recent)
+    // These are the #1 context bloaters — screenshots can be 100K+ chars each
+    for msg in messages.iter_mut() {
+        // Strip base64 image data
+        if msg.content.contains("data:image/") || msg.content.contains("base64,") {
+            if let Some(start) = msg.content.find("data:image/") {
+                let preview = &msg.content[..start.min(200)];
+                msg.content = format!("{}\n[screenshot/image data removed — {} chars]", preview, msg.content.len());
+            }
+        }
+        // Strip very large JSON blobs in tool results (e.g., full HTML pages)
+        if msg.role == "tool" && msg.content.len() > 10_000 {
+            let safe_end = msg.content.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(2000.min(msg.content.len()));
+            msg.content = format!(
+                "{}\n\n[... truncated: {} chars total, showing first 2000]",
+                &msg.content[..safe_end],
+                msg.content.len()
+            );
+        }
+    }
+
+    // Pass 1: Truncate older tool results and assistant messages
     for i in 1..compact_end {
         let msg = &mut messages[i];
         let content_len = msg.content.len();
@@ -3051,12 +3102,16 @@ fn truncate_compact(messages: &mut Vec<ChatMessage>, target_chars: usize) {
                 content_len
             );
         } else if msg.role == "assistant" && content_len > 1000 {
-            let safe_end = msg.content.char_indices().nth(800).map(|(i, _)| i).unwrap_or(800.min(content_len));
+            let safe_end = msg.content.char_indices().nth(500).map(|(i, _)| i).unwrap_or(500.min(content_len));
             msg.content = format!(
                 "{}\n\n[... compacted: {} chars total]",
                 &msg.content[..safe_end],
                 content_len
             );
+        }
+        // Also strip tool_calls from old assistant messages (they're huge JSON)
+        if msg.role == "assistant" && i < compact_end {
+            msg.tool_calls = None;
         }
     }
 
@@ -3074,7 +3129,7 @@ fn truncate_compact(messages: &mut Vec<ChatMessage>, target_chars: usize) {
         }
     }
 
-    // Pass 3: If STILL over budget, remove entire old message blocks (user+assistant pairs)
+    // Pass 3: If STILL over budget, remove entire old message blocks
     let mut current_chars: usize = messages.iter().map(|m| m.content.len()).sum();
     if current_chars > target_chars && messages.len() > 6 {
         let mut i = 1;
