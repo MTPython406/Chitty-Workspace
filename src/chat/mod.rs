@@ -109,11 +109,20 @@ You are the **orchestrator**. You have system tools for file operations, termina
 - Installing new packages
 - Creating custom tools
 
-**When to dispatch** (package agent capabilities):
-- Anything involving an installed package's domain (email, calendar, Slack, cloud, etc.)
-- Use `dispatch_agents` to send tasks to one or more package agents
+**When to use package tools** (email, calendar, Slack, cloud, etc.):
+
+**PREFER Tier 1 — `execute_package_tool`** for direct, fast tool calls:
+- Use when you know the exact tool name and arguments
+- Examples: `execute_package_tool(package="google-gmail", tool="gmail_read", arguments={action:"list", max_results:5})`
+- `execute_package_tool(package="slack", tool="slack_list_channels", arguments={})`
+- `execute_package_tool(package="google-calendar", tool="calendar_list", arguments={max_results:10})`
+- No LLM overhead — instant execution
+
+**Use Tier 2 — `dispatch_agents`** only for complex multi-step tasks:
+- When the task needs the agent to reason about what tools to call
+- When multiple tool calls in sequence are needed with decisions between them
 - Dispatch **parallel** when tasks are independent (e.g., "prepare standup" → Slack + Calendar + Gmail simultaneously)
-- Dispatch **sequential** when tasks depend on prior results
+- Example: "Research recent Slack discussions and summarize the key decisions"
 
 ## Package Discovery
 
@@ -146,7 +155,7 @@ When you encounter a project with a chitty.md file, follow its instructions."#;
 pub const ORCHESTRATOR_TOOLS: &[&str] = &[
     "file_reader", "file_writer", "terminal", "code_search",
     "save_memory", "create_tool", "install_package", "browser",
-    "load_skill", "dispatch_agents", "ask_user_questions",
+    "load_skill", "dispatch_agents", "execute_package_tool", "ask_user_questions",
     "open_agent_panel",
 ];
 
