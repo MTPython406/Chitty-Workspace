@@ -57,10 +57,12 @@ rustls-pemfile = "2"
 # Scheduler (cron expression parsing)
 cron = "0.13"
 
-# Tools (code search)
+# Tools (code search, web scraping)
 walkdir = "2"
 which = "6"
 regex = "1"
+scraper = "0.21"
+url = "2"
 
 # SSE parsing (for streaming LLM responses)
 eventsource-stream = "0.2"
