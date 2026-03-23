@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 10;
+const SCHEMA_VERSION: i32 = 11;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -50,6 +50,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if current < 10 {
         migrate_v10(conn)?;
+    }
+    if current < 11 {
+        migrate_v11(conn)?;
     }
 
     conn.execute(
@@ -491,5 +494,32 @@ fn migrate_v10(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("Database migrated to v10 (persistent connections: event routes + status)");
+    Ok(())
+}
+
+/// V11: Package-centric orchestrator — package_id on agents + presets table
+fn migrate_v11(conn: &Connection) -> Result<()> {
+    // Add package_id column to agents (links agent to source marketplace package)
+    conn.execute_batch(
+        "ALTER TABLE agents ADD COLUMN package_id TEXT;
+        CREATE INDEX IF NOT EXISTS idx_agents_package ON agents(package_id);
+
+        -- Agent presets: saved multi-package combinations for scheduled tasks
+        CREATE TABLE IF NOT EXISTS agent_presets (
+            id              TEXT PRIMARY KEY,
+            name            TEXT NOT NULL,
+            description     TEXT,
+            package_ids     TEXT NOT NULL DEFAULT '[]',
+            prompt_template TEXT,
+            provider        TEXT,
+            model           TEXT,
+            cron_expression TEXT,
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )?;
+
+    tracing::info!("Database migrated to v11 (package-centric agents + presets)");
     Ok(())
 }

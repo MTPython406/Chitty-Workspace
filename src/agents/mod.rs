@@ -11,6 +11,7 @@
 use anyhow::Result;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use crate::tools::manifest::PackageManifest;
 
 fn default_approval_mode() -> String {
     "prompt".to_string()
@@ -64,6 +65,10 @@ pub struct Agent {
     /// Max conversation turns before forcing compaction (None = unlimited)
     #[serde(default)]
     pub max_conversation_turns: Option<u32>,
+    /// Link to source marketplace package (None = user-created agent)
+    /// Package agents have ID format "pkg-{package_name}"
+    #[serde(default)]
+    pub package_id: Option<String>,
 }
 
 /// Summary for listing agents (lightweight)
@@ -81,6 +86,8 @@ pub struct AgentSummary {
     pub preferred_model: Option<String>,
     #[serde(default = "default_approval_mode")]
     pub approval_mode: String,
+    #[serde(default)]
+    pub package_id: Option<String>,
 }
 
 /// Agents CRUD manager
@@ -93,8 +100,8 @@ impl AgentsManager {
         let tags_json = serde_json::to_string(&agent.tags)?;
 
         conn.execute(
-            "INSERT INTO agents (id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            "INSERT INTO agents (id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
@@ -113,6 +120,7 @@ impl AgentsManager {
                 context_budget_pct = excluded.context_budget_pct,
                 compaction_strategy = excluded.compaction_strategy,
                 max_conversation_turns = excluded.max_conversation_turns,
+                package_id = excluded.package_id,
                 updated_at = datetime('now')",
             rusqlite::params![
                 agent.id,
@@ -133,6 +141,7 @@ impl AgentsManager {
                 agent.context_budget_pct.map(|v| v as i32),
                 agent.compaction_strategy,
                 agent.max_conversation_turns.map(|v| v as i32),
+                agent.package_id,
             ],
         )?;
         Ok(())
@@ -141,7 +150,7 @@ impl AgentsManager {
     /// Load an agent by ID
     pub fn load(conn: &Connection, id: &str) -> Result<Option<Agent>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns
+            "SELECT id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id
              FROM agents WHERE id = ?1",
         )?;
 
@@ -168,6 +177,7 @@ impl AgentsManager {
                     context_budget_pct: row.get::<_, Option<i32>>(15)?.map(|v| v as u32),
                     compaction_strategy: row.get(16)?,
                     max_conversation_turns: row.get::<_, Option<i32>>(17)?.map(|v| v as u32),
+                    package_id: row.get(18)?,
                 })
             })
             .ok();
@@ -178,7 +188,7 @@ impl AgentsManager {
     /// List all agents (summaries)
     pub fn list(conn: &Connection) -> Result<Vec<AgentSummary>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, skills, tags, max_iterations, project_path, preferred_provider, preferred_model, approval_mode FROM agents ORDER BY name",
+            "SELECT id, name, description, skills, tags, max_iterations, project_path, preferred_provider, preferred_model, approval_mode, package_id FROM agents ORDER BY name",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -195,6 +205,7 @@ impl AgentsManager {
                 preferred_provider: row.get(7)?,
                 preferred_model: row.get(8)?,
                 approval_mode: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "prompt".to_string()),
+                package_id: row.get(10)?,
             })
         })?;
 
@@ -209,5 +220,52 @@ impl AgentsManager {
     pub fn delete(conn: &Connection, id: &str) -> Result<bool> {
         let count = conn.execute("DELETE FROM agents WHERE id = ?1", rusqlite::params![id])?;
         Ok(count > 0)
+    }
+
+    /// Auto-create (or update) an agent from a marketplace package manifest.
+    /// Each package gets one agent with a deterministic ID: "pkg-{package_name}".
+    /// Uses ON CONFLICT DO UPDATE so reinstalls update rather than duplicate.
+    pub fn create_from_package(conn: &Connection, manifest: &PackageManifest) -> Result<Agent> {
+        let agent_id = format!("pkg-{}", manifest.name);
+        let ac = &manifest.agent_config;
+
+        // Build persona from agent_config or generate a default
+        let persona = ac.default_instructions.clone().unwrap_or_else(|| {
+            format!(
+                "You are the {} agent. Help the user with {} capabilities. Use your tools to accomplish tasks.",
+                manifest.display_name,
+                manifest.description.to_lowercase()
+            )
+        });
+
+        let mut tags = vec!["package".to_string(), "auto-created".to_string()];
+        for cat in &manifest.categories {
+            tags.push(cat.clone());
+        }
+
+        let agent = Agent {
+            id: agent_id,
+            name: manifest.display_name.clone(),
+            description: manifest.description.clone(),
+            persona,
+            skills: vec![], // Package agents use tools directly, not via skills
+            project_path: None,
+            preferred_provider: None,
+            preferred_model: ac.recommended_model.clone(),
+            tags,
+            version: manifest.version.clone(),
+            ai_generated: false,
+            max_iterations: ac.max_iterations.or(Some(10)),
+            temperature: ac.temperature,
+            max_tokens: None,
+            approval_mode: ac.approval_mode.clone().unwrap_or_else(|| "prompt".to_string()),
+            context_budget_pct: None,
+            compaction_strategy: None,
+            max_conversation_turns: None,
+            package_id: Some(manifest.name.clone()),
+        };
+
+        Self::save(conn, &agent)?;
+        Ok(agent)
     }
 }

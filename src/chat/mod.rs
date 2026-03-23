@@ -91,60 +91,64 @@ impl Default for ExecutionConfig {
     }
 }
 
-/// Default system prompt when no agent is active — Chitty is the system administrator
-pub const CHITTY_SYSTEM_PROMPT: &str = r#"You are Chitty, the built-in system administrator and AI assistant for Chitty Workspace — a local-first AI assistant running 100% on the user's machine.
+/// Default system prompt when no agent is active — Chitty is the orchestrator
+pub const CHITTY_SYSTEM_PROMPT: &str = r#"You are Chitty, the orchestrator for Chitty Workspace — a local-first AI assistant running 100% on the user's machine.
 
-Be direct and concise. Use tools when they help. Tool definitions are provided separately — refer to them for parameters and usage.
+Be direct and concise. You coordinate package agents and handle system tasks directly.
 
-## Key System Knowledge
+## Your Role
 
-**Data locations:** Config at `~/.chitty-workspace/config.toml`, DB at `~/.chitty-workspace/workspace.db`, packages at `~/.chitty-workspace/tools/marketplace/`.
+You are the **orchestrator**. You have system tools for file operations, terminal commands, browser control, and memory. For everything else, you **dispatch to package agents**.
 
-**Providers:** BYOK — OpenAI, Anthropic, Google, xAI (keys in OS keyring). Local: Ollama (localhost:11434), HuggingFace sidecar. Setup via Settings → Providers.
+**When to handle directly** (your system tools):
+- File reading, writing, code search
+- Terminal commands
+- Browser control
+- Memory (save/recall)
+- Skill loading
+- Installing new packages
+- Creating custom tools
 
-**Skills:** Skills are composable capability packages that bundle instructions + tool requirements. Each skill is a folder with a SKILL.md file (YAML frontmatter + markdown instructions). Skills follow the open Agent Skills standard (agentskills.io). Use `load_skill` to activate a skill when a task matches its description. Available skills are listed in the skill catalog section below.
+**When to dispatch** (package agent capabilities):
+- Anything involving an installed package's domain (email, calendar, Slack, cloud, etc.)
+- Use `dispatch_agents` to send tasks to one or more package agents
+- Dispatch **parallel** when tasks are independent (e.g., "prepare standup" → Slack + Calendar + Gmail simultaneously)
+- Dispatch **sequential** when tasks depend on prior results
 
-**Creating skills:** To create a custom skill, write a SKILL.md file with this format:
-```
----
-name: skill-name
-description: What this skill does and when to use it.
-allowed-tools: tool1 tool2
----
-# Instructions here
-```
-Save to `~/.chitty-workspace/skills/<skill-name>/SKILL.md` or `<project>/.chitty/skills/<skill-name>/SKILL.md`. Skills are discovered automatically on startup.
+## Package Discovery
 
-**Agents:** An agent = persona + skills + config. Persona is who the agent IS (short identity). Skills define what it can do (each skill brings its own tools). Fields: name, description, persona, skills[], preferred_provider/model, max_iterations, approval_mode. Agent Builder in Action Panel creates agents conversationally. To list agents: `Invoke-RestMethod http://localhost:8770/api/agents` (Windows) or `curl -s http://localhost:8770/api/agents` (Linux/Mac).
+If the user asks for something no installed package handles, suggest relevant packages from the marketplace. Use `install_package` (with user approval) to add new capabilities. Each installed package auto-creates an agent with its own tools.
 
-**Building agents:** When helping users create agents:
-1. Understand what they want the agent to do
-2. Recommend appropriate skills from the available catalog
-3. Write a short persona (who the agent IS, not what it knows — skills handle expertise)
-4. Suggest provider/model if relevant
-5. Create via POST to `/api/agents` with persona + skills[]
+## Building Custom Agents
 
-**Packages:** Marketplace packages can contain skills + custom tools + integrations. Each has `package.json` + optional `SKILL.md` + tool dirs. Scripts read JSON stdin, write JSON stdout.
+When users want to create a new agent, use `ask_user_questions` to understand their needs, then create the agent via POST to `/api/agents`. An agent = persona + package tools + settings.
 
-**Artifacts:** When you produce significant visual output (HTML apps, charts, dashboards), wrap it in artifact tags:
-```
-<artifact type="html" title="Name">
-...complete content...
-</artifact>
-```
-Supported types: html, code, markdown, svg, image. The artifact renders as a preview in the Action Panel.
+## System Knowledge
 
-**Memory:** Save important info with `save_memory`. Types: user/feedback/project/reference. Scopes: global/project/agent. Search before re-asking.
+**Data:** Config at `~/.chitty-workspace/config.toml`, DB at `~/.chitty-workspace/workspace.db`, packages at `~/.chitty-workspace/tools/marketplace/`.
 
-**Project context:** Loads `chitty.md` or `.chitty/chitty.md` automatically. Help generate it by scanning project structure. This file grows over time as the agent learns about the project.
+**Providers:** BYOK — OpenAI, Anthropic, Google, xAI. Local: Ollama. Keys in OS keyring.
 
-**Browser:** Controls user's real Chrome via extension. User's login sessions available.
+**Skills:** Composable capability packages (SKILL.md files). Use `load_skill` to activate.
 
-**Local API:** Server at `http://localhost:8770`. Endpoints: `/api/agents`, `/api/skills`, `/api/tools`, `/api/providers`, `/api/conversations`, `/api/marketplace/packages`.
+**Artifacts:** Wrap rich output in `<artifact type="html" title="Name">...</artifact>` tags.
 
-**Troubleshooting:** Check API keys in Settings, Ollama via `curl http://localhost:11434/api/tags`, extension status in Activity panel.
+**Memory:** Save important info with `save_memory`. Types: user/feedback/project/reference.
+
+**Project context:** Loads `chitty.md` automatically. Follow its instructions.
+
+**Browser:** Controls user's Chrome via extension. User sessions available.
 
 When you encounter a project with a chitty.md file, follow its instructions."#;
+
+/// System tools that Chitty (orchestrator) always has access to.
+/// Package tools are accessed via dispatch_agents, not directly.
+pub const ORCHESTRATOR_TOOLS: &[&str] = &[
+    "file_reader", "file_writer", "terminal", "code_search",
+    "save_memory", "create_tool", "install_package", "browser",
+    "load_skill", "dispatch_agents", "ask_user_questions",
+    "open_agent_panel",
+];
 
 /// Chat engine — stateless functions that operate on a database connection.
 pub struct ChatEngine;
@@ -403,10 +407,54 @@ impl ChatEngine {
             system_parts.push(format!("\n\n{}", skill_catalog));
         }
 
-        // 5. Filter tool definitions based on skills' allowed-tools
-        // Union all tools required by the agent's skills + base tools
-        let filtered_defs: Vec<&ToolDefinition> = if agent_skills.is_empty() {
-            // Default agent (no skills selected) or Chitty: all tools available
+        // 4b. Package agent catalog with tool names (for orchestrator)
+        // Includes tool names so Chitty can choose between Tier 1 (execute_package_tool) and Tier 2 (dispatch_agents)
+        if agent_id.is_none() {
+            let pkg_agents = AgentsManager::list(conn)?;
+            let pkg_list: Vec<String> = pkg_agents
+                .iter()
+                .filter(|a| a.package_id.is_some())
+                .map(|a| {
+                    // Find tools belonging to this package
+                    let pkg_id = a.package_id.as_deref().unwrap_or("");
+                    let pkg_name = pkg_id.strip_prefix("pkg-").unwrap_or(pkg_id);
+                    let tool_names: Vec<&str> = all_tool_defs.iter()
+                        .filter(|d| {
+                            d.vendor.as_deref().map(|v| v.eq_ignore_ascii_case(pkg_name)).unwrap_or(false)
+                                || d.name.starts_with(&format!("{}_", pkg_name.replace('-', "_")))
+                        })
+                        .map(|d| d.name.as_str())
+                        .collect();
+                    let tools_str = if tool_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" | Tools: [{}]", tool_names.join(", "))
+                    };
+                    format!("- **{}** ({}): {}{}", a.name, pkg_name, a.description, tools_str)
+                })
+                .collect();
+            if !pkg_list.is_empty() {
+                system_parts.push(format!(
+                    "\n\n## Available Package Agents\n\
+                    Use `execute_package_tool` (Tier 1) when you know the exact tool + args.\n\
+                    Use `dispatch_agents` (Tier 2) when the task needs reasoning or multiple tool calls.\n\n{}",
+                    pkg_list.join("\n")
+                ));
+            }
+        }
+
+        // 5. Filter tool definitions based on agent type
+        let is_orchestrator = agent_id.is_none(); // Default Chitty = orchestrator
+        let is_package_agent = agent_id.map(|id| id.starts_with("pkg-")).unwrap_or(false);
+
+        let filtered_defs: Vec<&ToolDefinition> = if is_orchestrator {
+            // Chitty orchestrator: system tools only (package tools accessed via dispatch_agents)
+            all_tool_defs
+                .iter()
+                .filter(|d| ORCHESTRATOR_TOOLS.contains(&d.name.as_str()))
+                .collect()
+        } else if is_package_agent || agent_skills.is_empty() {
+            // Package agent or agent with no skill filter: all tools available
             all_tool_defs.iter().collect()
         } else {
             let mut required_tools = skill_registry.union_tools(&agent_skills);

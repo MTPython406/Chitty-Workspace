@@ -281,9 +281,10 @@ pub struct PackageManifest {
     pub feature_flags: Vec<FeatureFlag>,
 
     // ── Agent Configuration ──────────────────────────────────────
-    /// Getting-started guide for first-time users
-    #[serde(default)]
-    pub agent_config: Option<AgentConfig>,
+    /// Agent persona, prompts, and execution settings.
+    /// Auto-creates a package agent on install.
+    #[serde(default = "default_agent_config")]
+    pub agent_config: AgentConfig,
 
     // ── Persistent Connections ───────────────────────────────────
     /// Background processes that receive external events (WebSockets, listeners, etc.)
@@ -358,10 +359,11 @@ pub struct FeatureFlag {
     pub enable_warning: Option<String>,
 }
 
-/// Agent configuration for ease of first use
+/// Agent configuration — defines the agent auto-created when this package is installed.
+/// Each package = one agent. The agent gets the package's tools, skills, and persona.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
-    /// Default system instructions injected when package tools are active
+    /// Agent persona / system instructions (who the agent IS)
     #[serde(default)]
     pub default_instructions: Option<String>,
     /// Suggested first prompts for new users ("Try asking...")
@@ -373,6 +375,27 @@ pub struct AgentConfig {
     /// Capabilities summary shown on detail page
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Max tool call iterations (default 10)
+    #[serde(default)]
+    pub max_iterations: Option<u32>,
+    /// Approval mode: "prompt" (default, ask user) or "auto" (trust agent)
+    #[serde(default)]
+    pub approval_mode: Option<String>,
+    /// Temperature for LLM (0.0 - 2.0)
+    #[serde(default)]
+    pub temperature: Option<f64>,
+}
+
+fn default_agent_config() -> AgentConfig {
+    AgentConfig {
+        default_instructions: None,
+        suggested_prompts: vec![],
+        recommended_model: None,
+        capabilities: vec![],
+        max_iterations: None,
+        approval_mode: None,
+        temperature: None,
+    }
 }
 
 /// A single step in a marketplace package setup wizard

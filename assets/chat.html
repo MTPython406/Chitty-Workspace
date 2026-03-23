@@ -1323,6 +1323,39 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .activity-status .dot.active { background: #5b5; animation: pulse 1.5s infinite; }
 .activity-status .dot.idle { background: var(--text-muted); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ═══ Multi-Agent Dispatch Blocks ═══ */
+.agent-block {
+  margin: 8px 0; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-secondary); overflow: hidden;
+}
+.agent-header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); background: var(--bg-tertiary);
+}
+.agent-icon { font-size: 16px; }
+.agent-name { font-weight: 600; font-size: 13px; color: var(--text-primary); flex: 1; }
+.agent-status { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+.agent-status.thinking { background: #3b82f620; color: #3b82f6; }
+.agent-status.done { background: #22c55e20; color: #22c55e; }
+.agent-status.error { background: #ef444420; color: #ef4444; }
+.agent-activity { padding: 8px 14px; font-size: 12px; }
+.agent-instruction { color: var(--text-muted); font-style: italic; margin-bottom: 6px; }
+.agent-text-stream { color: var(--text-secondary); white-space: pre-wrap; margin: 4px 0; }
+.agent-tool-call {
+  display: flex; align-items: center; gap: 6px; padding: 4px 0;
+  font-size: 12px; color: var(--text-primary);
+}
+.agent-tool-icon { font-size: 12px; }
+.agent-tool-status { font-size: 10px; padding: 1px 6px; border-radius: 6px; }
+.agent-tool-status.running { background: #f59e0b20; color: #f59e0b; }
+.agent-tool-status.done { color: #22c55e; }
+.agent-tool-status.error { color: #ef4444; }
+.agent-tool-preview {
+  color: var(--text-muted); font-size: 11px; margin: 2px 0 6px 22px;
+  white-space: pre-wrap; max-height: 60px; overflow: hidden;
+  border-left: 2px solid var(--border); padding-left: 8px;
+}
 </style>
 </head>
 <body>
@@ -1361,7 +1394,6 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
       </div>
       <div class="action-tabs">
         <button class="action-tab active" data-action-tab="activity">Activity</button>
-        <button class="action-tab" data-action-tab="agents">Agents</button>
         <button class="action-tab" data-action-tab="providers">Providers</button>
         <button class="action-tab" data-action-tab="marketplace">Marketplace</button>
       </div>
@@ -1387,7 +1419,7 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
         </div>
         <div id="dynamic-view-content" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;"></div>
       </div>
-      <div id="agents-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
+      <!-- agents-body removed: merged into marketplace-body -->
       <div id="builder-body" style="display:none;flex:1;overflow-y:auto;padding:0;"></div>
       <div id="providers-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
       <div id="marketplace-body" style="display:none;flex:1;overflow-y:auto;padding:12px;"></div>
@@ -1454,6 +1486,7 @@ const App = {
     selectedProvider: null,
     selectedModel: null,
     agents: [],
+    packages: [],
     availableTools: [],
     conversations: [],
     actionPanelOpen: false,
@@ -1468,6 +1501,7 @@ const App = {
     await this.loadProviders();
     await this.loadAllUserModels();
     await this.loadAgents();
+    await this.loadPackages();
     await this.loadConversations();
     this.addPanel();
     document.addEventListener('click', () => this.closeAllPopovers());
@@ -2182,6 +2216,125 @@ const App = {
                 this.appendToolBlockInPanel(panelId, cardHtml);
               }
 
+            // ═══ Multi-Agent Dispatch Events ═══
+            } else if (evType === 'agent_start') {
+              const agentName = parsed.agent_name || 'Agent';
+              const instruction = parsed.instruction || '';
+              this.activityLog('info', `🤖 <b>${esc(agentName)}</b> started`);
+              this.appendToolBlockInPanel(panelId,
+                `<div class="agent-block" data-agent="${esc(agentName)}">
+                  <div class="agent-header">
+                    <span class="agent-icon">📦</span>
+                    <span class="agent-name">${esc(agentName)}</span>
+                    <span class="agent-status thinking">thinking</span>
+                  </div>
+                  <div class="agent-activity" data-agent-activity="${esc(agentName)}">
+                    <div class="agent-instruction">${esc(instruction.substring(0, 200))}</div>
+                  </div>
+                </div>`);
+            } else if (evType === 'agent_text') {
+              const agentName = parsed.agent_name || 'Agent';
+              const text = parsed.content || '';
+              const actDiv = document.querySelector(`[data-agent-activity="${CSS.escape(agentName)}"]`);
+              if (actDiv) {
+                let textEl = actDiv.querySelector('.agent-text-stream');
+                if (!textEl) {
+                  textEl = document.createElement('div');
+                  textEl.className = 'agent-text-stream';
+                  actDiv.appendChild(textEl);
+                }
+                textEl.textContent += text;
+              }
+            } else if (evType === 'agent_tool_call') {
+              const agentName = parsed.agent_name || 'Agent';
+              const toolName = parsed.tool_name || '?';
+              this.activityLog('tool', `📦 <b>${esc(agentName)}</b> → <span class="hl">${esc(toolName)}</span>`);
+              const actDiv = document.querySelector(`[data-agent-activity="${CSS.escape(agentName)}"]`);
+              if (actDiv) {
+                const el = document.createElement('div');
+                el.className = 'agent-tool-call';
+                el.innerHTML = `<span class="agent-tool-icon">⚡</span> <b>${esc(toolName)}</b> <span class="agent-tool-status running">running</span>`;
+                el.dataset.toolName = toolName;
+                actDiv.appendChild(el);
+                // Clear any text stream since agent is now acting
+                const textEl = actDiv.querySelector('.agent-text-stream');
+                if (textEl) textEl.textContent = '';
+              }
+            } else if (evType === 'agent_tool_result') {
+              const agentName = parsed.agent_name || 'Agent';
+              const toolName = parsed.tool_name || '?';
+              const ok = parsed.success;
+              const dur = parsed.duration_ms || 0;
+              const preview = parsed.result_preview || '';
+              this.activityLog('result', `📦 <b>${esc(agentName)}</b> → ${esc(toolName)} ${ok ? '✅' : '❌'} ${dur}ms`);
+              const actDiv = document.querySelector(`[data-agent-activity="${CSS.escape(agentName)}"]`);
+              if (actDiv) {
+                const toolEl = actDiv.querySelector(`.agent-tool-call[data-tool-name="${CSS.escape(toolName)}"] .agent-tool-status`);
+                if (toolEl) {
+                  toolEl.className = 'agent-tool-status ' + (ok ? 'done' : 'error');
+                  toolEl.textContent = ok ? `✅ ${dur}ms` : '❌ failed';
+                }
+                // Show result preview
+                if (preview) {
+                  const previewEl = document.createElement('div');
+                  previewEl.className = 'agent-tool-preview';
+                  previewEl.textContent = preview.substring(0, 200);
+                  const lastTool = actDiv.querySelector(`.agent-tool-call[data-tool-name="${CSS.escape(toolName)}"]`);
+                  if (lastTool) lastTool.after(previewEl);
+                }
+              }
+            } else if (evType === 'agent_complete') {
+              const agentName = parsed.agent_name || 'Agent';
+              this.activityLog('info', `✅ <b>${esc(agentName)}</b> completed`);
+              const agentBlock = document.querySelector(`.agent-block[data-agent="${CSS.escape(agentName)}"]`);
+              if (agentBlock) {
+                const statusEl = agentBlock.querySelector('.agent-status');
+                if (statusEl) {
+                  statusEl.className = 'agent-status done';
+                  statusEl.textContent = '✅ done';
+                }
+                // Collapse activity section with animation
+                const actDiv = agentBlock.querySelector('.agent-activity');
+                if (actDiv) {
+                  // Count tool calls for summary
+                  const toolCalls = actDiv.querySelectorAll('.agent-tool-call');
+                  const summary = toolCalls.length > 0
+                    ? `${toolCalls.length} tool${toolCalls.length > 1 ? 's' : ''} called`
+                    : '';
+                  // Add summary to header
+                  const header = agentBlock.querySelector('.agent-header');
+                  if (header && summary) {
+                    const summarySpan = document.createElement('span');
+                    summarySpan.className = 'agent-summary';
+                    summarySpan.textContent = summary;
+                    summarySpan.style.cssText = 'font-size:11px;color:var(--text-muted);margin-left:auto;';
+                    header.insertBefore(summarySpan, header.querySelector('.agent-status'));
+                  }
+                  // Collapse after short delay
+                  setTimeout(() => {
+                    actDiv.style.maxHeight = actDiv.scrollHeight + 'px';
+                    requestAnimationFrame(() => {
+                      actDiv.style.transition = 'max-height 0.3s ease';
+                      actDiv.style.maxHeight = '0';
+                      actDiv.style.overflow = 'hidden';
+                    });
+                  }, 1500);
+                  // Make header clickable to toggle
+                  if (header) {
+                    header.style.cursor = 'pointer';
+                    header.onclick = () => {
+                      if (actDiv.style.maxHeight === '0px') {
+                        actDiv.style.maxHeight = actDiv.scrollHeight + 'px';
+                        setTimeout(() => { actDiv.style.maxHeight = 'none'; }, 300);
+                      } else {
+                        actDiv.style.maxHeight = actDiv.scrollHeight + 'px';
+                        requestAnimationFrame(() => { actDiv.style.maxHeight = '0'; });
+                      }
+                    };
+                  }
+                }
+              }
+
             } else if (evType === 'context_info') {
               // Update context usage bar
               const pct = parsed.percentage || 0;
@@ -2296,34 +2449,22 @@ const App = {
 
   /* ── Action panel tabs ───────────────────────────────────────────── */
   switchActionTab(tabName) {
+    // Legacy: redirect 'agents' or 'packages' to 'marketplace'
+    if (tabName === 'agents' || tabName === 'packages') tabName = 'marketplace';
     document.querySelectorAll('.action-tab').forEach(t =>
-      t.classList.toggle('active', t.dataset.actionTab === tabName || (t.dataset.actionTab === 'agents' && tabName === 'builder'))
+      t.classList.toggle('active', t.dataset.actionTab === tabName)
     );
     const actionBody = document.getElementById('action-body');
     const dynamicView = document.getElementById('dynamic-view');
-    const agentsBody = document.getElementById('agents-body');
     const builderBody = document.getElementById('builder-body');
     const providersBody = document.getElementById('providers-body');
     const marketplaceBody = document.getElementById('marketplace-body');
     if (actionBody) actionBody.style.display = tabName === 'activity' ? '' : 'none';
     if (dynamicView) dynamicView.style.display = tabName === 'dynamic' ? 'flex' : 'none';
-    if (agentsBody) agentsBody.style.display = tabName === 'agents' ? 'block' : 'none';
-    if (builderBody) builderBody.style.display = tabName === 'builder' ? 'flex' : 'none';
+    if (builderBody) builderBody.style.display = 'none';
     if (providersBody) providersBody.style.display = tabName === 'providers' ? 'block' : 'none';
     if (marketplaceBody) marketplaceBody.style.display = tabName === 'marketplace' ? 'block' : 'none';
-    // Toggle wider panel for builder
-    const panel = document.getElementById('action-panel');
-    if (panel) panel.classList.toggle('builder-mode', tabName === 'builder');
-    // Update rail builder-open class
-    const rail = document.getElementById('carousel-rail');
-    if (rail && this.state.actionPanelOpen) {
-      rail.classList.toggle('builder-open', tabName === 'builder');
-      this.layoutCarousel();
-    }
     // Auto-render when tab clicked
-    if (tabName === 'agents') {
-      this.renderAgentsTileView();
-    }
     if (tabName === 'providers') {
       this.renderProvidersPanel();
     }
@@ -2341,13 +2482,11 @@ const App = {
     // Deselect all fixed tabs, show dynamic view
     document.querySelectorAll('.action-tab').forEach(t => t.classList.remove('active'));
     const actionBody = document.getElementById('action-body');
-    const agentsBody = document.getElementById('agents-body');
     const builderBody = document.getElementById('builder-body');
     const providersBody = document.getElementById('providers-body');
     const marketplaceBody = document.getElementById('marketplace-body');
     const dynamicView = document.getElementById('dynamic-view');
     if (actionBody) actionBody.style.display = 'none';
-    if (agentsBody) agentsBody.style.display = 'none';
     if (builderBody) builderBody.style.display = 'none';
     if (providersBody) providersBody.style.display = 'none';
     if (marketplaceBody) marketplaceBody.style.display = 'none';
@@ -2552,10 +2691,25 @@ const App = {
         <div style="text-align:center;padding:32px;color:var(--text-muted);">
           <div style="font-size:13px;font-weight:500;margin-bottom:4px;color:var(--text-secondary);">Chitty — System Agent</div>
           <div style="font-size:12px;margin-bottom:16px;">The default system administrator with access to all tools.</div>
-          <button onclick="App.switchActionTab('builder');App.toggleActionPanel(true);" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Open Agent Builder</button>
+          <button onclick="App.sendBuildAgentMessage()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Build an Agent</button>
         </div>`;
     }
     this.openDynamicView('⚙️', 'Agent Configuration', content);
+  },
+
+  /* ── Build Agent via chat message ─────────────────────────────────── */
+  sendBuildAgentMessage() {
+    const panel = this.getFocusedPanel();
+    if (!panel) return;
+    // Ensure Chitty is selected (no agent)
+    panel.selectedAgent = null;
+    this.renderAgentSelect();
+    const el = document.querySelector(`[data-panel-id="${panel.id}"] .panel-textarea`);
+    if (el) {
+      el.value = 'Help me build a new agent';
+      el.dispatchEvent(new Event('input'));
+    }
+    this.sendMessageInPanel(panel.id);
   },
 
   /* ── Open Marketplace in Browser ──────────────────────────────────── */
@@ -2849,9 +3003,9 @@ const App = {
         </div>
         <div class="input-footer">
           <div class="input-footer-left">
-            <select class="panel-agent-select input-footer-select" title="Select Agent">
+            <select class="panel-agent-select input-footer-select" title="Select Package">
               <option value="">Chitty</option>
-              ${this.state.agents.map(sk => `<option value="${esc(sk.id)}" ${panel.selectedAgent === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`).join('')}
+              ${this.state.packages.map(pkg => `<option value="${esc(pkg.name)}" ${panel.selectedAgent === pkg.name ? 'selected' : ''}>${esc(pkg.display_name || pkg.name)}</option>`).join('')}
             </select>
           </div>
           <div class="input-footer-right">
@@ -2878,14 +3032,11 @@ const App = {
       <div class="welcome-sub">${esc(subtitle)}</div>`;
     if (isChitty) {
       html += `<div class="welcome-actions">
-        <button class="welcome-action-btn" onclick="App.switchActionTab('builder');App.toggleActionPanel(true);">
-          <span style="font-size:16px;">🛠</span> Build an Agent
+        <button class="welcome-action-btn" onclick="App.sendBuildAgentMessage()">
+          <span style="font-size:16px;">\u{1F6E0}</span> Build an Agent
         </button>
         <button class="welcome-action-btn" onclick="App.openMarketplace()">
-          <span style="font-size:16px;">📦</span> Marketplace
-        </button>
-        <button class="welcome-action-btn" onclick="App.switchActionTab('agents');App.toggleActionPanel(true);">
-          <span style="font-size:16px;">🤖</span> Browse Agents
+          <span style="font-size:16px;">\u{1F4E6}</span> Marketplace
         </button>
       </div>`;
     }
@@ -3268,7 +3419,7 @@ const App = {
     if (createAgentBtn) createAgentBtn.addEventListener('click', e => {
       e.stopPropagation();
       this.toggleActionPanel(true);
-      this.switchActionTab('agents');
+      this.switchActionTab('marketplace');
     });
     // Close
     const closeBtn = el.querySelector('.close-btn');
@@ -4180,12 +4331,13 @@ const App = {
   },
 
   renderAgentSelect() {
-    // Update agent dropdowns in all panel input footers
+    // Update agent dropdowns in all panel input footers — show Chitty + installed packages
     document.querySelectorAll('.panel-agent-select').forEach(sel => {
       const current = sel.value;
       let html = '<option value="">Chitty</option>';
-      for (const sk of this.state.agents) {
-        html += `<option value="${esc(sk.id)}" ${current === sk.id ? 'selected' : ''}>${esc(sk.name)}</option>`;
+      for (const pkg of this.state.packages) {
+        const pkgId = pkg.name;
+        html += `<option value="${esc(pkgId)}" ${current === pkgId ? 'selected' : ''}>${esc(pkg.display_name || pkg.name)}</option>`;
       }
       sel.innerHTML = html;
     });
@@ -4427,9 +4579,9 @@ const App = {
         if (resp.ok) {
           await this.loadAgents();
           this.renderAgentSelect();
-          // Refresh tile view if action panel is showing agents
-          if (document.getElementById('agents-body')?.style.display !== 'none') {
-            this.renderAgentsTileView();
+          // Refresh marketplace view if action panel is showing it
+          if (document.getElementById('marketplace-body')?.style.display !== 'none') {
+            this.renderMarketplacePanel();
           }
         } else {
           alert('Error saving agent: ' + await resp.text());
@@ -4443,102 +4595,78 @@ const App = {
     // The provider/model selects are populated when the form is first shown
   },
 
-  /* ── Agents Tile View (Action Panel) ──────────────────────────── */
+  /* ── Packages loading ────────────────────────────────────────── */
+  async loadPackages() {
+    try {
+      const resp = await fetch('/api/marketplace/packages');
+      const data = await resp.json();
+      this.state.packages = data.packages || [];
+    } catch (e) { console.error('loadPackages:', e); }
+  },
+
+  /* ── Packages View (Action Panel, formerly Agents Tile View) ── */
   async renderAgentsTileView() {
     const container = document.getElementById('agents-body');
     if (!container) return;
-    await this.loadAgents();
-    await this.loadAvailableTools();
+    await this.loadPackages();
 
-    let html = '';
-    // Header with Agent Builder button
-    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <div style="font-size:14px;font-weight:600;color:var(--text-primary);">Your Agents</div>
-      <div style="display:flex;gap:6px;">
-        <button id="ap-agent-builder-btn" style="padding:6px 14px;background:var(--accent);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Agent Builder</button>
-        <button id="ap-agent-manual-btn" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:12px;cursor:pointer;">+ Manual</button>
-      </div>
-    </div>`;
+    let html = '<div class="packages-list">';
 
-    if (!this.state.agents.length) {
+    if (!this.state.packages.length) {
       html += `<div style="text-align:center;padding:32px 16px;">
-        <div style="font-size:32px;margin-bottom:8px;">🤖</div>
-        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">No agents yet</div>
-        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">Create your first agent with the Agent Builder<br>or add one manually.</div>
+        <div style="font-size:32px;margin-bottom:8px;">\u{1F4E6}</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">No packages installed</div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">Browse the Marketplace to install packages.</div>
       </div>`;
     } else {
-      html += '<div class="agent-tiles">';
-      for (const sk of this.state.agents) {
-        const tools = (sk.tools || []).slice(0, 4).join(', ') || 'all tools';
-        const moreTools = (sk.tools || []).length > 4 ? ` +${sk.tools.length - 4} more` : '';
-        const providerLabel = sk.preferred_provider ? (this.state.providers.find(p => p.provider_id === sk.preferred_provider)?.display_name || sk.preferred_provider) : null;
-        const modelLabel = sk.preferred_model || null;
-        const approvalBadge = sk.approval_mode === 'auto'
-          ? '<span style="padding:1px 5px;background:#22c55e22;color:#22c55e;border-radius:3px;font-size:9px;font-weight:600;">AUTO</span>'
-          : '<span style="padding:1px 5px;background:#3b82f622;color:#3b82f6;border-radius:3px;font-size:9px;font-weight:600;">PROMPT</span>';
+      for (const pkg of this.state.packages) {
+        const toolCount = pkg.tool_count || (pkg.tools || []).length;
+        let statusText = toolCount + ' tool' + (toolCount !== 1 ? 's' : '');
+        let statusDot = '';
+        try {
+          const authResp = await fetch('/api/marketplace/packages/' + encodeURIComponent(pkg.name) + '/auth-status');
+          const authData = await authResp.json();
+          if (authData.authenticated) {
+            statusText += ' \u00b7 Connected';
+            statusDot = ' <span style="color:#22c55e;">\u25cf</span>';
+          } else {
+            statusText += ' \u00b7 Not connected';
+            statusDot = ' <span style="color:var(--text-muted);">\u25cb</span>';
+          }
+        } catch (e) {
+          statusDot = ' <span style="color:var(--text-muted);">\u25cb</span>';
+        }
 
-        html += `<div class="agent-tile" data-agent-id="${esc(sk.id)}">
-          <div class="agent-tile-header">
-            <div class="agent-tile-name">${esc(sk.name)}</div>
-            ${approvalBadge}
-          </div>
-          <div class="agent-tile-desc">${esc(sk.description)}</div>
-          ${providerLabel ? `<div class="agent-tile-meta" style="color:var(--accent);">${esc(providerLabel)}${modelLabel ? ' / ' + esc(modelLabel) : ''}</div>` : ''}
-          <div class="agent-tile-meta">Tools: ${esc(tools)}${moreTools}</div>
-          <div class="agent-tile-actions">
-            <button class="agent-tile-edit" data-agent-id="${esc(sk.id)}">Edit</button>
-            <button class="agent-tile-delete" data-agent-id="${esc(sk.id)}">Delete</button>
+        html += `<div class="package-card" style="padding:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:default;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div style="font-size:24px;">\u{1F4E6}</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:13px;color:var(--text-primary);">${esc(pkg.display_name || pkg.name)}</div>
+              <div style="font-size:12px;color:var(--text-muted);">${statusText}${statusDot}</div>
+            </div>
+            <button class="pkg-settings-btn" data-pkg-name="${esc(pkg.name)}" style="background:none;border:none;cursor:pointer;font-size:18px;padding:4px;" title="Settings">\u2699\uFE0F</button>
           </div>
         </div>`;
       }
-      html += '</div>';
     }
+    html += '</div>';
 
-    // Form container for inline edit
-    html += '<div id="ap-agent-form-container"></div>';
+    html += `<div style="padding:12px;">
+      <button id="ap-browse-marketplace-btn" class="btn-outline" style="width:100%;padding:8px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:12px;cursor:pointer;">+ Browse Marketplace</button>
+    </div>`;
+
     container.innerHTML = html;
 
-    // Bind buttons
-    document.getElementById('ap-agent-builder-btn')?.addEventListener('click', () => {
-      this.switchActionTab('builder');
-      const builderBody = document.getElementById('builder-body');
-      if (builderBody && !builderBody.innerHTML.trim()) this.showAgentBuilder();
-    });
-    document.getElementById('ap-agent-manual-btn')?.addEventListener('click', () => {
-      this.showAgentFormInPanel();
-    });
-    container.querySelectorAll('.agent-tile-edit').forEach(btn => {
+    // Bind settings buttons
+    container.querySelectorAll('.pkg-settings-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.showAgentFormInPanel(btn.dataset.agentId);
+        this.renderPackageDetail(btn.dataset.pkgName);
       });
     });
-    container.querySelectorAll('.agent-tile-delete').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm('Delete this agent?')) return;
-        await fetch(`/api/agents/${btn.dataset.agentId}`, { method: 'DELETE' });
-        this.state.panels.forEach(p => { if (p.selectedAgent === btn.dataset.agentId) p.selectedAgent = null; });
-        await this.loadAgents();
-        this.renderAgentSelect();
-        this.renderAgentsTileView();
-      });
-    });
-    // Click tile to select agent in focused panel
-    container.querySelectorAll('.agent-tile').forEach(tile => {
-      tile.addEventListener('click', () => {
-        const agentId = tile.dataset.agentId;
-        const panel = this.getFocusedPanel();
-        if (panel) {
-          panel.selectedAgent = agentId;
-          this.renderAgentSelect();
-          // Update the panel's agent dropdown
-          const sel = document.querySelector(`[data-panel-id="${panel.id}"] .panel-agent-select`);
-          if (sel) sel.value = agentId;
-          // Trigger agent change (load preferred provider/model)
-          sel?.dispatchEvent(new Event('change'));
-        }
-      });
+    // Browse marketplace button
+    document.getElementById('ap-browse-marketplace-btn')?.addEventListener('click', () => {
+      this.switchActionTab('marketplace');
     });
   },
 
@@ -4958,7 +5086,7 @@ const App = {
   closeAgentBuilder() {
     const body = document.getElementById('builder-body');
     if (body) body.innerHTML = '';
-    this.switchActionTab('agents');
+    this.switchActionTab('activity');
     this.builderState = null;
   },
 
@@ -5011,7 +5139,172 @@ const App = {
   async renderMarketplacePanel() {
     const container = document.getElementById('marketplace-body');
     if (!container) return;
-    return this._renderMarketplace(container);
+    // Combined view: installed packages (compact) + Browse Marketplace button
+    await this.loadPackages();
+
+    let html = '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);padding:12px 16px 6px;">Installed Packages</div>';
+
+    if (!this.state.packages.length) {
+      html += `<div style="text-align:center;padding:24px 16px;">
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">No packages installed yet.</div>
+      </div>`;
+    } else {
+      for (const pkg of this.state.packages) {
+        const toolCount = pkg.tool_count || (pkg.tools || []).length;
+        let statusDot = '<span style="color:var(--text-muted);">\u25cb</span>';
+        try {
+          const authResp = await fetch('/api/marketplace/packages/' + encodeURIComponent(pkg.name) + '/auth-status');
+          const authData = await authResp.json();
+          if (authData.authenticated) {
+            statusDot = '<span style="color:#22c55e;">\u25cf</span>';
+          }
+        } catch (e) { /* keep default */ }
+
+        const agentId = 'pkg-' + pkg.name;
+        html += `<div class="mp-installed-row" data-pkg-name="${esc(pkg.name)}" style="display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;">
+          <span style="font-weight:600;flex:1;font-size:13px;color:var(--text-primary);">${esc(pkg.display_name || pkg.name)}</span>
+          <span style="font-size:12px;color:var(--text-muted);margin-right:8px;">${toolCount} tool${toolCount !== 1 ? 's' : ''}</span>
+          ${statusDot}
+          <button class="mp-agent-cfg-btn" data-agent-id="${esc(agentId)}" data-pkg-name="${esc(pkg.name)}" title="Configure Agent" style="background:none;border:none;cursor:pointer;font-size:16px;margin-left:8px;color:var(--text-muted);padding:2px 4px;" onclick="event.stopPropagation();">&#9881;</button>
+        </div>`;
+      }
+    }
+
+    html += `<div style="border-top:1px solid var(--border);padding:12px 16px;">
+      <button id="mp-browse-btn" class="btn-outline" style="width:100%;padding:10px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:12px;cursor:pointer;font-weight:600;">+ Browse Marketplace</button>
+    </div>`;
+
+    container.innerHTML = html;
+
+    // Bind installed package rows -> open detail
+    container.querySelectorAll('.mp-installed-row').forEach(row => {
+      row.addEventListener('click', () => this.renderPackageDetail(row.dataset.pkgName));
+    });
+    // Bind gear buttons -> open agent config
+    container.querySelectorAll('.mp-agent-cfg-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.openPackageAgentConfig(btn.dataset.agentId, btn.dataset.pkgName);
+      });
+    });
+    // Browse marketplace button -> show full catalog
+    document.getElementById('mp-browse-btn')?.addEventListener('click', () => {
+      this._renderMarketplace(container);
+    });
+  },
+
+  async openPackageAgentConfig(agentId, pkgName) {
+    // Load agent data + package config
+    const [agentResp, configResp, pkgResp] = await Promise.all([
+      fetch('/api/agents/' + encodeURIComponent(agentId)),
+      fetch('/api/marketplace/packages/' + encodeURIComponent(pkgName) + '/config'),
+      fetch('/api/marketplace/packages'),
+    ]);
+    const agent = await agentResp.json().catch(() => null);
+    const config = await configResp.json().catch(() => ({}));
+    const pkgsData = await pkgResp.json().catch(() => ({ packages: [] }));
+    const pkg = (pkgsData.packages || []).find(p => p.name === pkgName) || {};
+
+    const displayName = pkg.display_name || pkgName;
+    const persona = agent?.persona || '';
+    const featureFlags = pkg.feature_flags || [];
+    const resources = pkg.configurable_resources || [];
+    const savedFeatures = config.features || {};
+    const savedResources = config.resources || {};
+
+    let html = `<div style="padding:16px;">
+      <h3 style="margin:0 0 4px;">${esc(displayName)} Agent</h3>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">Package: ${esc(pkgName)} &middot; Agent ID: ${esc(agentId)}</div>
+
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Persona</label>
+        <textarea id="pac-persona" style="width:100%;height:80px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px;resize:vertical;background:var(--bg-card);color:var(--text-primary);">${esc(persona)}</textarea>
+      </div>`;
+
+    // Feature flags
+    if (featureFlags.length) {
+      html += '<div style="margin-bottom:16px;"><label style="font-size:12px;font-weight:600;display:block;margin-bottom:8px;">Features</label>';
+      for (const f of featureFlags) {
+        const checked = (f.id in savedFeatures) ? savedFeatures[f.id] : f.default_enabled;
+        html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <input type="checkbox" class="pac-feature" data-id="${esc(f.id)}" ${checked ? 'checked' : ''}>
+          <div><span style="font-size:12px;font-weight:500;">${esc(f.label)}</span>
+          ${f.description ? '<div style="font-size:11px;color:var(--text-muted);">' + esc(f.description) + '</div>' : ''}</div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    // Advanced section (collapsed)
+    html += `<details style="margin-bottom:16px;">
+      <summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-secondary);">Advanced Settings</summary>
+      <div style="padding:12px 0;">
+        <div style="display:flex;gap:12px;margin-bottom:8px;">
+          <div style="flex:1;"><label style="font-size:11px;color:var(--text-muted);">Provider</label>
+            <input id="pac-provider" type="text" value="${esc(agent?.preferred_provider || '')}" placeholder="default" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-card);color:var(--text-primary);"></div>
+          <div style="flex:1;"><label style="font-size:11px;color:var(--text-muted);">Model</label>
+            <input id="pac-model" type="text" value="${esc(agent?.preferred_model || '')}" placeholder="default" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-card);color:var(--text-primary);"></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:8px;">
+          <div style="flex:1;"><label style="font-size:11px;color:var(--text-muted);">Max Iterations</label>
+            <input id="pac-iters" type="number" value="${agent?.max_iterations || 10}" min="1" max="50" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-card);color:var(--text-primary);"></div>
+          <div style="flex:1;"><label style="font-size:11px;color:var(--text-muted);">Temperature</label>
+            <input id="pac-temp" type="number" value="${agent?.temperature || ''}" min="0" max="2" step="0.1" placeholder="default" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-card);color:var(--text-primary);"></div>
+        </div>
+        <div><label style="font-size:11px;color:var(--text-muted);">Approval Mode</label>
+          <select id="pac-approval" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg-card);color:var(--text-primary);">
+            <option value="prompt" ${(agent?.approval_mode || 'prompt') === 'prompt' ? 'selected' : ''}>Prompt (ask user)</option>
+            <option value="auto" ${agent?.approval_mode === 'auto' ? 'selected' : ''}>Auto (trust agent)</option>
+          </select>
+        </div>
+      </div>
+    </details>
+
+    <div style="display:flex;gap:8px;">
+      <button id="pac-save-btn" style="flex:1;padding:10px;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Save Configuration</button>
+      <button id="pac-back-btn" style="padding:10px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px;color:var(--text-secondary);">Back</button>
+    </div>
+    </div>`;
+
+    openDynamicView('&#9881;', displayName + ' Settings', html);
+
+    // Save handler
+    document.getElementById('pac-save-btn')?.addEventListener('click', async () => {
+      const features = {};
+      document.querySelectorAll('.pac-feature').forEach(cb => { features[cb.dataset.id] = cb.checked; });
+
+      // Save package config (features + resources)
+      await fetch('/api/marketplace/packages/' + encodeURIComponent(pkgName) + '/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ features, resources: savedResources }),
+      });
+
+      // Save agent settings
+      const agentUpdate = {
+        name: displayName,
+        description: pkg.description || '',
+        persona: document.getElementById('pac-persona')?.value || '',
+        skills: [],
+        preferred_provider: document.getElementById('pac-provider')?.value || null,
+        preferred_model: document.getElementById('pac-model')?.value || null,
+        max_iterations: parseInt(document.getElementById('pac-iters')?.value) || 10,
+        temperature: parseFloat(document.getElementById('pac-temp')?.value) || null,
+        approval_mode: document.getElementById('pac-approval')?.value || 'prompt',
+      };
+      await fetch('/api/agents/' + encodeURIComponent(agentId), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(agentUpdate),
+      });
+
+      closeDynamicView();
+      this.renderMarketplacePanel();
+    });
+
+    document.getElementById('pac-back-btn')?.addEventListener('click', () => {
+      closeDynamicView();
+    });
   },
 
   async renderMarketplaceSettings() {

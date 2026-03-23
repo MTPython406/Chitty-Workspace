@@ -180,6 +180,18 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
     // Load package configs (allowed resources, feature flags) from DB
     tool_runtime.write().await.load_package_configs(&db);
 
+    // Auto-create package agents (1 package = 1 agent)
+    {
+        let rt = tool_runtime.read().await;
+        let conn = db.connect().unwrap();
+        for pkg in &rt.marketplace_packages {
+            match crate::agents::AgentsManager::create_from_package(&conn, &pkg.manifest) {
+                Ok(agent) => tracing::info!("Package agent ready: {} ({})", agent.name, agent.id),
+                Err(e) => tracing::warn!("Failed to create agent for package {}: {}", pkg.manifest.name, e),
+            }
+        }
+    }
+
     let oauth_pending = crate::oauth::PendingFlows::default();
     let connection_manager = Arc::new(tokio::sync::RwLock::new(
         crate::connections::ConnectionManager::new(),
@@ -1071,6 +1083,41 @@ async fn chat_handler(
                         "percentage": percentage,
                     }).to_string(),
                 ),
+            StreamChunk::AgentStart { agent_name, agent_icon, instruction } => Event::default()
+                .event("agent_start")
+                .data(serde_json::json!({
+                    "agent_name": agent_name,
+                    "agent_icon": agent_icon,
+                    "instruction": instruction,
+                }).to_string()),
+            StreamChunk::AgentText { agent_name, text } => Event::default()
+                .event("agent_text")
+                .data(serde_json::json!({
+                    "agent_name": agent_name,
+                    "content": text,
+                }).to_string()),
+            StreamChunk::AgentToolCall { agent_name, tool_name, tool_args } => Event::default()
+                .event("agent_tool_call")
+                .data(serde_json::json!({
+                    "agent_name": agent_name,
+                    "tool_name": tool_name,
+                    "tool_args": tool_args,
+                }).to_string()),
+            StreamChunk::AgentToolResult { agent_name, tool_name, success, result_preview, duration_ms } => Event::default()
+                .event("agent_tool_result")
+                .data(serde_json::json!({
+                    "agent_name": agent_name,
+                    "tool_name": tool_name,
+                    "success": success,
+                    "result_preview": result_preview,
+                    "duration_ms": duration_ms,
+                }).to_string()),
+            StreamChunk::AgentComplete { agent_name, response } => Event::default()
+                .event("agent_complete")
+                .data(serde_json::json!({
+                    "agent_name": agent_name,
+                    "response": response,
+                }).to_string()),
             StreamChunk::Done => Event::default().event("done").data("{}"),
             StreamChunk::Error(err) => Event::default().event("error").data(
                 serde_json::to_string(&ChatEventData {
@@ -1658,6 +1705,122 @@ async fn process_chat(
                     ChatEngine::save_message(conn, &cid, "tool", &rc, None, Some(&tc_id))?;
                     Ok(())
                 }).await?;
+                current_messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: result_content,
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+                continue;
+            }
+
+            // Handle dispatch_agents (orchestrator dispatches to package agents)
+            if tc.name == "dispatch_agents" {
+                let start = std::time::Instant::now();
+                let dispatch_result = run_dispatch(&state, &tc.arguments, &sse_tx).await;
+                let duration_ms = start.elapsed().as_millis() as u64;
+                let result_content = serde_json::to_string(&dispatch_result).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
+                let success = dispatch_result.get("error").is_none();
+
+                let _ = sse_tx
+                    .send(StreamChunk::ToolResult {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        content: result_content.clone(),
+                        success,
+                        duration_ms,
+                    })
+                    .await;
+                let db = state.db.clone();
+                let cid = conversation_id.clone();
+                let tc_id = tc.id.clone();
+                let rc = result_content.clone();
+                db.with_conn(move |conn| {
+                    ChatEngine::save_message(conn, &cid, "tool", &rc, None, Some(&tc_id))?;
+                    Ok(())
+                }).await?;
+                current_messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: result_content,
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+                continue;
+            }
+
+            // Handle execute_package_tool (Tier 1: direct tool execution, no LLM)
+            if tc.name == "execute_package_tool" {
+                let start = std::time::Instant::now();
+                let pkg_name = tc.arguments.get("package").and_then(|v| v.as_str()).unwrap_or("");
+                let tool_name_raw = tc.arguments.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+                let tool_args = tc.arguments.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+                // Resolve tool name: try as-is, then with package prefix, then kebab→snake
+                let tool_name = tool_name_raw.replace('-', "_");
+                let display_pkg = pkg_name.replace('-', " ");
+
+                // Stream: Agent start
+                let _ = sse_tx.send(StreamChunk::AgentStart {
+                    agent_name: display_pkg.clone(),
+                    agent_icon: "📦".to_string(),
+                    instruction: format!("Direct call: {}", tool_name),
+                }).await;
+
+                // Stream: Tool call
+                let _ = sse_tx.send(StreamChunk::AgentToolCall {
+                    agent_name: display_pkg.clone(),
+                    tool_name: tool_name.clone(),
+                    tool_args: tool_args.clone(),
+                }).await;
+
+                // Execute the tool directly via runtime
+                let tool_runtime = state.tool_runtime.read().await;
+                let (result, dur) = tool_runtime.execute(&tool_name, &tool_args, &ctx).await;
+                drop(tool_runtime);
+
+                let result_content = result.as_content_string();
+                let result_preview = if result_content.len() > 300 {
+                    format!("{}...", &result_content[..300])
+                } else {
+                    result_content.clone()
+                };
+
+                // Stream: Tool result
+                let _ = sse_tx.send(StreamChunk::AgentToolResult {
+                    agent_name: display_pkg.clone(),
+                    tool_name: tool_name.clone(),
+                    success: result.success,
+                    result_preview,
+                    duration_ms: dur,
+                }).await;
+
+                // Stream: Agent complete
+                let _ = sse_tx.send(StreamChunk::AgentComplete {
+                    agent_name: display_pkg.clone(),
+                    response: if result.success { "Tool executed successfully".to_string() } else { "Tool execution failed".to_string() },
+                }).await;
+
+                let duration_ms = start.elapsed().as_millis() as u64;
+
+                // Send ToolResult for the parent tool call
+                let _ = sse_tx.send(StreamChunk::ToolResult {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    content: result_content.clone(),
+                    success: result.success,
+                    duration_ms,
+                }).await;
+
+                // Save to DB
+                let db = state.db.clone();
+                let cid = conversation_id.clone();
+                let tc_id = tc.id.clone();
+                let rc = result_content.clone();
+                db.with_conn(move |conn| {
+                    ChatEngine::save_message(conn, &cid, "tool", &rc, None, Some(&tc_id))?;
+                    Ok(())
+                }).await?;
+
                 current_messages.push(ChatMessage {
                     role: "tool".to_string(),
                     content: result_content,
@@ -2708,6 +2871,7 @@ async fn create_agent(
         context_budget_pct: req.context_budget_pct,
         compaction_strategy: req.compaction_strategy,
         max_conversation_turns: req.max_conversation_turns,
+        package_id: None, // User-created agents have no package link
     };
 
     let db = state.db.clone();
@@ -2749,6 +2913,7 @@ async fn update_agent(
         context_budget_pct: req.context_budget_pct,
         compaction_strategy: req.compaction_strategy,
         max_conversation_turns: req.max_conversation_turns,
+        package_id: None, // Preserved on update — package agents keep their link
     };
 
     let db = state.db.clone();
@@ -3515,31 +3680,40 @@ fn agent_builder_tools() -> Vec<serde_json::Value> {
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": "ask_user_question",
-                "description": "Present a question to the user as an interactive card with clickable options. The user picks one option. Always use this instead of asking questions in plain text. The first option should be your recommended choice. Ask ONE question at a time — wait for the answer before asking the next.",
+                "name": "ask_user_questions",
+                "description": "Present ALL your questions to the user at once as interactive cards. The user answers each one sequentially, then all answers are returned together in a single message. This saves tokens by avoiding multiple round-trips. Always batch all your questions into ONE call. First option in each question should be your recommended choice.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "question": {
-                            "type": "string",
-                            "description": "The question to ask the user"
-                        },
-                        "options": {
+                        "questions": {
                             "type": "array",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "label": { "type": "string", "description": "Short label (2-5 words)" },
-                                    "description": { "type": "string", "description": "Brief explanation of what this option means" }
+                                    "question": { "type": "string", "description": "The question to ask" },
+                                    "options": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "label": { "type": "string", "description": "Short label (2-5 words)" },
+                                                "description": { "type": "string", "description": "Brief explanation" }
+                                            },
+                                            "required": ["label", "description"]
+                                        },
+                                        "minItems": 2,
+                                        "maxItems": 4,
+                                        "description": "2-4 options per question. First = recommended."
+                                    }
                                 },
-                                "required": ["label", "description"]
+                                "required": ["question", "options"]
                             },
-                            "minItems": 2,
-                            "maxItems": 4,
-                            "description": "2-4 options. First option should be the recommended choice."
+                            "minItems": 1,
+                            "maxItems": 6,
+                            "description": "1-6 questions to ask. All presented sequentially, answers returned together."
                         }
                     },
-                    "required": ["question", "options"]
+                    "required": ["questions"]
                 }
             }
         }),
@@ -3622,14 +3796,13 @@ async fn execute_builder_tool(
                         serde_json::json!({ "id": f.id, "label": f.label, "default_enabled": f.default_enabled })
                     }).collect();
 
-                    // Build agent_config if present
-                    let agent_config = pkg.manifest.agent_config.as_ref().map(|ac| {
-                        serde_json::json!({
-                            "default_instructions": ac.default_instructions,
-                            "suggested_prompts": ac.suggested_prompts,
-                            "recommended_model": ac.recommended_model,
-                            "capabilities": ac.capabilities,
-                        })
+                    // Build agent_config
+                    let ac = &pkg.manifest.agent_config;
+                    let agent_config = serde_json::json!({
+                        "default_instructions": ac.default_instructions,
+                        "suggested_prompts": ac.suggested_prompts,
+                        "recommended_model": ac.recommended_model,
+                        "capabilities": ac.capabilities,
                     });
 
                     serde_json::json!({
@@ -5154,4 +5327,347 @@ async fn set_connection_route_handler(
         Ok(()) => axum::Json(serde_json::json!({"ok": true})),
         Err(e) => axum::Json(serde_json::json!({"ok": false, "error": e.to_string()})),
     }
+}
+
+/// Dispatch tasks to package agents (parallel or sequential).
+/// Each task runs as a mini LLM conversation with the target agent's persona + tools.
+async fn run_dispatch(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    sse_tx: &tokio::sync::mpsc::Sender<crate::providers::StreamChunk>,
+) -> serde_json::Value {
+    let tasks = match args.get("tasks").and_then(|t| t.as_array()) {
+        Some(tasks) => tasks.clone(),
+        None => return serde_json::json!({"error": "tasks array is required"}),
+    };
+    let mode = args.get("mode").and_then(|m| m.as_str()).unwrap_or("parallel");
+
+    // Resolve agents
+    let agents_list = {
+        let conn = match state.db.connect() {
+            Ok(c) => c,
+            Err(e) => return serde_json::json!({"error": format!("DB error: {}", e)}),
+        };
+        match crate::agents::AgentsManager::list(&conn) {
+            Ok(list) => list,
+            Err(e) => return serde_json::json!({"error": format!("Failed to list agents: {}", e)}),
+        }
+    };
+
+    let mut results = Vec::new();
+
+    if mode == "sequential" {
+        // Sequential: run one at a time, accumulate context
+        let mut prior_results = String::new();
+        for task in &tasks {
+            let agent_name = task.get("agent").and_then(|a| a.as_str()).unwrap_or("");
+            let mut instruction = task.get("instruction").and_then(|i| i.as_str()).unwrap_or("").to_string();
+            if !prior_results.is_empty() {
+                instruction = format!("{}\n\nContext from prior agents:\n{}", instruction, prior_results);
+            }
+
+            let result = dispatch_single_agent(state, &agents_list, agent_name, &instruction, sse_tx).await;
+            let response = result.get("response").and_then(|r| r.as_str()).unwrap_or("(no response)");
+            prior_results.push_str(&format!("[{}]: {}\n", agent_name, response));
+            results.push(result);
+        }
+    } else {
+        // Parallel: dispatch all at once
+        let mut handles = Vec::new();
+        for task in &tasks {
+            let agent_name = task.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();
+            let instruction = task.get("instruction").and_then(|i| i.as_str()).unwrap_or("").to_string();
+            let state = state.clone();
+            let agents = agents_list.clone();
+            let tx = sse_tx.clone();
+
+            handles.push(tokio::spawn(async move {
+                dispatch_single_agent(&state, &agents, &agent_name, &instruction, &tx).await
+            }));
+        }
+
+        for handle in handles {
+            match handle.await {
+                Ok(result) => results.push(result),
+                Err(e) => results.push(serde_json::json!({"status": "error", "error": e.to_string()})),
+            }
+        }
+    }
+
+    serde_json::json!({ "results": results })
+}
+
+/// Execute a single agent dispatch — runs a mini LLM conversation with the agent's tools.
+/// Streams agent activity (thinking, tool calls, results) through the parent SSE channel.
+async fn dispatch_single_agent(
+    state: &Arc<AppState>,
+    agents: &[crate::agents::AgentSummary],
+    agent_name: &str,
+    instruction: &str,
+    parent_sse: &tokio::sync::mpsc::Sender<crate::providers::StreamChunk>,
+) -> serde_json::Value {
+    // Find the agent by name or ID (case-insensitive)
+    let agent_match = agents.iter().find(|a| {
+        a.name.eq_ignore_ascii_case(agent_name)
+            || a.id.eq_ignore_ascii_case(agent_name)
+            || a.package_id.as_deref().map(|p| p.eq_ignore_ascii_case(agent_name)).unwrap_or(false)
+    });
+
+    let agent_summary = match agent_match {
+        Some(a) => a,
+        None => return serde_json::json!({
+            "agent": agent_name,
+            "status": "error",
+            "error": format!("No agent found matching '{}'", agent_name)
+        }),
+    };
+
+    // Load full agent
+    let agent = {
+        let conn = match state.db.connect() {
+            Ok(c) => c,
+            Err(e) => return serde_json::json!({"agent": agent_name, "status": "error", "error": e.to_string()}),
+        };
+        match crate::agents::AgentsManager::load(&conn, &agent_summary.id) {
+            Ok(Some(a)) => a,
+            _ => return serde_json::json!({"agent": agent_name, "status": "error", "error": "Agent not found"}),
+        }
+    };
+
+    // Get this agent's tools (for package agents: the package's tools)
+    let all_tool_defs = {
+        let rt = state.tool_runtime.read().await;
+        rt.list_definitions()
+    };
+
+    // Filter to this agent's package tools + base tools
+    let agent_tools: Vec<serde_json::Value> = if let Some(ref pkg_id) = agent.package_id {
+        let rt = state.tool_runtime.read().await;
+        // Collect tool names from package manifest (kebab→snake)
+        let mut pkg_tool_names: Vec<String> = rt.marketplace_packages.iter()
+            .filter(|p| p.manifest.name == *pkg_id)
+            .flat_map(|p| p.manifest.tools.iter())
+            .map(|t| t.replace('-', "_"))
+            .collect();
+        drop(rt);
+
+        // Also match by vendor field on tool definitions (handles prefix mismatches like
+        // package lists "bigquery" but manifest name is "gcloud_bigquery" with vendor "google-cloud")
+        for d in &all_tool_defs {
+            if let Some(ref vendor) = d.vendor {
+                let vendor_lower = vendor.to_lowercase();
+                let pkg_lower = pkg_id.to_lowercase();
+                if vendor_lower == pkg_lower
+                    || vendor_lower == pkg_lower.replace('-', "_")
+                    || vendor_lower == pkg_lower.replace("google-", "")
+                {
+                    pkg_tool_names.push(d.name.clone());
+                }
+            }
+        }
+        pkg_tool_names.sort();
+        pkg_tool_names.dedup();
+
+        all_tool_defs.iter()
+            .filter(|d| pkg_tool_names.contains(&d.name) || ["load_skill", "save_memory", "file_reader"].contains(&d.name.as_str()))
+            .map(|d| serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": d.name,
+                    "description": d.description,
+                    "parameters": d.parameters,
+                }
+            }))
+            .collect()
+    } else {
+        // Non-package agent: all tools
+        all_tool_defs.iter().map(|d| serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": d.name,
+                "description": d.description,
+                "parameters": d.parameters,
+            }
+        })).collect()
+    };
+
+    // Build messages with EXECUTION MODE directive
+    let exec_persona = format!(
+        "{}\n\n## EXECUTION MODE\n\
+        You are in execution mode — dispatched by the Chitty orchestrator to complete a specific task.\n\
+        - Execute the requested task IMMEDIATELY using your tools\n\
+        - Do NOT ask for confirmation or clarification\n\
+        - Do NOT explain what you're about to do — just do it\n\
+        - Call the appropriate tool(s) right away\n\
+        - Return a concise summary of what you did and the results\n\
+        - If a tool fails, report the error concisely\n\
+        - Do NOT call dispatch_agents — you cannot sub-dispatch",
+        agent.persona
+    );
+    let messages = vec![
+        crate::providers::ChatMessage {
+            role: "system".to_string(),
+            content: exec_persona,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        crate::providers::ChatMessage {
+            role: "user".to_string(),
+            content: instruction.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ];
+
+    // Create provider for the agent
+    let provider_str = agent.preferred_provider.as_deref()
+        .unwrap_or("anthropic");
+    let provider = match create_provider(state, provider_str).await {
+        Ok(p) => p,
+        Err(e) => return serde_json::json!({
+            "agent": agent.name,
+            "status": "error",
+            "error": format!("Provider error: {}", e)
+        }),
+    };
+
+    let model = agent.preferred_model.clone()
+        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+
+    // Tool call loop — runs up to max_iterations, executing tools and feeding results back
+    let max_iterations = agent.max_iterations.unwrap_or(10) as usize;
+    let mut current_messages = messages;
+    let mut tool_trace: Vec<serde_json::Value> = Vec::new();
+    let mut final_text = String::new();
+    let display_name = agent.name.clone();
+    let agent_icon = agent.package_id.as_deref().unwrap_or("📦").to_string();
+
+    // Stream: Agent started
+    let _ = parent_sse.send(StreamChunk::AgentStart {
+        agent_name: display_name.clone(),
+        agent_icon: agent_icon.clone(),
+        instruction: instruction.to_string(),
+    }).await;
+
+    for iteration in 0..max_iterations {
+        // Call LLM
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::providers::StreamChunk>(256);
+        let chat_result = provider.chat_stream(&model, &current_messages, Some(&agent_tools), tx).await;
+        if let Err(e) = chat_result {
+            return serde_json::json!({"agent": display_name, "status": "error", "error": format!("Chat error: {}", e)});
+        }
+
+        // Collect response and stream agent text to parent
+        let mut text_parts = String::new();
+        let mut tool_calls: Vec<crate::providers::ToolCall> = Vec::new();
+        let mut current_tc: Option<(String, String, String)> = None;
+
+        while let Some(chunk) = rx.recv().await {
+            match chunk {
+                crate::providers::StreamChunk::Text(t) => {
+                    // Stream agent text to parent SSE in real-time
+                    let _ = parent_sse.send(StreamChunk::AgentText {
+                        agent_name: display_name.clone(),
+                        text: t.clone(),
+                    }).await;
+                    text_parts.push_str(&t);
+                }
+                crate::providers::StreamChunk::ToolCallStart { id, name } => {
+                    current_tc = Some((id, name, String::new()));
+                }
+                crate::providers::StreamChunk::ToolCallDelta { arguments, .. } => {
+                    if let Some((_, _, ref mut buf)) = current_tc {
+                        buf.push_str(&arguments);
+                    }
+                }
+                crate::providers::StreamChunk::ToolCallEnd { .. } => {
+                    if let Some((id, name, args_str)) = current_tc.take() {
+                        let arguments = serde_json::from_str(&args_str).unwrap_or(serde_json::json!({}));
+                        // Stream: Agent is calling a tool
+                        let _ = parent_sse.send(StreamChunk::AgentToolCall {
+                            agent_name: display_name.clone(),
+                            tool_name: name.clone(),
+                            tool_args: arguments.clone(),
+                        }).await;
+                        tool_calls.push(crate::providers::ToolCall { id, name, arguments });
+                    }
+                }
+                crate::providers::StreamChunk::Error(e) => {
+                    return serde_json::json!({"agent": display_name, "status": "error", "error": e});
+                }
+                _ => {}
+            }
+        }
+
+        // If no tool calls, we're done
+        if tool_calls.is_empty() {
+            final_text = text_parts;
+            break;
+        }
+
+        // Add assistant message with tool calls to conversation
+        current_messages.push(crate::providers::ChatMessage {
+            role: "assistant".to_string(),
+            content: text_parts,
+            tool_calls: Some(tool_calls.clone()),
+            tool_call_id: None,
+        });
+
+        // Execute each tool call
+        for tc in &tool_calls {
+            tracing::info!("  Dispatch[{}] iter={}: tool={} args={}", display_name, iteration, tc.name, tc.arguments);
+            let tool_runtime = state.tool_runtime.read().await;
+            let ctx = crate::tools::ToolContext {
+                working_dir: std::env::current_dir().unwrap_or_default(),
+                conversation_id: "dispatch".to_string(),
+                db: state.db.clone(),
+            };
+            let (result, dur) = tool_runtime.execute(&tc.name, &tc.arguments, &ctx).await;
+            drop(tool_runtime);
+
+            let result_content = result.as_content_string();
+            let result_preview = if result_content.len() > 300 {
+                format!("{}...", &result_content[..300])
+            } else {
+                result_content.clone()
+            };
+
+            // Stream: Agent tool result
+            let _ = parent_sse.send(StreamChunk::AgentToolResult {
+                agent_name: display_name.clone(),
+                tool_name: tc.name.clone(),
+                success: result.success,
+                result_preview: result_preview.clone(),
+                duration_ms: dur,
+            }).await;
+
+            tool_trace.push(serde_json::json!({
+                "tool": tc.name,
+                "args": tc.arguments,
+                "success": result.success,
+                "duration_ms": dur,
+                "result_preview": result_preview,
+            }));
+
+            current_messages.push(crate::providers::ChatMessage {
+                role: "tool".to_string(),
+                content: result_content,
+                tool_calls: None,
+                tool_call_id: Some(tc.id.clone()),
+            });
+        }
+    }
+
+    // Stream: Agent completed
+    let _ = parent_sse.send(StreamChunk::AgentComplete {
+        agent_name: display_name.clone(),
+        response: if final_text.len() > 500 { format!("{}...", &final_text[..500]) } else { final_text.clone() },
+    }).await;
+
+    serde_json::json!({
+        "agent": display_name,
+        "status": "success",
+        "response": final_text,
+        "tool_calls": tool_trace,
+    })
 }

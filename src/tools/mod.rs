@@ -171,12 +171,115 @@ impl ToolRegistry {
         self.tools.insert(name, tool);
     }
 
-    /// List all tool definitions
+    /// List all tool definitions (native tools + virtual tools like dispatch_agents)
     pub fn list_definitions(&self) -> Vec<ToolDefinition> {
-        self.order
+        let mut defs: Vec<ToolDefinition> = self.order
             .iter()
             .filter_map(|name| self.tools.get(name).map(|t| t.definition()))
-            .collect()
+            .collect();
+
+        // Add virtual tools (handled specially in server.rs, not via NativeTool trait)
+        defs.push(ToolDefinition {
+            name: "dispatch_agents".to_string(),
+            display_name: "Dispatch Agents".to_string(),
+            description: "Dispatch tasks to one or more installed package agents. Each agent runs independently with its own tools and persona. Use this when a request needs capabilities from installed packages (Slack, Gmail, Calendar, etc.). For multi-package tasks, dispatch in parallel.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "agent": { "type": "string", "description": "Package agent name or ID (e.g., 'Slack', 'Google Gmail', 'pkg-slack')" },
+                                "instruction": { "type": "string", "description": "What to ask this agent to do" }
+                            },
+                            "required": ["agent", "instruction"]
+                        },
+                        "minItems": 1,
+                        "maxItems": 5,
+                        "description": "Tasks to dispatch. Each task runs as a separate agent conversation."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["parallel", "sequential"],
+                        "description": "parallel: run all tasks concurrently (default). sequential: run in order, each seeing prior results.",
+                        "default": "parallel"
+                    }
+                },
+                "required": ["tasks"]
+            }),
+            instructions: Some("Use dispatch_agents to delegate tasks to installed package agents. Examples:\n- 'send a Slack message' → dispatch to Slack agent\n- 'prepare standup' → dispatch parallel to Slack + Calendar + Gmail\n- 'read my email and check calendar' → dispatch parallel to Gmail + Calendar\nAlways tell the user which agents you're dispatching to.".to_string()),
+            category: ToolCategory::Native,
+            vendor: None,
+        });
+
+        defs.push(ToolDefinition {
+            name: "execute_package_tool".to_string(),
+            display_name: "Execute Package Tool".to_string(),
+            description: "Execute a specific tool from an installed package DIRECTLY — no LLM call, fast and deterministic. Use this when you know EXACTLY which tool to call and have ALL the arguments. Much faster than dispatch_agents for single tool calls.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "package": {
+                        "type": "string",
+                        "description": "Package name (e.g., 'slack', 'google-calendar', 'google-gmail', 'web-tools', 'google-cloud')"
+                    },
+                    "tool": {
+                        "type": "string",
+                        "description": "Tool name within the package (e.g., 'send_message', 'calendar_list', 'gmail_read')"
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Arguments to pass directly to the tool"
+                    }
+                },
+                "required": ["package", "tool", "arguments"]
+            }),
+            instructions: Some("Use execute_package_tool (Tier 1) when you know the EXACT tool and arguments. Use dispatch_agents (Tier 2) only when the task needs reasoning or multiple tool calls.\n\nTier 1 examples:\n- Send Slack message: execute_package_tool(package='slack', tool='send_message', arguments={channel:'#general', message:'Hello'})\n- List calendar: execute_package_tool(package='google-calendar', tool='calendar_list', arguments={max_results:10})\n- Read Gmail: execute_package_tool(package='google-gmail', tool='gmail_read', arguments={action:'search', query:'is:unread'})\n\nTier 2 examples (use dispatch_agents instead):\n- 'Research recent Slack discussions and summarize' (needs reasoning)\n- 'Find a meeting time that works for everyone' (needs multiple tools)".to_string()),
+            category: ToolCategory::Native,
+            vendor: None,
+        });
+
+        defs.push(ToolDefinition {
+            name: "ask_user_questions".to_string(),
+            display_name: "Ask User Questions".to_string(),
+            description: "Present questions to the user as interactive cards with clickable options. Batch ALL questions into one call. Each question has 2-4 options with the first being recommended. User answers sequentially, all answers returned together.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": { "type": "string" },
+                                "options": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": { "type": "string" },
+                                            "description": { "type": "string" }
+                                        },
+                                        "required": ["label", "description"]
+                                    },
+                                    "minItems": 2, "maxItems": 4
+                                }
+                            },
+                            "required": ["question", "options"]
+                        },
+                        "minItems": 1, "maxItems": 6
+                    }
+                },
+                "required": ["questions"]
+            }),
+            instructions: None,
+            category: ToolCategory::Native,
+            vendor: None,
+        });
+
+        defs
     }
 
     /// Get definitions for specific tool names only

@@ -15,8 +15,8 @@
   "repo_url": "https://github.com/nicholasgitwork/chitty-workspace",
 
   "tools": [
-    "bigquery",
-    "cloud-storage"
+    "gcloud_bigquery",
+    "gcloud_storage"
   ],
 
   "auth": {

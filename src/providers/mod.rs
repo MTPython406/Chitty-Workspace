@@ -152,6 +152,36 @@ pub enum StreamChunk {
         max_tokens: u32,
         percentage: u8,
     },
+    /// Multi-agent dispatch: agent started working
+    AgentStart {
+        agent_name: String,
+        agent_icon: String,
+        instruction: String,
+    },
+    /// Multi-agent dispatch: agent is generating text
+    AgentText {
+        agent_name: String,
+        text: String,
+    },
+    /// Multi-agent dispatch: agent called a tool
+    AgentToolCall {
+        agent_name: String,
+        tool_name: String,
+        tool_args: serde_json::Value,
+    },
+    /// Multi-agent dispatch: agent tool result
+    AgentToolResult {
+        agent_name: String,
+        tool_name: String,
+        success: bool,
+        result_preview: String,
+        duration_ms: u64,
+    },
+    /// Multi-agent dispatch: agent completed
+    AgentComplete {
+        agent_name: String,
+        response: String,
+    },
     /// Stream complete
     Done,
     /// Error occurred
