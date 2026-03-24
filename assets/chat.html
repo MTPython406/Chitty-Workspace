@@ -3134,6 +3134,8 @@ const App = {
       }
     }
     this.layoutCarousel();
+    // Re-layout after CSS transition completes (margin-right animates over 280ms)
+    setTimeout(() => this.layoutCarousel(), 300);
   },
 
   /* ── Activity Log ──────────────────────────────────────────────── */
