@@ -15,6 +15,31 @@ Thumbs.db
 
 # Environment
 .env
+.env.*
 
 # Temporary
 temp_scripts/
+
+# Logs
+*.log
+
+# Certificates (generated at runtime)
+*.cer
+*.pem
+*.key
+
+# Installer output (binaries distributed via GitHub Releases)
+installer/output/
+
+# Claude Code local settings (machine-specific permissions)
+.claude/settings.local.json
+
+# Binaries and installers that don't belong in source
+*.exe
+!target/
+
+# SQL dumps
+*.sql
+
+# Local model files
+*.gguf
