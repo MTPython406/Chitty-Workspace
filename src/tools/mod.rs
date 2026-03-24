@@ -165,10 +165,8 @@ impl ToolRegistry {
         // Self-diagnostic tool
         registry.register(Box::new(diagnostic::DiagnosticTool));
 
-        // Google API tools (require OAuth integration)
-        registry.register(Box::new(google::GmailReadTool));
-        registry.register(Box::new(google::GmailSendTool));
-        registry.register(Box::new(google::CalendarListTool));
+        // Google API tools — Gmail/Calendar now provided by marketplace packages
+        // Only Drive search remains as native (no marketplace package yet)
         registry.register(Box::new(google::DriveSearchTool));
 
         registry

@@ -117,7 +117,7 @@ pub struct AppState {
 }
 
 /// Start the axum server on the given port.
-pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime: Arc<tokio::sync::RwLock<ToolRuntime>>, browser_bridge: Arc<BrowserBridge>, skill_registry: Arc<crate::skills::SkillRegistry>, port: u16) -> anyhow::Result<()> {
+pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime: Arc<tokio::sync::RwLock<ToolRuntime>>, browser_bridge: Arc<BrowserBridge>, skill_registry: Arc<crate::skills::SkillRegistry>, port: u16, bound_port_out: Arc<std::sync::atomic::AtomicU16>) -> anyhow::Result<()> {
     // Seed marketplace packages from bundled assets
     {
         let rt = tool_runtime.read().await;
@@ -347,6 +347,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         }
     };
     tracing::info!("Server listening on http://127.0.0.1:{}", bound_port);
+    bound_port_out.store(bound_port, std::sync::atomic::Ordering::SeqCst);
 
     // Spawn an HTTPS listener on port 8771 for OAuth callbacks.
     // Some providers (e.g., Slack) require HTTPS redirect URIs.
@@ -1635,6 +1636,21 @@ async fn process_chat(
                 .send(StreamChunk::Thinking(format!("Executing {}...", tc.name)))
                 .await;
 
+            // ── Sub-agent locked_params merge ────────────────────────
+            // If this agent has scoped tools, auto-merge locked_params into tool arguments
+            let mut merged_args = tc.arguments.clone();
+            for sat in &exec_config.sub_agent_tools {
+                if sat.tool_name == tc.name {
+                    if let (Some(locked), Some(args_obj)) = (sat.locked_params.as_object(), merged_args.as_object_mut()) {
+                        for (k, v) in locked {
+                            args_obj.entry(k.clone()).or_insert(v.clone());
+                        }
+                        tracing::info!("  Merged locked_params for sub-agent tool {}: {:?}", tc.name, locked.keys().collect::<Vec<_>>());
+                    }
+                    break;
+                }
+            }
+
             // Determine working directory (agent project_path > request project_path > cwd)
             let working_dir = effective_project_path
                 .as_ref()
@@ -1650,10 +1666,10 @@ async fn process_chat(
             // ── Action Approval Gate ──────────────────────────────────
             // For sensitive tool actions (browser click/type/open/js), pause and
             // ask the user for approval before executing.
-            let action_str = tc.arguments.get("action").and_then(|v| v.as_str()).unwrap_or("");
+            let action_str = merged_args.get("action").and_then(|v| v.as_str()).unwrap_or("");
             if action_requires_approval(&tc.name, action_str, exec_config.auto_approve) {
                 let approval_id = uuid::Uuid::new_v4().to_string();
-                let (description, details) = describe_action(&tc.name, &tc.arguments);
+                let (description, details) = describe_action(&tc.name, &merged_args);
 
                 // Send approval request to frontend via SSE
                 let _ = sse_tx
@@ -1716,8 +1732,8 @@ async fn process_chat(
 
             // Handle frontend-only tools (UI commands the frontend intercepts)
             if tc.name == "open_agent_panel" {
-                let agent_id = tc.arguments.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
-                let message = tc.arguments.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                let agent_id = merged_args.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                let message = merged_args.get("message").and_then(|v| v.as_str()).unwrap_or("");
                 let result_content = format!(
                     r#"{{"success":true,"action":"open_agent_panel","agent_id":"{}","message":"{}"}}"#,
                     agent_id, message.replace('"', "\\\"")
@@ -1752,7 +1768,7 @@ async fn process_chat(
             // Handle dispatch_agents (orchestrator dispatches to package agents)
             if tc.name == "dispatch_agents" {
                 let start = std::time::Instant::now();
-                let dispatch_result = run_dispatch(&state, &tc.arguments, &sse_tx).await;
+                let dispatch_result = run_dispatch(&state, &merged_args, &sse_tx).await;
                 let duration_ms = start.elapsed().as_millis() as u64;
                 let result_content = serde_json::to_string(&dispatch_result).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
                 let success = dispatch_result.get("error").is_none();
@@ -1786,9 +1802,9 @@ async fn process_chat(
             // Handle execute_package_tool (Tier 1: direct tool execution, no LLM)
             if tc.name == "execute_package_tool" {
                 let start = std::time::Instant::now();
-                let pkg_name = tc.arguments.get("package").and_then(|v| v.as_str()).unwrap_or("");
-                let tool_name_raw = tc.arguments.get("tool").and_then(|v| v.as_str()).unwrap_or("");
-                let tool_args = tc.arguments.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                let pkg_name = merged_args.get("package").and_then(|v| v.as_str()).unwrap_or("");
+                let tool_name_raw = merged_args.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+                let tool_args = merged_args.get("arguments").cloned().unwrap_or(serde_json::json!({}));
 
                 // Resolve tool name: try as-is, then with package prefix, then kebab→snake
                 let tool_name = tool_name_raw.replace('-', "_");
@@ -1868,7 +1884,7 @@ async fn process_chat(
             // Dispatch via tool_runtime (native + custom + connection tools)
             let tool_runtime = state.tool_runtime.read().await;
             let (result, duration_ms) = tool_runtime
-                .execute(&tc.name, &tc.arguments, &ctx)
+                .execute(&tc.name, &merged_args, &ctx)
                 .await;
             drop(tool_runtime);
 
@@ -4342,7 +4358,7 @@ async fn check_package_auth(
 
     match pkg {
         Some(pkg) => {
-            // Check all setup steps — if all check_commands pass, package is ready
+            // Check all setup steps — check_commands + credential keys in keyring
             let mut all_ok = true;
             let mut step_results = Vec::new();
 
@@ -4356,6 +4372,34 @@ async fn check_package_auth(
                     }));
                     if !result.success && step.required {
                         all_ok = false;
+                    }
+                } else if let Some(cred_key) = &step.credentials_key {
+                    // Check if credential exists in OS keyring
+                    let has_key = crate::config::get_api_key(cred_key)
+                        .map(|v| v.is_some())
+                        .unwrap_or(false);
+                    step_results.push(serde_json::json!({
+                        "step_id": step.id,
+                        "label": step.label,
+                        "ok": has_key,
+                    }));
+                    if !has_key && step.required {
+                        all_ok = false;
+                    }
+                } else if step.id == "oauth_connect" {
+                    // Check OAuth status
+                    if let Some(provider) = pkg.manifest.auth.as_ref().and_then(|a| a.oauth_provider.as_ref()) {
+                        let connected = crate::config::get_api_key(&format!("oauth_{}_access_token", provider))
+                            .map(|v| v.is_some())
+                            .unwrap_or(false);
+                        step_results.push(serde_json::json!({
+                            "step_id": step.id,
+                            "label": step.label,
+                            "ok": connected,
+                        }));
+                        if !connected && step.required {
+                            all_ok = false;
+                        }
                     }
                 }
             }
@@ -4409,10 +4453,17 @@ async fn run_package_setup(
     let user_values = body.get("values").and_then(|v| v.as_object()).cloned()
         .unwrap_or_default();
 
+    let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("run_all");
+    let target_step = body.get("step_id").and_then(|v| v.as_str()).unwrap_or("");
+
     let mut results: Vec<serde_json::Value> = Vec::new();
     let mut all_success = true;
 
     for step in &pkg.manifest.setup_steps {
+        // In execute_step mode, skip steps that aren't the target
+        if mode == "execute_step" && step.id != target_step {
+            continue;
+        }
         let step_id = &step.id;
         let label = &step.label;
 
@@ -4430,8 +4481,29 @@ async fn run_package_setup(
             }
         }
 
-        // 2a. If step has credentials_key, store value in OS keyring instead of running command
+        // In check_only mode, don't execute anything — just report status
+        if mode == "check_only" {
+            results.push(serde_json::json!({
+                "step_id": step_id,
+                "label": label,
+                "status": "pending",
+            }));
+            all_success = false;
+            continue;
+        }
+
+        // 2a. If step has credentials_key, check keyring first, then store if provided
         if let Some(cred_key) = &step.credentials_key {
+            // Check if already stored in keyring
+            if let Ok(Some(_)) = crate::config::get_api_key(cred_key) {
+                results.push(serde_json::json!({
+                    "step_id": step_id,
+                    "label": label,
+                    "status": "already_done",
+                    "message": "Credential already saved",
+                }));
+                continue;
+            }
             if let Some(val) = user_values.get(step_id).and_then(|v| v.as_str()) {
                 if !val.is_empty() {
                     match crate::config::set_api_key(cred_key, val) {

@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const MARKETPLACE_URL: &str = "https://marketplace.chitty.ai";
+const MARKETPLACE_URL: &str = "https://chitty.ai";
 
 /// Summary of a package from the registry
 #[derive(Clone, Debug, Serialize, Deserialize)]
