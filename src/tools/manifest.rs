@@ -438,6 +438,12 @@ pub struct SetupStep {
     /// instead of running a shell command. Used for OAuth credentials, API tokens, etc.
     #[serde(default)]
     pub credentials_key: Option<String>,
+    /// Command to discover available values (e.g., gcloud projects list --format=json)
+    #[serde(default)]
+    pub discover_command: Option<String>,
+    /// JSON field to extract from discover results (e.g., "projectId")
+    #[serde(default)]
+    pub discover_field: Option<String>,
     #[serde(default = "default_true")]
     pub required: bool,
 }

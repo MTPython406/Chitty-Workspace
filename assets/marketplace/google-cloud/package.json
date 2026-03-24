@@ -58,6 +58,8 @@
       "prompt_placeholder": "e.g. my-project-12345",
       "prompt_help": "Enter your GCP project ID. Find it at console.cloud.google.com",
       "install_command_template": "gcloud config set project {value}",
+      "discover_command": "gcloud projects list --format=json",
+      "discover_field": "projectId",
       "required": true
     },
     {
@@ -75,7 +77,7 @@
       "id": "datasets",
       "label": "BigQuery Datasets",
       "description": "Select which BigQuery datasets the agent can access. The agent will only query, insert, or manage tables within these datasets.",
-      "discover_command": "gcloud bq ls --format=json",
+      "discover_command": "python -c \"import subprocess,json; token=subprocess.check_output(['gcloud','auth','print-access-token'],text=True).strip(); proj=subprocess.check_output(['gcloud','config','get-value','project'],text=True,stderr=subprocess.DEVNULL).strip(); import urllib.request; req=urllib.request.Request(f'https://bigquery.googleapis.com/bigquery/v2/projects/{proj}/datasets',headers={'Authorization':f'Bearer {token}'}); data=json.loads(urllib.request.urlopen(req).read()); print(json.dumps([{'id':d['datasetReference']['datasetId'],'name':d['datasetReference']['datasetId']} for d in data.get('datasets',[])]))\""
       "placeholder": "e.g. my_analytics_dataset",
       "multi": true,
       "required_by_actions": ["query", "list_tables", "describe_table", "insert_rows"]
@@ -84,7 +86,7 @@
       "id": "buckets",
       "label": "Cloud Storage Buckets",
       "description": "Select which GCS buckets the agent can read from and write to.",
-      "discover_command": "gsutil ls",
+      "discover_command": "python -c \"import subprocess,json; token=subprocess.check_output(['gcloud','auth','print-access-token'],text=True).strip(); proj=subprocess.check_output(['gcloud','config','get-value','project'],text=True,stderr=subprocess.DEVNULL).strip(); import urllib.request; req=urllib.request.Request(f'https://storage.googleapis.com/storage/v1/b?project={proj}',headers={'Authorization':f'Bearer {token}'}); data=json.loads(urllib.request.urlopen(req).read()); print(json.dumps([{'id':d['name'],'name':d['name']} for d in data.get('items',[])]))\""
       "placeholder": "e.g. my-data-bucket",
       "multi": true,
       "required_by_actions": ["list_objects", "upload_object", "download_object", "delete_object"]

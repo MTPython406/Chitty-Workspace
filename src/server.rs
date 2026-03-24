@@ -294,6 +294,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/marketplace/packages/:vendor/config", get(get_package_config))
         .route("/api/marketplace/packages/:vendor/config", put(save_package_config))
         .route("/api/marketplace/packages/:vendor/resources/discover", post(discover_package_resources))
+        .route("/api/marketplace/packages/:vendor/setup/discover", post(discover_setup_values))
         .route("/api/marketplace/packages/:vendor/disconnect", post(disconnect_package_auth))
         // Persistent Connections (marketplace package background processes)
         .route("/api/connections", get(list_connections_handler))
@@ -4939,6 +4940,88 @@ async fn discover_package_resources(
     Json(serde_json::json!({
         "success": true,
         "resources": resources,
+    }))
+}
+
+/// Discover values for a setup step (e.g., list GCP projects for project dropdown)
+async fn discover_setup_values(
+    Path(vendor): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let step_id = body.get("step_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+
+    let rt = state.tool_runtime.read().await;
+    let pkg = rt.list_marketplace_packages()
+        .into_iter()
+        .find(|p| p.manifest.name == vendor)
+        .cloned();
+    drop(rt);
+
+    let pkg = match pkg {
+        Some(p) => p,
+        None => return Json(serde_json::json!({ "success": false, "error": "Package not found" })),
+    };
+
+    // Find the setup step
+    let step = pkg.manifest.setup_steps.iter()
+        .find(|s| s.id == step_id);
+
+    let discover_cmd = match step.and_then(|s| s.discover_command.as_deref()) {
+        Some(cmd) => cmd.to_string(),
+        None => return Json(serde_json::json!({
+            "success": false,
+            "error": "No discover command for this step"
+        })),
+    };
+
+    let discover_field = step.and_then(|s| s.discover_field.as_deref()).unwrap_or("id");
+
+    let result = run_shell_command(&discover_cmd).await;
+
+    if !result.success {
+        return Json(serde_json::json!({
+            "success": false,
+            "error": format!("Discovery failed: {}", result.stderr.chars().take(300).collect::<String>()),
+        }));
+    }
+
+    // Parse JSON output
+    let values: Vec<serde_json::Value> = if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&result.stdout) {
+        // Array of objects — extract the relevant field
+        parsed.iter().map(|item| {
+            if let Some(obj) = item.as_object() {
+                let id = obj.get(discover_field)
+                    .or_else(|| obj.get("projectId"))
+                    .or_else(|| obj.get("id"))
+                    .or_else(|| obj.get("name"))
+                    .map(|v| v.as_str().unwrap_or_default().to_string())
+                    .unwrap_or_default();
+                let name = obj.get("name")
+                    .or_else(|| obj.get(discover_field))
+                    .map(|v| v.as_str().unwrap_or_default().to_string())
+                    .unwrap_or_else(|| id.clone());
+                serde_json::json!({ "id": id, "name": format!("{} ({})", name, id) })
+            } else if let Some(s) = item.as_str() {
+                serde_json::json!({ "id": s, "name": s })
+            } else {
+                serde_json::json!({ "id": item.to_string(), "name": item.to_string() })
+            }
+        }).collect()
+    } else {
+        // Line-by-line fallback
+        result.stdout.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let v = l.trim();
+                serde_json::json!({ "id": v, "name": v })
+            })
+            .collect()
+    };
+
+    Json(serde_json::json!({
+        "success": true,
+        "values": values,
     }))
 }
 

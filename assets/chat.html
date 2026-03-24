@@ -6687,11 +6687,18 @@ const App = {
             html += '<div style="margin-top:4px;"><a href="' + esc(step.help_url) + '" target="_blank" style="font-size:11px;color:var(--accent);">Open setup page \u2192</a></div>';
           }
           if (isPrompt) {
-            html += '<div class="pkg-setup-step-input">' +
+            html += '<div class="pkg-setup-step-input" style="display:flex;gap:6px;align-items:center;">' +
               '<input type="' + (isCredential ? 'password' : 'text') + '" ' +
                 'class="pkg-setup-input" data-step="' + esc(step.id) + '" ' +
-                'placeholder="' + esc(step.prompt_placeholder || step.prompt_label || '') + '" />' +
-            '</div>';
+                'placeholder="' + esc(step.prompt_placeholder || step.prompt_label || '') + '" style="flex:1;" />';
+            if (step.discover_command) {
+              html += '<button class="pkg-discover-btn" onclick="App.discoverSetupValues(\'' + esc(pkg.name) + '\',\'' + esc(step.id) + '\')" ' +
+                'style="padding:4px 10px;font-size:11px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;white-space:nowrap;">Discover</button>';
+            }
+            html += '</div>';
+            if (step.discover_command) {
+              html += '<div id="setup-discover-' + esc(step.id) + '" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;"></div>';
+            }
           }
           if (step.id === 'oauth_connect') {
             html += '<div style="margin-top:6px;"><button class="pkg-setup-connect-btn" id="pkg-oauth-btn">' +
@@ -7290,6 +7297,48 @@ const App = {
       }
     } catch (e) {
       alert('Discovery error: ' + e.message);
+    }
+  },
+
+  // Discover values for setup step prompts (e.g., project list)
+  async discoverSetupValues(vendor, stepId) {
+    const container = document.getElementById('setup-discover-' + stepId);
+    const input = document.querySelector('.pkg-setup-input[data-step="' + stepId + '"]');
+    if (!container) return;
+
+    container.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">Discovering...</span>';
+
+    try {
+      const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/setup/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ step_id: stepId }),
+      });
+      const data = await resp.json();
+
+      container.innerHTML = '';
+      if (data.success && data.values && data.values.length > 0) {
+        for (const val of data.values) {
+          const id = val.id || val.name || val;
+          const label = val.name || val.id || val;
+          const btn = document.createElement('button');
+          btn.style.cssText = 'padding:3px 10px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);cursor:pointer;';
+          btn.textContent = typeof label === 'string' ? label : JSON.stringify(label);
+          btn.addEventListener('click', () => {
+            if (input) input.value = typeof id === 'string' ? id : JSON.stringify(id);
+            // Highlight selected
+            container.querySelectorAll('button').forEach(b => b.style.borderColor = 'var(--border)');
+            btn.style.borderColor = 'var(--accent)';
+          });
+          container.appendChild(btn);
+        }
+      } else if (data.error) {
+        container.innerHTML = '<span style="font-size:11px;color:#e74c3c;">' + esc(data.error) + '</span>';
+      } else {
+        container.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">No items found</span>';
+      }
+    } catch (e) {
+      container.innerHTML = '<span style="font-size:11px;color:#e74c3c;">Error: ' + esc(e.message) + '</span>';
     }
   },
 };
