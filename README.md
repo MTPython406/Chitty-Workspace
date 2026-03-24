@@ -1,24 +1,24 @@
-<p align="center">
-  <img src="Public/chitty-icon.png" alt="Chitty Workspace" width="120" />
-</p>
-
 <h1 align="center">Chitty Workspace</h1>
 
 <p align="center">
-  <strong>Your local-first AI desktop assistant with agents, tools, and a marketplace.</strong>
+  <strong>Your Machine &nbsp;|&nbsp; Your AI &nbsp;|&nbsp; Your Rules</strong>
+</p>
+
+<p align="center">
+  Local-first AI assistant with agents, tools, browser, and marketplace.<br/>
+  Bring your own API keys. No cloud server required.
 </p>
 
 <p align="center">
   <a href="https://chitty.ai">chitty.ai</a> &middot;
   <a href="https://chitty.ai/marketplace">Marketplace</a> &middot;
-  <a href="docs/application-feature-list.md">Documentation</a> &middot;
+  <a href="docs/application-feature-list.md">Docs</a> &middot;
   <a href="https://github.com/MTPython406/Chitty-Workspace/releases">Download</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/MTPython406/Chitty-Workspace/releases"><img src="https://img.shields.io/github/v/release/MTPython406/Chitty-Workspace?style=flat-square&label=release" alt="Release" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/MTPython406/Chitty-Workspace?style=flat-square" alt="MIT License" /></a>
-  <a href="https://github.com/MTPython406/Chitty-Workspace/stargazers"><img src="https://img.shields.io/github/stars/MTPython406/Chitty-Workspace?style=flat-square" alt="Stars" /></a>
+  <a href="https://github.com/MTPython406/Chitty-Workspace/releases"><img src="https://img.shields.io/badge/release-v0.1.0-brightgreen?style=flat-square" alt="Release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" /></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square" alt="Platform" />
   <img src="https://img.shields.io/badge/rust-2021-orange?style=flat-square&logo=rust" alt="Rust" />
 </p>
