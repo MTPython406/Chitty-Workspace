@@ -2360,12 +2360,114 @@ const App = {
                   chevron.innerHTML = '&#9654;';
                   header.appendChild(chevron);
                 }
-                // Populate body with result preview
+                // Populate body with result preview (or render media inline)
                 const body = toolBlock.querySelector('.tool-call-body');
                 if (body && tc) {
-                  const argsStr = tc.args ? tc.args.substring(0, 200) : '';
-                  const resultStr = (parsed.content || '').substring(0, 500);
-                  body.textContent = argsStr ? `Args: ${argsStr}\n\nResult: ${resultStr}` : resultStr;
+                  let renderedMedia = false;
+
+                  // ── Inline media rendering for generate_image / edit_image ──
+                  if ((parsed.tool_name === 'generate_image' || parsed.tool_name === 'edit_image') && parsed.success) {
+                    try {
+                      const resultData = JSON.parse(parsed.content);
+                      if (resultData.success && resultData.images && resultData.images.length > 0) {
+                        renderedMedia = true;
+                        const gridClass = resultData.images.length === 1 ? 'media-grid single' : 'media-grid';
+                        let html = `<div class="generated-media-container">`;
+                        html += `<div class="generated-media-label">${parsed.tool_name === 'edit_image' ? 'Edited' : 'Generated'}: ${esc(resultData.prompt || '')}</div>`;
+                        html += `<div class="${gridClass}">`;
+                        for (const img of resultData.images) {
+                          const dataUrl = img.base64.startsWith('data:') ? img.base64 : 'data:image/png;base64,' + img.base64;
+                          html += `<img src="${dataUrl}" class="generated-image" alt="${esc(resultData.prompt || 'Generated image')}" onclick="App.viewGeneratedImage('${esc(img.filename)}', this.src, '${esc(resultData.prompt || '')}')" />`;
+                        }
+                        html += `</div></div>`;
+                        body.innerHTML = html;
+                        body.classList.add('open');
+                        const chevron = toolBlock.querySelector('.tool-call-chevron');
+                        if (chevron) chevron.classList.add('open');
+                      }
+                    } catch (_) {}
+                  }
+
+                  // ── Inline video rendering ──
+                  if (parsed.tool_name === 'generate_video' && parsed.success) {
+                    try {
+                      const resultData = JSON.parse(parsed.content);
+                      if (resultData.success && resultData.video) {
+                        renderedMedia = true;
+                        const dataUrl = 'data:video/mp4;base64,' + resultData.video.base64;
+                        body.innerHTML = `
+                          <div class="generated-media-container">
+                            <div class="generated-media-label">Video: ${esc(resultData.prompt || '')} (${resultData.video.duration || '?'}s)</div>
+                            <video class="generated-video" controls preload="metadata">
+                              <source src="${dataUrl}" type="video/mp4" />
+                            </video>
+                          </div>`;
+                        body.classList.add('open');
+                        const chevron = toolBlock.querySelector('.tool-call-chevron');
+                        if (chevron) chevron.classList.add('open');
+                      }
+                    } catch (_) {}
+                  }
+
+                  // ── Inline audio rendering ──
+                  if (parsed.tool_name === 'text_to_speech' && parsed.success) {
+                    try {
+                      const resultData = JSON.parse(parsed.content);
+                      if (resultData.success && resultData.audio) {
+                        renderedMedia = true;
+                        const dataUrl = 'data:audio/mpeg;base64,' + resultData.audio.base64;
+                        body.innerHTML = `
+                          <div class="generated-audio-container">
+                            <div class="generated-media-label">Audio: ${esc(resultData.text_preview || '')}</div>
+                            <audio controls preload="metadata">
+                              <source src="${dataUrl}" type="audio/mpeg" />
+                            </audio>
+                          </div>`;
+                        body.classList.add('open');
+                        const chevron = toolBlock.querySelector('.tool-call-chevron');
+                        if (chevron) chevron.classList.add('open');
+                      }
+                    } catch (_) {}
+                  }
+
+                  // ── Browser screenshot rendering ──
+                  if (parsed.tool_name === 'browser' && parsed.success) {
+                    try {
+                      const resultData = JSON.parse(parsed.content);
+                      if (resultData.screenshot_base64) {
+                        renderedMedia = true;
+                        const imgUrl = resultData.screenshot_base64.startsWith('data:')
+                          ? resultData.screenshot_base64
+                          : 'data:image/png;base64,' + resultData.screenshot_base64;
+                        body.innerHTML = `
+                          <div class="screenshot-container">
+                            <div class="screenshot-label">📸 Screenshot — ${esc(resultData.title || resultData.url || 'page')}</div>
+                            <img src="${imgUrl}" class="screenshot-img" alt="Browser screenshot"
+                              onclick="this.classList.toggle('expanded')" />
+                          </div>`;
+                        body.classList.add('open');
+                        const chevron = toolBlock.querySelector('.tool-call-chevron');
+                        if (chevron) chevron.classList.add('open');
+                        // Also update browser panel screenshot
+                        const screenshotEl = document.getElementById('browser-screenshot');
+                        const emptyEl = document.getElementById('browser-empty');
+                        const iframeEl = document.getElementById('browser-iframe');
+                        if (screenshotEl) {
+                          screenshotEl.src = imgUrl;
+                          screenshotEl.style.display = 'block';
+                          if (iframeEl) iframeEl.style.display = 'none';
+                          if (emptyEl) emptyEl.style.display = 'none';
+                        }
+                      }
+                    } catch (_) {}
+                  }
+
+                  // Fallback: show text preview if no media was rendered
+                  if (!renderedMedia) {
+                    const argsStr = tc.args ? tc.args.substring(0, 200) : '';
+                    const resultStr = (parsed.content || '').substring(0, 500);
+                    body.textContent = argsStr ? `Args: ${argsStr}\n\nResult: ${resultStr}` : resultStr;
+                  }
                 }
               }
               // When the browser tool opens a URL, show it in the Action Panel
