@@ -433,6 +433,24 @@ impl ToolRuntime {
         } else if let Some(tool) = self.custom_tools.get(name) {
             // Custom tool — execute script
             tracing::info!("Executing custom tool: {}", name);
+
+            // Pre-refresh OAuth tokens for marketplace tools (so Python SDK gets fresh tokens)
+            if let Some(pkg_name) = self.marketplace_tool_packages.get(name) {
+                let provider = if pkg_name.contains("google") || pkg_name.contains("gmail") || pkg_name.contains("calendar") || pkg_name.contains("cloud") {
+                    Some("google")
+                } else if pkg_name.contains("slack") {
+                    Some("slack")
+                } else {
+                    None
+                };
+                if let Some(p) = provider {
+                    match crate::oauth::get_access_token(p).await {
+                        Ok(_) => tracing::debug!("OAuth token refreshed for {} (package: {})", p, pkg_name),
+                        Err(e) => tracing::warn!("OAuth token refresh failed for {}: {}", p, e),
+                    }
+                }
+            }
+
             let pkg_config = self.package_configs.get(name).map(|s| s.as_str());
             // Resolve package workspace: if this is a marketplace tool, use its package workspace
             let pkg_workspace = self.marketplace_tool_packages.get(name)
