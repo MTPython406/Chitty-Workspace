@@ -1,4 +1,6 @@
-<h1 align="center">Chitty Workspace</h1>
+<p align="center">
+  <img src="Public/chitty-logo.png" alt="Chitty Workspace" width="320" />
+</p>
 
 <p align="center">
   <strong>Your Machine &nbsp;|&nbsp; Your AI &nbsp;|&nbsp; Your Rules</strong>
