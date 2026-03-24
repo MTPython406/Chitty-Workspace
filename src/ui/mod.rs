@@ -55,6 +55,7 @@ pub fn run(port: u16) -> Result<()> {
         .expect("Failed to create window");
 
     let url = format!("http://127.0.0.1:{}", port);
+
     let _webview = WebViewBuilder::new(&window)
         .with_url(&url)
         .build()

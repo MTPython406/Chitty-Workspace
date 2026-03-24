@@ -106,6 +106,7 @@ fn parse_chitty_exec_config(content: &str) -> ExecutionConfig {
         context_budget_pct: ac.get("context_budget_pct").and_then(|v| v.as_u64()).unwrap_or(75) as u32,
         compaction_strategy: ac.get("compaction_strategy").and_then(|v| v.as_str()).unwrap_or("truncate").to_string(),
         max_conversation_turns: ac.get("max_conversation_turns").and_then(|v| v.as_u64()).map(|v| v as u32),
+        sub_agent_tools: Vec::new(),
     }
 }
 
@@ -162,6 +163,8 @@ pub struct ExecutionConfig {
     pub compaction_strategy: String,
     /// Max conversation turns before forcing compaction (None = unlimited)
     pub max_conversation_turns: Option<u32>,
+    /// Sub-agent scoped tools with locked_params (auto-merged into tool call arguments)
+    pub sub_agent_tools: Vec<crate::agents::SubAgentTool>,
 }
 
 impl Default for ExecutionConfig {
@@ -174,6 +177,7 @@ impl Default for ExecutionConfig {
             context_budget_pct: 75,
             compaction_strategy: "truncate".to_string(),
             max_conversation_turns: None,
+            sub_agent_tools: Vec::new(),
         }
     }
 }
@@ -440,6 +444,21 @@ impl ChatEngine {
                     let required_tools = skill_registry.union_tools(&agent.skills);
                     let has_browser = agent.skills.is_empty() || required_tools.contains("browser");
                     let default_iters = if has_browser { 25 } else { 10 };
+
+                    // Load sub-agent scoped tools if this is a sub-agent (has parent)
+                    let sub_agent_tools = if agent.parent_agent_id.is_some() {
+                        AgentsManager::load_sub_agent_tools(conn, sid).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Sub-agents inherit auto_approve from parent
+                    let auto_approve = agent.approval_mode == "auto"
+                        || agent.parent_agent_id.as_ref().map_or(false, |pid| {
+                            AgentsManager::load(conn, pid).ok().flatten()
+                                .map_or(false, |p| p.approval_mode == "auto")
+                        });
+
                     (
                         agent.persona,
                         agent.skills,
@@ -447,10 +466,11 @@ impl ChatEngine {
                             max_iterations: agent.max_iterations.unwrap_or(default_iters),
                             temperature: agent.temperature,
                             max_tokens: agent.max_tokens,
-                            auto_approve: agent.approval_mode == "auto",
+                            auto_approve,
                             context_budget_pct: agent.context_budget_pct.unwrap_or(75),
                             compaction_strategy: agent.compaction_strategy.unwrap_or_else(|| "truncate".to_string()),
                             max_conversation_turns: agent.max_conversation_turns,
+                            sub_agent_tools,
                         },
                         agent.project_path,
                     )

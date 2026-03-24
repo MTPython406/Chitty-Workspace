@@ -29,6 +29,7 @@ pub async fn execute_custom(
     sandbox_dir: &Path,
     packages_dir: &Path,
     package_config: Option<&str>,
+    package_workspace: Option<&Path>,
 ) -> ToolResult {
     // Validate manifest
     if let Err(e) = manifest.validate() {
@@ -43,14 +44,25 @@ pub async fn execute_custom(
         ));
     }
 
-    // Create sandbox working directory
-    let sandbox_work_dir = sandbox_dir.join(format!(
-        "{}_{}", manifest.name,
-        uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x")
-    ));
-    if let Err(e) = tokio::fs::create_dir_all(&sandbox_work_dir).await {
-        return ToolResult::err(format!("Failed to create sandbox directory: {}", e));
-    }
+    // Use persistent package workspace as working directory for marketplace tools,
+    // or an ephemeral sandbox for custom tools
+    let (work_dir, is_sandbox) = if let Some(ws) = package_workspace {
+        // Marketplace tool: use persistent workspace so files persist across executions
+        if let Err(e) = tokio::fs::create_dir_all(ws).await {
+            return ToolResult::err(format!("Failed to create package workspace: {}", e));
+        }
+        (ws.to_path_buf(), false)
+    } else {
+        // Custom tool: use ephemeral sandbox
+        let sandbox_work_dir = sandbox_dir.join(format!(
+            "{}_{}", manifest.name,
+            uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x")
+        ));
+        if let Err(e) = tokio::fs::create_dir_all(&sandbox_work_dir).await {
+            return ToolResult::err(format!("Failed to create sandbox directory: {}", e));
+        }
+        (sandbox_work_dir, true)
+    };
 
     let timeout = Duration::from_secs(manifest.timeout_seconds as u64);
     let args_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
@@ -60,19 +72,22 @@ pub async fn execute_custom(
         &manifest.runtime,
         &script_path,
         &args_json,
-        &sandbox_work_dir,
+        &work_dir,
         tool_dir,
         packages_dir,
         &manifest.name,
         timeout,
         package_config,
+        package_workspace,
     ).await {
         Ok(output) => parse_tool_output(&output.stdout, &output.stderr, output.success),
         Err(e) => ToolResult::err(e),
     };
 
-    // Clean up sandbox (best-effort)
-    let _ = tokio::fs::remove_dir_all(&sandbox_work_dir).await;
+    // Clean up ephemeral sandbox (but keep persistent package workspaces)
+    if is_sandbox {
+        let _ = tokio::fs::remove_dir_all(&work_dir).await;
+    }
 
     result
 }
@@ -93,6 +108,7 @@ async fn build_and_run_command(
     tool_name: &str,
     timeout: Duration,
     package_config: Option<&str>,
+    package_workspace: Option<&Path>,
 ) -> Result<ProcessOutput, String> {
     let (cmd, cmd_args) = match runtime {
         RuntimeType::Python => {
@@ -142,6 +158,11 @@ async fn build_and_run_command(
     // Inject package configuration (allowed resources + feature flags) if available
     if let Some(config_json) = package_config {
         command.env("CHITTY_PACKAGE_CONFIG", config_json);
+    }
+
+    // Inject persistent package workspace directory
+    if let Some(workspace) = package_workspace {
+        command.env("CHITTY_PACKAGE_WORKSPACE", workspace);
     }
 
     // Add package paths to runtime search paths

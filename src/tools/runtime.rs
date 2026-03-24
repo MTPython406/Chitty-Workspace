@@ -50,6 +50,8 @@ pub struct ToolRuntime {
     pub marketplace_packages: Vec<MarketplacePackage>,
     /// Maps marketplace tool name → package vendor name (for categorization)
     marketplace_tool_vendors: HashMap<String, String>,
+    /// Maps marketplace tool name → package name (for workspace lookup)
+    marketplace_tool_packages: HashMap<String, String>,
     /// Cached package configs (allowed resources + feature flags) keyed by tool name → config JSON
     package_configs: HashMap<String, String>,
     /// Root tools directory
@@ -58,6 +60,8 @@ pub struct ToolRuntime {
     sandbox_dir: PathBuf,
     /// Packages directory for isolated dependencies
     packages_dir: PathBuf,
+    /// Persistent workspace directory for package file storage
+    workspace_dir: PathBuf,
 }
 
 impl ToolRuntime {
@@ -66,6 +70,7 @@ impl ToolRuntime {
         let tools_dir = data_dir.join("tools");
         let sandbox_dir = data_dir.join("sandbox");
         let packages_dir = data_dir.join("packages");
+        let workspace_dir = data_dir.join("workspaces");
 
         // Ensure directories exist
         std::fs::create_dir_all(tools_dir.join("custom"))?;
@@ -73,6 +78,7 @@ impl ToolRuntime {
         std::fs::create_dir_all(&sandbox_dir)?;
         std::fs::create_dir_all(packages_dir.join("python"))?;
         std::fs::create_dir_all(packages_dir.join("node"))?;
+        std::fs::create_dir_all(&workspace_dir)?;
 
         let mut runtime = Self {
             native_registry: ToolRegistry::new(browser_bridge, skill_registry),
@@ -80,10 +86,12 @@ impl ToolRuntime {
             connections: HashMap::new(),
             marketplace_packages: Vec::new(),
             marketplace_tool_vendors: HashMap::new(),
+            marketplace_tool_packages: HashMap::new(),
             package_configs: HashMap::new(),
             tools_dir,
             sandbox_dir,
             packages_dir,
+            workspace_dir,
         };
 
         // Scan for custom and connection tools
@@ -96,6 +104,9 @@ impl ToolRuntime {
     pub fn scan_and_load(&mut self) {
         self.custom_tools.clear();
         self.connections.clear();
+        self.marketplace_packages.clear();
+        self.marketplace_tool_vendors.clear();
+        self.marketplace_tool_packages.clear();
 
         // Scan custom tools
         let custom_dir = self.tools_dir.join("custom");
@@ -112,6 +123,7 @@ impl ToolRuntime {
         // Scan marketplace packages
         self.marketplace_packages.clear();
         self.marketplace_tool_vendors.clear();
+        self.marketplace_tool_packages.clear();
         let marketplace_dir = self.tools_dir.join("marketplace");
         if marketplace_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&marketplace_dir) {
@@ -142,6 +154,10 @@ impl ToolRuntime {
                                                             manifest.name.clone(),
                                                             pkg_manifest.vendor.clone(),
                                                         );
+                                                        self.marketplace_tool_packages.insert(
+                                                            manifest.name.clone(),
+                                                            pkg_manifest.name.clone(),
+                                                        );
                                                         self.custom_tools.insert(
                                                             manifest.name.clone(),
                                                             LoadedCustomTool {
@@ -155,6 +171,12 @@ impl ToolRuntime {
                                                 Err(e) => tracing::warn!("Failed to read tool manifest {:?}: {}", manifest_path, e),
                                             }
                                         }
+                                    }
+
+                                    // Create persistent workspace folder for this package
+                                    let pkg_workspace = self.workspace_dir.join(&pkg_manifest.name);
+                                    if let Err(e) = std::fs::create_dir_all(&pkg_workspace) {
+                                        tracing::warn!("Failed to create package workspace {:?}: {}", pkg_workspace, e);
                                     }
 
                                     self.marketplace_packages.push(MarketplacePackage {
@@ -406,6 +428,9 @@ impl ToolRuntime {
             // Custom tool — execute script
             tracing::info!("Executing custom tool: {}", name);
             let pkg_config = self.package_configs.get(name).map(|s| s.as_str());
+            // Resolve package workspace: if this is a marketplace tool, use its package workspace
+            let pkg_workspace = self.marketplace_tool_packages.get(name)
+                .map(|pkg_name| self.workspace_dir.join(pkg_name));
             executor::execute_custom(
                 &tool.manifest,
                 &tool.dir,
@@ -413,6 +438,7 @@ impl ToolRuntime {
                 &self.sandbox_dir,
                 &self.packages_dir,
                 pkg_config,
+                pkg_workspace.as_deref(),
             )
             .await
         } else if name.contains('.') {
@@ -489,6 +515,7 @@ impl ToolRuntime {
                 &self.sandbox_dir,
                 &self.packages_dir,
                 None, // Connection tools don't use package config
+                None, // Connection tools don't use package workspace
             )
             .await
         } else {

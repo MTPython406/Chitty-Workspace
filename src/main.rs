@@ -133,23 +133,42 @@ async fn main() -> anyhow::Result<()> {
 
             // Start the HTTP server in the background
             let port: u16 = 8770;
+            let bound_port = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
             let server_db = db.clone();
             let server_tools = tool_registry.clone();
             let server_runtime = tool_runtime.clone();
             let server_bridge = browser_bridge.clone();
             let server_skills = skill_registry.clone();
+            let bp = bound_port.clone();
             tokio::spawn(async move {
-                if let Err(e) = server::start(server_db, server_tools, server_runtime, server_bridge, server_skills, port).await {
+                if let Err(e) = server::start(server_db, server_tools, server_runtime, server_bridge, server_skills, port, bp).await {
                     tracing::error!("Server error: {}", e);
                 }
             });
 
-            // Give the server a moment to bind
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            tracing::info!("Server ready on http://127.0.0.1:{}", port);
+            // Poll for server readiness (up to 5 seconds)
+            // Wait for the server to store its actual bound port
+            let mut actual_port = port;
+            let mut ready = false;
+            for attempt in 0..100 {
+                let stored = bound_port.load(std::sync::atomic::Ordering::SeqCst);
+                if stored > 0 {
+                    actual_port = stored;
+                    // Verify we can connect
+                    if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", actual_port)).await.is_ok() {
+                        tracing::info!("Server ready on http://127.0.0.1:{} (after {}ms)", actual_port, attempt * 50);
+                        ready = true;
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            if !ready {
+                tracing::error!("Server failed to start within 5 seconds");
+            }
 
             // Run the UI event loop (blocking — takes over the main thread)
-            ui::run(port)?;
+            ui::run(actual_port)?;
         }
         Commands::Config => {
             let data_dir = storage::default_data_dir();
@@ -354,8 +373,9 @@ async fn main() -> anyhow::Result<()> {
             let server_tools = tool_registry.clone();
             let server_runtime = tool_runtime.clone();
             let server_skills = sb_skills.clone();
+            let bp = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
             tokio::spawn(async move {
-                if let Err(e) = server::start(server_db, server_tools, server_runtime, sb_bridge, server_skills, port).await {
+                if let Err(e) = server::start(server_db, server_tools, server_runtime, sb_bridge, server_skills, port, bp).await {
                     tracing::error!("Server error: {}", e);
                 }
             });

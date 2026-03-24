@@ -28,8 +28,12 @@
   --danger: #e55;
   --scrollbar-thumb: #444;
   --shadow-modal: rgba(0,0,0,0.7);
+  --msg-bubble: #1f2937;
+  --msg-user-bg: #e8e8e8;
+  --msg-user-text: #111;
+  --msg-avatar: #3b82f6;
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --carousel-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --carousel-duration: 280ms;
 }
@@ -53,6 +57,10 @@
   --accent: #2563eb;
   --accent-hover: #1d4ed8;
   --danger: #dc2626;
+  --msg-bubble: #f1f5f9;
+  --msg-user-bg: #000000;
+  --msg-user-text: #ffffff;
+  --msg-avatar: #000000;
   --scrollbar-thumb: #c0c0c0;
   --shadow-modal: rgba(0,0,0,0.3);
 }
@@ -285,34 +293,59 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .recent-item-meta { font-size: 11px; color: var(--text-muted); }
 
 /* Messages */
-.panel-messages { flex: 1; overflow-y: auto; padding: 16px 20px; }
-.message { margin-bottom: 18px; line-height: 1.6; }
+/* ── Chat Messages ──────────────────────────────────────────── */
+.panel-messages { flex: 1; overflow-y: auto; padding: 16px; }
+.message {
+  margin-bottom: 16px; line-height: 1.55;
+  display: flex; gap: 8px;
+}
+.message.user-msg { flex-direction: row-reverse; }
+.message-body { max-width: 85%; display: flex; flex-direction: column; }
+.message.user-msg .message-body { align-items: flex-end; }
+.message.assistant-msg .message-body { align-items: flex-start; }
 .message-role {
   font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.5px; margin-bottom: 3px; color: var(--text-muted);
+  letter-spacing: 0.4px; margin-bottom: 3px; color: var(--text-muted);
 }
-.message-role.user { color: var(--accent); }
-.message-role.assistant { color: var(--text-secondary); }
+
+/* User bubble */
+.message.user-msg .message-content {
+  background: var(--msg-user-bg); color: var(--msg-user-text);
+  padding: 8px 12px; border-radius: 12px 12px 4px 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+.message.user-msg .message-content strong { color: inherit; }
+.message.user-msg .message-content code {
+  background: rgba(255,255,255,0.15); border: none; color: inherit;
+}
+
+/* Assistant bubble */
+.message.assistant-msg .message-content {
+  background: none; color: var(--text-primary);
+  padding: 0 0 0 4px;
+}
+
 .message-content {
-  font-size: 14px; line-height: 1.65; color: var(--text-primary);
+  font-size: 14px; line-height: 1.55; color: var(--text-primary);
   word-wrap: break-word;
 }
-.message-content p { margin: 0 0 12px 0; }
+.message-content p { margin: 0 0 2px 0; }
 .message-content p:last-child { margin-bottom: 0; }
+.message-content p:empty { display: none; }
 .message-content h1, .message-content h2, .message-content h3 {
-  margin: 18px 0 8px 0; font-weight: 700; color: var(--text-primary); line-height: 1.3;
+  margin: 8px 0 2px 0; font-weight: 600; color: var(--text-primary); line-height: 1.3;
 }
-.message-content h1 { font-size: 18px; }
-.message-content h2 { font-size: 16px; }
-.message-content h3 { font-size: 14px; }
+.message-content h1 { font-size: 16px; }
+.message-content h2 { font-size: 14.5px; }
+.message-content h3 { font-size: 13.5px; }
 .message-content code {
   font-family: var(--font-mono); font-size: 12px; background: var(--bg-card);
-  padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);
+  padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border);
   color: var(--text-primary);
 }
 .message-content pre {
-  background: #1e1e2e; border: 1px solid var(--border); border-radius: 8px;
-  padding: 0; margin: 10px 0; overflow: hidden; position: relative;
+  background: #1e1e2e; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+  padding: 0; margin: 8px 0; overflow: hidden; position: relative;
 }
 .message-content pre .code-header {
   display: flex; justify-content: space-between; align-items: center;
@@ -325,25 +358,31 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 }
 .message-content pre .code-header .copy-btn:hover { background: rgba(255,255,255,0.08); color: #cdd6f4; }
 .message-content pre code {
-  display: block; padding: 14px 16px; overflow-x: auto;
-  font-family: var(--font-mono); font-size: 13px; line-height: 1.5;
+  display: block; padding: 12px 14px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5;
   background: transparent; border: none; color: #cdd6f4;
 }
-.message-content ul, .message-content ol {
-  margin: 8px 0; padding-left: 24px;
-}
-.message-content li { margin: 4px 0; line-height: 1.5; }
-.message-content li > ul, .message-content li > ol { margin: 2px 0; }
-.message-content hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.message-content ul, .message-content ol { margin: 1px 0 2px 0; padding-left: 20px; }
+.message-content ul { list-style: disc; }
+.message-content li { margin: 1px 0; line-height: 1.5; }
+.message-content li > ul, .message-content li > ol { margin: 1px 0; }
+.message-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 .message-content a { color: var(--accent); text-decoration: none; }
 .message-content a:hover { text-decoration: underline; }
 .message-content blockquote {
-  border-left: 3px solid var(--accent); margin: 8px 0; padding: 4px 12px;
-  color: var(--text-muted); font-style: italic;
+  margin: 6px 0; padding: 8px 14px;
+  color: var(--text-secondary); font-style: italic; font-size: 13px;
+  background: none; border: none;
+  position: relative;
 }
-.message-content table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 13px; }
+.message-content blockquote::before {
+  content: '\201C'; font-size: 28px; font-family: Georgia, serif;
+  color: var(--text-muted); position: absolute; left: -2px; top: -4px; opacity: 0.5;
+}
+.message-content table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 12.5px; }
 .message-content th, .message-content td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
-.message-content th { background: var(--bg-card); font-weight: 600; }
+.message-content th { background: var(--bg-card); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; color: var(--text-muted); }
+.message-content strong { font-weight: 600; }
 .message-error { color: var(--danger); font-size: 12px; }
 
 .streaming-cursor::after {
@@ -1265,6 +1304,47 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .pkg-detail-capabilities li::before {
   content: '\2713'; color: #22c55e; font-weight: 600; font-size: 13px;
 }
+/* ── Package Detail Sub-Tabs ────────────────────────────────── */
+.pkg-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border);
+  margin-bottom: 16px; flex-shrink: 0;
+}
+.pkg-tab {
+  padding: 6px 14px; font-size: 11px; color: var(--text-muted);
+  border: none; background: none; cursor: pointer;
+  font-family: var(--font-sans); font-weight: 500;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.pkg-tab:hover { color: var(--text-primary); }
+.pkg-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+.pkg-tab-content { display: none; }
+.pkg-tab-content.active { display: block; }
+
+/* ── Setup Hero ────────────────────────────────────────────── */
+.pkg-setup-hero { text-align: center; padding: 16px 0 12px; }
+.pkg-setup-hero-btn {
+  padding: 10px 28px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  cursor: pointer; border: none; background: var(--accent); color: #fff;
+  transition: opacity 0.15s;
+}
+.pkg-setup-hero-btn:hover { opacity: 0.85; }
+.pkg-setup-hero-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.pkg-setup-hero-status { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
+
+/* ── Skills Tab ────────────────────────────────────────────── */
+.pkg-skill-meta { font-size: 11px; color: var(--text-muted); margin-bottom: 12px; }
+.pkg-skill-tools { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+.pkg-skill-tool-tag {
+  font-size: 10px; padding: 2px 8px; border-radius: 10px;
+  background: var(--bg-input); border: 1px solid var(--border); color: var(--text-muted);
+}
+.pkg-skill-content {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.6;
+  white-space: pre-line; background: var(--bg-secondary); border-radius: 8px;
+  padding: 12px; border: 1px solid var(--border); max-height: 400px; overflow-y: auto;
+}
+
 .pkg-tool-card {
   border: 1px solid var(--border); border-radius: 8px; padding: 12px;
   margin-bottom: 8px; background: var(--bg-secondary);
@@ -1574,21 +1654,13 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <button class="modal-close" id="settings-close">&times;</button>
     <h2>Settings</h2>
     <div class="settings-tabs">
-      <button class="settings-tab active" data-tab="integrations">Integrations</button>
-      <button class="settings-tab" data-tab="tokens">Usage</button>
-      <button class="settings-tab" data-tab="marketplace">Marketplace</button>
-    </div>
-    <div id="tab-integrations" class="settings-tab-content active">
-      <div id="integrations-settings"></div>
+      <button class="settings-tab active" data-tab="tokens">Usage</button>
     </div>
     <div id="tab-agents" class="settings-tab-content" style="display:none;">
       <div id="agents-settings"></div>
     </div>
-    <div id="tab-tokens" class="settings-tab-content">
+    <div id="tab-tokens" class="settings-tab-content active">
       <div id="token-settings"></div>
-    </div>
-    <div id="tab-marketplace" class="settings-tab-content">
-      <div id="marketplace-settings"></div>
     </div>
   </div>
 </div>
@@ -1903,9 +1975,10 @@ const App = {
     const fi = this.state.focusedIndex;
 
     if (n === 1) {
-      // Single panel — fills available width (with small margin)
-      const w = railW - 20;
-      const left = 10;
+      // Single panel — cap at 50% on wide screens, fill on small screens
+      const maxW = Math.min(railW - 20, Math.max(railW * 0.5, 700));
+      const w = maxW;
+      const left = (railW - w) / 2;
       panels[0].style.left = left + 'px';
       panels[0].style.width = w + 'px';
       panels[0].className = 'panel focused';
@@ -3395,9 +3468,11 @@ const App = {
         html += `<div class="message"><div class="message-error">${esc(m.content)}</div></div>`;
       } else {
         const sc = m.streaming ? ' streaming-cursor' : '';
-        html += `<div class="message">
-          <div class="message-role ${m.role}">${m.role}</div>
-          <div class="message-content${sc}">${formatContent(m.content)}</div>
+        const msgClass = m.role === 'user' ? 'user-msg' : 'assistant-msg';
+        html += `<div class="message ${msgClass}">
+          <div class="message-body">
+            <div class="message-content${sc}">${formatContent(m.content)}</div>
+          </div>
         </div>`;
       }
     }
@@ -5497,58 +5572,7 @@ const App = {
   async renderMarketplacePanel() {
     const container = document.getElementById('marketplace-body');
     if (!container) return;
-    // Combined view: installed packages (compact) + Browse Marketplace button
-    await this.loadPackages();
-
-    let html = '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);padding:12px 16px 6px;">Installed Packages</div>';
-
-    if (!this.state.packages.length) {
-      html += `<div style="text-align:center;padding:24px 16px;">
-        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">No packages installed yet.</div>
-      </div>`;
-    } else {
-      for (const pkg of this.state.packages) {
-        const toolCount = pkg.tool_count || (pkg.tools || []).length;
-        let statusDot = '<span style="color:var(--text-muted);">\u25cb</span>';
-        try {
-          const authResp = await fetch('/api/marketplace/packages/' + encodeURIComponent(pkg.name) + '/auth-status');
-          const authData = await authResp.json();
-          if (authData.authenticated) {
-            statusDot = '<span style="color:#22c55e;">\u25cf</span>';
-          }
-        } catch (e) { /* keep default */ }
-
-        const agentId = 'pkg-' + pkg.name;
-        html += `<div class="mp-installed-row" data-pkg-name="${esc(pkg.name)}" style="display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;">
-          <span style="font-weight:600;flex:1;font-size:13px;color:var(--text-primary);">${esc(pkg.display_name || pkg.name)}</span>
-          <span style="font-size:12px;color:var(--text-muted);margin-right:8px;">${toolCount} tool${toolCount !== 1 ? 's' : ''}</span>
-          ${statusDot}
-          <button class="mp-agent-cfg-btn" data-agent-id="${esc(agentId)}" data-pkg-name="${esc(pkg.name)}" title="Configure Agent" style="background:none;border:none;cursor:pointer;font-size:16px;margin-left:8px;color:var(--text-muted);padding:2px 4px;" onclick="event.stopPropagation();">&#9881;</button>
-        </div>`;
-      }
-    }
-
-    html += `<div style="border-top:1px solid var(--border);padding:12px 16px;">
-      <button id="mp-browse-btn" class="btn-outline" style="width:100%;padding:10px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:12px;cursor:pointer;font-weight:600;">+ Browse Marketplace</button>
-    </div>`;
-
-    container.innerHTML = html;
-
-    // Bind installed package rows -> open detail
-    container.querySelectorAll('.mp-installed-row').forEach(row => {
-      row.addEventListener('click', () => this.renderPackageDetail(row.dataset.pkgName));
-    });
-    // Bind gear buttons -> open agent config
-    container.querySelectorAll('.mp-agent-cfg-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.openPackageAgentConfig(btn.dataset.agentId, btn.dataset.pkgName);
-      });
-    });
-    // Browse marketplace button -> show full catalog
-    document.getElementById('mp-browse-btn')?.addEventListener('click', () => {
-      this._renderMarketplace(container);
-    });
+    return this._renderMarketplace(container);
   },
 
   async openPackageAgentConfig(agentId, pkgName) {
@@ -5718,6 +5742,11 @@ const App = {
             ? '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(59,130,246,0.1);color:var(--accent);margin-left:6px;">Configurable</span>'
             : '';
 
+          const isReady = authHtml.includes('Connected');
+          const setupBtnHtml = isReady
+            ? '<button class="primary" data-setup-pkg="' + esc(pkg.name) + '" style="background:#22c55e;border-color:#22c55e;">\u2713 Installed</button>'
+            : '<button class="primary" data-setup-pkg="' + esc(pkg.name) + '">Set Up</button>';
+
           html += '<div class="marketplace-tile">' +
             '<div class="marketplace-tile-header">' +
               '<div class="marketplace-tile-icon" style="background:' + esc(pkg.color || '#666') + ';">\u2601</div>' +
@@ -5731,7 +5760,7 @@ const App = {
             '<div class="marketplace-tool-list">' + toolChips + '</div>' +
             '<div class="marketplace-tile-actions">' +
               '<button data-detail-pkg="' + esc(pkg.name) + '">Details & Configure</button>' +
-              '<button class="primary" data-setup-pkg="' + esc(pkg.name) + '">Set Up</button>' +
+              setupBtnHtml +
             '</div>' +
             '<div class="setup-progress" id="setup-' + esc(pkg.name) + '" style="display:none;margin-top:12px;"></div>' +
           '</div>';
@@ -5970,13 +5999,51 @@ const App = {
         '</div>';
       }
 
-      // Description
+      // ── Fetch skill data for Skills tab ──────────────────────────
+      let skillData = null;
+      try {
+        const skillResp = await fetch('/api/skills/' + encodeURIComponent(pkg.name));
+        if (skillResp.ok) skillData = await skillResp.json();
+      } catch (_) {}
+
+      // ── Fetch sub-agents for Configuration tab ──────────────────
+      const subAgentTemplate = pkg.sub_agent_template;
+      let childAgents = [];
+      if (subAgentTemplate) {
+        try {
+          const cr = await fetch('/api/agents/pkg-' + encodeURIComponent(vendor) + '/children');
+          if (cr.ok) childAgents = await cr.json();
+        } catch (_) {}
+      }
+
+      // ── Tab bar ─────────────────────────────────────────────────
+      const setupSteps = pkg.setup_steps || [];
+      const hasConfig = configurableResources.length || featureFlags.length || !!subAgentTemplate;
+
+      html += '<div class="pkg-tabs">';
+      html += '<button class="pkg-tab active" data-pkg-tab="overview">Overview</button>';
+      if (setupSteps.length > 0) {
+        html += '<button class="pkg-tab" data-pkg-tab="setup">Setup</button>';
+      }
+      if (skillData) {
+        html += '<button class="pkg-tab" data-pkg-tab="skills">Skills</button>';
+      }
+      if (tools.length > 0) {
+        html += '<button class="pkg-tab" data-pkg-tab="tools">Tools</button>';
+      }
+      if (hasConfig) {
+        html += '<button class="pkg-tab" data-pkg-tab="config">Configuration</button>';
+      }
+      html += '</div>';
+
+      // ── TAB: Overview ───────────────────────────────────────────
+      html += '<div class="pkg-tab-content active" id="pkg-tab-overview">';
+
       const desc = pkg.long_description || pkg.description || '';
       html += '<div class="pkg-detail-section">' +
         '<div class="pkg-detail-desc">' + esc(desc) + '</div>' +
       '</div>';
 
-      // Capabilities
       if (agentConfig.capabilities && agentConfig.capabilities.length) {
         html += '<div class="pkg-detail-section">' +
           '<div class="pkg-detail-section-title">Capabilities</div>' +
@@ -5985,12 +6052,27 @@ const App = {
           '</ul></div>';
       }
 
-      // Setup section (for packages with setup_steps)
-      const setupSteps = pkg.setup_steps || [];
+      if (agentConfig.suggested_prompts && agentConfig.suggested_prompts.length) {
+        html += '<div class="pkg-detail-section" style="margin-top:12px;">' +
+          '<div class="pkg-detail-section-title">Try These Prompts</div>' +
+          '<div>' + agentConfig.suggested_prompts.map(p => '<span class="pkg-prompt-chip">' + esc(p) + '</span>').join('') + '</div>' +
+        '</div>';
+      }
+
+      html += '</div>'; // close overview tab
+
+      // ── TAB: Setup ──────────────────────────────────────────────
       if (setupSteps.length > 0) {
-        html += '<div class="pkg-detail-section">' +
-          '<div class="pkg-detail-section-title">Setup</div>' +
-          '<div class="pkg-setup-steps" id="pkg-setup-steps">';
+        html += '<div class="pkg-tab-content" id="pkg-tab-setup">';
+
+        // Hero: prominent Run Setup button at top
+        html += '<div class="pkg-setup-hero">' +
+          '<button class="pkg-setup-hero-btn" id="pkg-run-setup">\u25b6 Run Setup</button>' +
+          '<div class="pkg-setup-hero-status" id="pkg-setup-result"></div>' +
+        '</div>';
+
+        // Step checklist
+        html += '<div class="pkg-setup-steps" id="pkg-setup-steps">';
         for (const step of setupSteps) {
           const isCredential = !!step.credentials_key;
           const isPrompt = step.prompt_user || isCredential;
@@ -6019,120 +6101,136 @@ const App = {
           }
           html += '</div>';
         }
-        html += '</div>' +
-          '<button class="provider-card-btn" id="pkg-run-setup" style="margin-top:8px;">\u25b6 Run Setup</button>' +
-          '<div id="pkg-setup-result" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>' +
-        '</div>';
+        html += '</div>'; // close setup-steps
+
+        html += '</div>'; // close setup tab
       }
 
-      // Tools
-      html += '<div class="pkg-detail-section">' +
-        '<div class="pkg-detail-section-title">Tools <span style="font-size:11px;color:var(--text-muted);font-weight:400;">' + tools.length + '</span></div>';
-      for (const tool of tools) {
-        const actions = tool.parameters && tool.parameters.action
-          ? (tool.parameters.action.description || '').replace(/^.*?:\s*/, '').split(',').map(a => a.trim()).filter(Boolean)
-          : [];
-        html += '<div class="pkg-tool-card">' +
-          '<div class="pkg-tool-card-name">' + esc(tool.display_name || tool.name) + '</div>' +
-          '<div class="pkg-tool-card-desc">' + esc(tool.description || '') + '</div>' +
-          (actions.length ? '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">' + actions.map(a => '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);">' + esc(a) + '</span>').join('') + '</div>' : '') +
-        '</div>';
-      }
-      html += '</div>';
-
-      // ── Configured Sub-Agents (Datasets / Resources) ────────────
-      const subAgentTemplate = pkg.sub_agent_template;
-      if (subAgentTemplate) {
-        let childAgents = [];
-        try {
-          const cr = await fetch('/api/agents/pkg-' + encodeURIComponent(vendor) + '/children');
-          if (cr.ok) childAgents = await cr.json();
-        } catch (_) {}
-
+      // ── TAB: Skills ─────────────────────────────────────────────
+      if (skillData) {
+        html += '<div class="pkg-tab-content" id="pkg-tab-skills">';
         html += '<div class="pkg-detail-section">' +
-          '<div class="pkg-detail-section-title">Configured Agents <span style="font-size:11px;color:var(--text-muted);font-weight:400;">' + childAgents.length + '</span></div>' +
-          '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Each configured dataset creates a focused sub-agent with scoped tools. Select it from the chat dropdown.</div>';
+          '<div class="pkg-detail-section-title">' + esc(skillData.name || pkg.name) + '</div>' +
+          '<div class="pkg-skill-meta">' + esc(skillData.description || '') + '</div>';
 
-        for (const child of childAgents) {
-          html += '<div class="pkg-sub-agent-card">' +
-            '<div style="flex:1;">' +
-              '<div style="font-weight:600;font-size:13px;">' + esc(child.name) + '</div>' +
-              '<div style="font-size:11px;color:var(--text-muted);">' + esc(child.description || '') + '</div>' +
-            '</div>' +
-            '<div style="display:flex;gap:4px;">' +
-              '<button class="discover-btn pkg-sub-agent-delete" data-child-id="' + esc(child.id) + '" style="color:var(--danger);border-color:var(--danger);">Remove</button>' +
-            '</div>' +
+        if (skillData.allowed_tools && skillData.allowed_tools.length) {
+          html += '<div class="pkg-detail-section-title" style="font-size:12px;">Allowed Tools</div>' +
+            '<div class="pkg-skill-tools">' +
+            skillData.allowed_tools.map(t => '<span class="pkg-skill-tool-tag">' + esc(t) + '</span>').join('') +
+            '</div>';
+        }
+
+        if (skillData.content) {
+          html += '<div class="pkg-detail-section-title" style="font-size:12px;">Instructions</div>' +
+            '<div class="pkg-skill-content">' + esc(skillData.content) + '</div>';
+        }
+
+        html += '</div></div>'; // close skills tab
+      }
+
+      // ── TAB: Tools ──────────────────────────────────────────────
+      if (tools.length > 0) {
+        html += '<div class="pkg-tab-content" id="pkg-tab-tools">';
+        html += '<div class="pkg-detail-section">' +
+          '<div class="pkg-detail-section-title">Tools <span style="font-size:11px;color:var(--text-muted);font-weight:400;">' + tools.length + '</span></div>';
+        for (const tool of tools) {
+          const actions = tool.parameters && tool.parameters.action
+            ? (tool.parameters.action.description || '').replace(/^.*?:\s*/, '').split(',').map(a => a.trim()).filter(Boolean)
+            : [];
+          html += '<div class="pkg-tool-card">' +
+            '<div class="pkg-tool-card-name">' + esc(tool.display_name || tool.name) + '</div>' +
+            '<div class="pkg-tool-card-desc">' + esc(tool.description || '') + '</div>' +
+            (actions.length ? '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">' + actions.map(a => '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);">' + esc(a) + '</span>').join('') + '</div>' : '') +
+          '</div>';
+        }
+        html += '</div></div>'; // close tools tab
+      }
+
+      // ── TAB: Configuration ──────────────────────────────────────
+      if (hasConfig) {
+        html += '<div class="pkg-tab-content" id="pkg-tab-config">';
+
+        // Configured Sub-Agents
+        if (subAgentTemplate) {
+          html += '<div class="pkg-detail-section">' +
+            '<div class="pkg-detail-section-title">Configured Agents <span style="font-size:11px;color:var(--text-muted);font-weight:400;">' + childAgents.length + '</span></div>' +
+            '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Each configured dataset creates a focused sub-agent with scoped tools. Select it from the chat dropdown.</div>';
+
+          for (const child of childAgents) {
+            html += '<div class="pkg-sub-agent-card">' +
+              '<div style="flex:1;">' +
+                '<div style="font-weight:600;font-size:13px;">' + esc(child.name) + '</div>' +
+                '<div style="font-size:11px;color:var(--text-muted);">' + esc(child.description || '') + '</div>' +
+              '</div>' +
+              '<div style="display:flex;gap:4px;">' +
+                '<button class="discover-btn pkg-sub-agent-delete" data-child-id="' + esc(child.id) + '" style="color:var(--danger);border-color:var(--danger);">Remove</button>' +
+              '</div>' +
+            '</div>';
+          }
+
+          html += '<button class="provider-card-btn" id="pkg-add-sub-agent" style="margin-top:8px;">+ Add Dataset Agent</button>' +
+            '</div>';
+        }
+
+        // Allowed Resources
+        if (configurableResources.length) {
+          html += '<div class="pkg-detail-section">' +
+            '<div class="pkg-detail-section-title">Allowed Resources</div>' +
+            '<div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Configure which resources the agent can access. The agent will only operate on resources listed here.</div>';
+
+          for (const res of configurableResources) {
+            const savedItems = (config.resources[res.id] || []).map(r => r.id);
+            html += '<div class="pkg-resource-section" data-resource-type="' + esc(res.id) + '">' +
+              '<div class="pkg-resource-label">' + esc(res.label) + '</div>' +
+              (res.description ? '<div class="pkg-resource-desc">' + esc(res.description) + '</div>' : '') +
+              '<div class="pkg-resource-list" id="res-list-' + esc(res.id) + '">' +
+                savedItems.map(id => '<span class="pkg-resource-tag" data-id="' + esc(id) + '">' + esc(id) + ' <button class="remove-btn" title="Remove">\u00d7</button></span>').join('') +
+              '</div>' +
+              '<div class="pkg-resource-add">' +
+                '<input type="text" id="res-input-' + esc(res.id) + '" placeholder="' + esc(res.placeholder || 'Enter name...') + '" />' +
+                '<button onclick="settingsPanel.addResource(\'' + esc(vendor) + '\', \'' + esc(res.id) + '\')">Add</button>' +
+                (res.discover_command ? '<button class="discover-btn" onclick="settingsPanel.discoverResources(\'' + esc(vendor) + '\', \'' + esc(res.id) + '\')">Discover</button>' : '') +
+              '</div>' +
+            '</div>';
+          }
+          html += '</div>';
+        }
+
+        // Feature Flags
+        if (featureFlags.length) {
+          html += '<div class="pkg-detail-section">' +
+            '<div class="pkg-detail-section-title">Feature Flags</div>' +
+            '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Enable or disable specific capabilities. Disabled features cannot be used by the agent.</div>';
+
+          for (const flag of featureFlags) {
+            const isEnabled = config.features.hasOwnProperty(flag.id)
+              ? config.features[flag.id]
+              : flag.default_enabled;
+            html += '<div class="pkg-feature-row">' +
+              '<div class="pkg-feature-info">' +
+                '<div class="pkg-feature-label">' + esc(flag.label) + '</div>' +
+                (flag.description ? '<div class="pkg-feature-desc">' + esc(flag.description) + '</div>' : '') +
+              '</div>' +
+              '<label class="pkg-feature-toggle">' +
+                '<input type="checkbox" data-feature="' + esc(flag.id) + '" data-vendor="' + esc(vendor) + '"' +
+                (flag.enable_warning ? ' data-warning="' + esc(flag.enable_warning) + '"' : '') +
+                (isEnabled ? ' checked' : '') + ' />' +
+                '<span class="slider"></span>' +
+              '</label>' +
+            '</div>';
+          }
+          html += '</div>';
+        }
+
+        // Save Configuration Button
+        if (configurableResources.length || featureFlags.length) {
+          html += '<div style="display:flex;gap:8px;margin-top:8px;">' +
+            '<button class="primary" id="pkg-save-config" style="padding:8px 20px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:#fff;">Save Configuration</button>' +
+            '<span id="pkg-save-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>' +
           '</div>';
         }
 
-        html += '<button class="provider-card-btn" id="pkg-add-sub-agent" style="margin-top:8px;">+ Add Dataset Agent</button>' +
-          '</div>';
-      }
-
-      // ── Configuration: Allowed Resources ──────────────────────────
-      if (configurableResources.length) {
-        html += '<div class="pkg-detail-section">' +
-          '<div class="pkg-detail-section-title">Allowed Resources</div>' +
-          '<div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Configure which resources the agent can access. The agent will only operate on resources listed here.</div>';
-
-        for (const res of configurableResources) {
-          const savedItems = (config.resources[res.id] || []).map(r => r.id);
-          html += '<div class="pkg-resource-section" data-resource-type="' + esc(res.id) + '">' +
-            '<div class="pkg-resource-label">' + esc(res.label) + '</div>' +
-            (res.description ? '<div class="pkg-resource-desc">' + esc(res.description) + '</div>' : '') +
-            '<div class="pkg-resource-list" id="res-list-' + esc(res.id) + '">' +
-              savedItems.map(id => '<span class="pkg-resource-tag" data-id="' + esc(id) + '">' + esc(id) + ' <button class="remove-btn" title="Remove">\u00d7</button></span>').join('') +
-            '</div>' +
-            '<div class="pkg-resource-add">' +
-              '<input type="text" id="res-input-' + esc(res.id) + '" placeholder="' + esc(res.placeholder || 'Enter name...') + '" />' +
-              '<button onclick="settingsPanel.addResource(\'' + esc(vendor) + '\', \'' + esc(res.id) + '\')">Add</button>' +
-              (res.discover_command ? '<button class="discover-btn" onclick="settingsPanel.discoverResources(\'' + esc(vendor) + '\', \'' + esc(res.id) + '\')">Discover</button>' : '') +
-            '</div>' +
-          '</div>';
-        }
-        html += '</div>';
-      }
-
-      // ── Configuration: Feature Flags ──────────────────────────────
-      if (featureFlags.length) {
-        html += '<div class="pkg-detail-section">' +
-          '<div class="pkg-detail-section-title">Feature Flags</div>' +
-          '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Enable or disable specific capabilities. Disabled features cannot be used by the agent.</div>';
-
-        for (const flag of featureFlags) {
-          const isEnabled = config.features.hasOwnProperty(flag.id)
-            ? config.features[flag.id]
-            : flag.default_enabled;
-          html += '<div class="pkg-feature-row">' +
-            '<div class="pkg-feature-info">' +
-              '<div class="pkg-feature-label">' + esc(flag.label) + '</div>' +
-              (flag.description ? '<div class="pkg-feature-desc">' + esc(flag.description) + '</div>' : '') +
-            '</div>' +
-            '<label class="pkg-feature-toggle">' +
-              '<input type="checkbox" data-feature="' + esc(flag.id) + '" data-vendor="' + esc(vendor) + '"' +
-              (flag.enable_warning ? ' data-warning="' + esc(flag.enable_warning) + '"' : '') +
-              (isEnabled ? ' checked' : '') + ' />' +
-              '<span class="slider"></span>' +
-            '</label>' +
-          '</div>';
-        }
-        html += '</div>';
-      }
-
-      // ── Save Configuration Button ─────────────────────────────────
-      if (configurableResources.length || featureFlags.length) {
-        html += '<div style="display:flex;gap:8px;margin-top:8px;">' +
-          '<button class="primary" id="pkg-save-config" style="padding:8px 20px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:#fff;">Save Configuration</button>' +
-          '<span id="pkg-save-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>' +
-        '</div>';
-      }
-
-      // ── Suggested Prompts ─────────────────────────────────────────
-      if (agentConfig.suggested_prompts && agentConfig.suggested_prompts.length) {
-        html += '<div class="pkg-detail-section" style="margin-top:20px;">' +
-          '<div class="pkg-detail-section-title">Try These Prompts</div>' +
-          '<div>' + agentConfig.suggested_prompts.map(p => '<span class="pkg-prompt-chip">' + esc(p) + '</span>').join('') + '</div>' +
-        '</div>';
+        html += '</div>'; // close config tab
       }
 
       html += '</div>'; // close .pkg-detail
@@ -6140,6 +6238,17 @@ const App = {
 
       // ── Bind Events ───────────────────────────────────────────────
       const self = this;
+
+      // Tab switching
+      container.querySelectorAll('.pkg-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          container.querySelectorAll('.pkg-tab').forEach(t => t.classList.remove('active'));
+          container.querySelectorAll('.pkg-tab-content').forEach(c => c.classList.remove('active'));
+          tab.classList.add('active');
+          const target = container.querySelector('#pkg-tab-' + tab.dataset.pkgTab);
+          if (target) target.classList.add('active');
+        });
+      });
 
       // Back button
       document.getElementById('pkg-back').addEventListener('click', () => {
@@ -6190,13 +6299,35 @@ const App = {
         });
       }
 
-      // Run Setup button
+      // Run Setup button — runs steps sequentially with progress
       const runSetupBtn = document.getElementById('pkg-run-setup');
       if (runSetupBtn) {
+        // Auto-check status on load
+        (async () => {
+          try {
+            const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/setup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ mode: 'check_only' }),
+            });
+            const result = await resp.json();
+            for (const step of (result.steps || [])) {
+              const el = document.getElementById('setup-status-' + step.step_id);
+              if (el && (step.status === 'completed' || step.status === 'already_done')) {
+                el.textContent = '\u2713'; el.style.color = '#22c55e';
+              }
+            }
+            if (result.success) {
+              runSetupBtn.textContent = '\u2713 Setup Complete';
+              runSetupBtn.style.opacity = '0.6';
+            }
+          } catch (_) {}
+        })();
+
         runSetupBtn.addEventListener('click', async () => {
           runSetupBtn.disabled = true;
-          runSetupBtn.textContent = 'Running...';
           const resultEl = document.getElementById('pkg-setup-result');
+          resultEl.textContent = '';
 
           // Collect input values
           const values = {};
@@ -6204,33 +6335,47 @@ const App = {
             if (input.value.trim()) values[input.dataset.step] = input.value.trim();
           });
 
+          // Run steps sequentially via the backend
           try {
-            const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/setup', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ values }),
-            });
-            const result = await resp.json();
-            // Update step statuses
-            for (const step of (result.steps || [])) {
-              const el = document.getElementById('setup-status-' + step.step_id);
-              if (el) {
-                if (step.status === 'completed' || step.status === 'already_done') {
-                  el.textContent = '\u2713'; el.style.color = '#22c55e';
-                } else if (step.status === 'failed') {
-                  el.textContent = '\u2717'; el.style.color = '#ef4444';
-                } else if (step.status === 'needs_input') {
-                  el.textContent = '?'; el.style.color = '#f59e0b';
+            const steps = setupSteps || [];
+            let allDone = true;
+            for (const step of steps) {
+              const statusEl = document.getElementById('setup-status-' + step.id);
+              if (statusEl) { statusEl.textContent = '\u2299'; statusEl.style.color = '#3b82f6'; }
+              runSetupBtn.textContent = 'Running: ' + (step.label || step.id) + '...';
+
+              const resp = await fetch('/api/marketplace/packages/' + encodeURIComponent(vendor) + '/setup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: 'execute_step', step_id: step.id, values }),
+              });
+              const result = await resp.json();
+              const stepResult = (result.steps || []).find(s => s.step_id === step.id) || {};
+
+              if (statusEl) {
+                if (stepResult.status === 'completed' || stepResult.status === 'already_done') {
+                  statusEl.textContent = '\u2713'; statusEl.style.color = '#22c55e';
+                } else if (stepResult.status === 'failed') {
+                  statusEl.textContent = '\u2717'; statusEl.style.color = '#ef4444';
+                  allDone = false;
+                  resultEl.textContent = stepResult.message || 'Step failed: ' + step.label;
+                  resultEl.style.color = '#ef4444';
+                  break;
+                } else if (stepResult.status === 'needs_input') {
+                  statusEl.textContent = '?'; statusEl.style.color = '#f59e0b';
+                  allDone = false;
+                  resultEl.textContent = stepResult.message || 'Input needed for: ' + step.label;
+                  resultEl.style.color = '#f59e0b';
+                  // Highlight the input field
+                  const inputEl = container.querySelector('.pkg-setup-input[data-step="' + step.id + '"]');
+                  if (inputEl) { inputEl.focus(); inputEl.style.borderColor = '#f59e0b'; }
+                  break;
                 }
               }
             }
-            if (result.success) {
+            if (allDone) {
               resultEl.textContent = '\u2713 Setup complete!';
               resultEl.style.color = '#22c55e';
-            } else {
-              const failedStep = (result.steps || []).find(s => s.status === 'needs_input' || s.status === 'failed');
-              resultEl.textContent = failedStep ? failedStep.message || 'Setup incomplete' : 'Setup incomplete';
-              resultEl.style.color = '#f59e0b';
             }
           } catch (e) {
             resultEl.textContent = 'Error: ' + e.message;
@@ -6656,8 +6801,14 @@ function formatContent(text) {
   if (!/^<(h[1-3]|ul|ol|pre|table|hr|blockquote|div)/.test(h.trim())) {
     h = '<p>' + h + '</p>';
   }
+  // Clean up <br> between list items (LLM puts blank lines between bullets)
+  h = h.replace(/<\/li><br><li>/g, '</li><li>');
+  h = h.replace(/<\/li>(<br>)+<li>/g, '</li><li>');
+  // Collapse multiple consecutive <br> into one
+  h = h.replace(/(<br>){2,}/g, '<br>');
   // Clean up empty paragraphs and bad nesting
   h = h.replace(/<p><\/p>/g, '');
+  h = h.replace(/<\/p>\s*<p><\/p>\s*<p>/g, '</p><p>');
   h = h.replace(/<p>(<h[1-3]>)/g, '$1');
   h = h.replace(/(<\/h[1-3]>)<\/p>/g, '$1');
   h = h.replace(/<p>(<ul>)/g, '$1');
