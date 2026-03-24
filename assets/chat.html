@@ -806,6 +806,20 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   max-width: 100%; border-radius: 8px; border: 1px solid var(--border);
   background: #000;
 }
+.generated-video-thumb {
+  max-width: 200px; max-height: 150px; border-radius: 8px;
+  border: 1px solid var(--border); cursor: pointer;
+  object-fit: cover; background: #000; transition: all 0.2s ease;
+}
+.generated-video-thumb:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(59,130,246,0.15); }
+.video-thumb-wrapper {
+  position: relative; display: inline-block; cursor: pointer;
+}
+.video-thumb-wrapper::after {
+  content: '▶'; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%); font-size: 28px; color: #fff;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.6); pointer-events: none;
+}
 .generated-audio-container {
   padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border);
   border-radius: 8px; margin: 4px 0;
@@ -3278,6 +3292,27 @@ const App = {
     this.openDynamicView('\u{1F5BC}', 'Generated Image', viewHTML);
   },
 
+  viewGeneratedVideo(filename, videoUrl, prompt) {
+    const viewHTML = `
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+          <div style="font-size:12px;color:var(--text-secondary);line-height:1.4;">${esc(prompt)}</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">${esc(filename)}</div>
+        </div>
+        <div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:16px;background:#000;">
+          <video controls autoplay preload="metadata" style="max-width:100%;max-height:100%;border-radius:8px;">
+            <source src="${videoUrl}" type="video/mp4" />
+          </video>
+        </div>
+        <div style="padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0;">
+          <button onclick="(() => { const a=document.createElement('a'); a.href='${videoUrl}'; a.download='${esc(filename)}'; a.click(); })()" style="padding:4px 12px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Download</button>
+          <button onclick="navigator.clipboard.writeText('${esc(filename)}').then(()=>this.textContent='Copied!')" style="padding:4px 12px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Copy Filename</button>
+        </div>
+      </div>`;
+    this.openDynamicView('\u{1F3AC}', 'Generated Video', viewHTML);
+    this.toggleActionPanel(true);
+  },
+
   // Open browser component dynamically
   openBrowserView() {
     this.openDynamicView('🌐', 'Browser', `
@@ -3730,9 +3765,11 @@ const App = {
             } else if (media.type === 'video') {
               const videoUrl = '/api/media/videos/' + encodeURIComponent(media.filename);
               mediaHtml += `<div class="generated-media-container" style="margin-bottom:8px;">
-                <video class="generated-video" controls preload="metadata" style="max-width:100%;border-radius:8px;">
-                  <source src="${videoUrl}" type="video/mp4" />
-                </video>
+                <div class="video-thumb-wrapper" onclick="App.viewGeneratedVideo('${esc(media.filename)}', '${videoUrl}', '${esc(media.prompt || '')}')">
+                  <video class="generated-video-thumb" preload="metadata" muted>
+                    <source src="${videoUrl}" type="video/mp4" />
+                  </video>
+                </div>
               </div>`;
             } else if (media.type === 'audio') {
               const audioUrl = '/api/media/audio/' + encodeURIComponent(media.filename);
