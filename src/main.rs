@@ -4,6 +4,7 @@ mod connections;
 mod gpu;
 mod huggingface;
 mod integrations;
+mod media;
 mod oauth;
 mod providers;
 mod scheduler;

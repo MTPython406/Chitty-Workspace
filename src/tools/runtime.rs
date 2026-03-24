@@ -80,6 +80,12 @@ impl ToolRuntime {
         std::fs::create_dir_all(packages_dir.join("node"))?;
         std::fs::create_dir_all(&workspace_dir)?;
 
+        // Media directories for generated images, videos, and audio
+        let media_dir = data_dir.join("media");
+        std::fs::create_dir_all(media_dir.join("images"))?;
+        std::fs::create_dir_all(media_dir.join("videos"))?;
+        std::fs::create_dir_all(media_dir.join("audio"))?;
+
         let mut runtime = Self {
             native_registry: ToolRegistry::new(browser_bridge, skill_registry),
             custom_tools: HashMap::new(),

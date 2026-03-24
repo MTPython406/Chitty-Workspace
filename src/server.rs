@@ -325,6 +325,9 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/local/sidecar/models/unload", post(sidecar_unload_handler))
         // Direct GGUF scanning (no sidecar needed)
         .route("/api/local/gguf/scan", get(gguf_scan_local_handler))
+        // Media serving (generated images, videos, audio from ~/.chitty-workspace/media/)
+        .route("/api/media/*filepath", get(serve_media_handler))
+        .route("/api/media/capabilities", get(media_capabilities_handler))
         .with_state(state.clone());
 
     // Try the requested port first, then fall back to nearby ports
@@ -5929,4 +5932,107 @@ async fn dispatch_single_agent(
         "response": final_text,
         "tool_calls": tool_trace,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Media serving — serves generated images, videos, audio from data dir
+// ---------------------------------------------------------------------------
+
+async fn serve_media_handler(
+    Path(filepath): Path<String>,
+) -> impl IntoResponse {
+    // Security: reject path traversal
+    if filepath.contains("..") || filepath.contains('\\') {
+        return (StatusCode::BAD_REQUEST, "Invalid path").into_response();
+    }
+
+    let data_dir = crate::storage::default_data_dir();
+    let full_path = data_dir.join("media").join(&filepath);
+
+    if !full_path.exists() || !full_path.is_file() {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    }
+
+    // Determine Content-Type from extension
+    let content_type = match full_path.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        _ => "application/octet-stream",
+    };
+
+    match std::fs::read(&full_path) {
+        Ok(bytes) => {
+            let headers = [
+                (axum::http::header::CONTENT_TYPE, content_type),
+                (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
+            ];
+            (headers, bytes).into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response(),
+    }
+}
+
+async fn media_capabilities_handler() -> Json<serde_json::Value> {
+    // Return which providers support which media features
+    Json(serde_json::json!({
+        "providers": {
+            "xai": {
+                "image_generation": true,
+                "image_editing": true,
+                "video_generation": true,
+                "text_to_speech": true,
+                "speech_to_text": false,
+                "models": {
+                    "image": ["grok-imagine-image", "grok-imagine-image-pro"],
+                    "video": ["grok-imagine-video"],
+                    "tts_voices": ["eve", "ara", "rex", "sal", "leo"]
+                }
+            },
+            "openai": {
+                "image_generation": true,
+                "image_editing": true,
+                "video_generation": true,
+                "text_to_speech": true,
+                "speech_to_text": true,
+                "models": {
+                    "image": ["gpt-image-1.5", "gpt-image-1"],
+                    "video": ["sora-2", "sora-2-pro"],
+                    "tts_voices": ["alloy", "ash", "coral", "echo", "nova", "onyx", "sage", "shimmer", "marin", "cedar"]
+                }
+            },
+            "google": {
+                "image_generation": true,
+                "image_editing": true,
+                "video_generation": true,
+                "text_to_speech": true,
+                "speech_to_text": true,
+                "models": {
+                    "image": ["imagen-4", "imagen-4-ultra"],
+                    "video": ["veo-3.1"],
+                    "tts_voices": ["Kore", "Charon", "Fenrir", "Aoede"]
+                }
+            },
+            "ollama": {
+                "image_generation": false,
+                "image_editing": false,
+                "video_generation": false,
+                "text_to_speech": false,
+                "speech_to_text": false
+            },
+            "huggingface": {
+                "image_generation": false,
+                "image_editing": false,
+                "video_generation": false,
+                "text_to_speech": false,
+                "speech_to_text": false
+            }
+        }
+    }))
 }

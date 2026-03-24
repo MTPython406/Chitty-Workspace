@@ -785,6 +785,35 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 .screenshot-img.expanded { max-height: none; }
 .screenshot-img:hover { border-color: var(--accent); }
 
+/* Generated media styles */
+.generated-media-container { padding: 4px 0; }
+.generated-media-label {
+  font-size: 11px; color: var(--text-secondary); margin-bottom: 6px;
+  font-family: var(--font-main); font-weight: 500;
+}
+.generated-image {
+  max-width: 100%; border-radius: 8px; border: 1px solid var(--border);
+  cursor: pointer; transition: all 0.2s ease;
+  max-height: 400px; object-fit: contain;
+}
+.generated-image:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(59,130,246,0.15); }
+.media-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+  padding: 4px 0;
+}
+.media-grid.single { grid-template-columns: 1fr; }
+.generated-video {
+  max-width: 100%; border-radius: 8px; border: 1px solid var(--border);
+  background: #000;
+}
+.generated-audio-container {
+  padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; margin: 4px 0;
+}
+.generated-audio-container audio {
+  width: 100%; height: 36px;
+}
+
 .thinking-indicator {
   font-size: 12px; color: var(--text-muted); font-style: italic;
   padding: 4px 0; margin: 4px 0;
@@ -2489,8 +2518,80 @@ const App = {
                     }
                   } catch (_) { /* not JSON or no screenshot */ }
                 }
-                // Set body content (preview) — skip if we rendered a screenshot
-                if (!hasScreenshot) {
+
+                // ── Generated media rendering ──────────────────────────
+                let hasMedia = false;
+                if (parsed.tool_name === 'generate_image' || parsed.tool_name === 'edit_image') {
+                  try {
+                    const resultData = JSON.parse(parsed.content);
+                    if (resultData.success && resultData.images && resultData.images.length > 0) {
+                      hasMedia = true;
+                      const body = block.querySelector('.tool-call-body');
+                      if (body) {
+                        const gridClass = resultData.images.length === 1 ? 'media-grid single' : 'media-grid';
+                        let html = `<div class="generated-media-container">`;
+                        html += `<div class="generated-media-label">${parsed.tool_name === 'edit_image' ? 'Edited' : 'Generated'}: ${esc(resultData.prompt || '')}</div>`;
+                        html += `<div class="${gridClass}">`;
+                        for (const img of resultData.images) {
+                          const dataUrl = img.base64.startsWith('data:') ? img.base64 : 'data:image/png;base64,' + img.base64;
+                          html += `<img src="${dataUrl}" class="generated-image" alt="${esc(resultData.prompt || 'Generated image')}" onclick="App.viewGeneratedImage('${esc(img.filename)}', this.src, '${esc(resultData.prompt || '')}')" />`;
+                        }
+                        html += `</div></div>`;
+                        body.innerHTML = html;
+                        body.classList.add('open');
+                        const chevron = block.querySelector('.tool-call-chevron');
+                        if (chevron) chevron.classList.add('open');
+                      }
+                    }
+                  } catch (_) {}
+                }
+                if (parsed.tool_name === 'generate_video') {
+                  try {
+                    const resultData = JSON.parse(parsed.content);
+                    if (resultData.success && resultData.video) {
+                      hasMedia = true;
+                      const body = block.querySelector('.tool-call-body');
+                      if (body) {
+                        const dataUrl = 'data:video/mp4;base64,' + resultData.video.base64;
+                        body.innerHTML = `
+                          <div class="generated-media-container">
+                            <div class="generated-media-label">Video: ${esc(resultData.prompt || '')} (${resultData.video.duration || '?'}s)</div>
+                            <video class="generated-video" controls preload="metadata">
+                              <source src="${dataUrl}" type="video/mp4" />
+                            </video>
+                          </div>`;
+                        body.classList.add('open');
+                        const chevron = block.querySelector('.tool-call-chevron');
+                        if (chevron) chevron.classList.add('open');
+                      }
+                    }
+                  } catch (_) {}
+                }
+                if (parsed.tool_name === 'text_to_speech') {
+                  try {
+                    const resultData = JSON.parse(parsed.content);
+                    if (resultData.success && resultData.audio) {
+                      hasMedia = true;
+                      const body = block.querySelector('.tool-call-body');
+                      if (body) {
+                        const dataUrl = 'data:audio/mpeg;base64,' + resultData.audio.base64;
+                        body.innerHTML = `
+                          <div class="generated-audio-container">
+                            <div class="generated-media-label">Audio: ${esc(resultData.text_preview || '')}</div>
+                            <audio controls preload="metadata">
+                              <source src="${dataUrl}" type="audio/mpeg" />
+                            </audio>
+                          </div>`;
+                        body.classList.add('open');
+                        const chevron = block.querySelector('.tool-call-chevron');
+                        if (chevron) chevron.classList.add('open');
+                      }
+                    }
+                  } catch (_) {}
+                }
+
+                // Set body content (preview) — skip if we rendered a screenshot or media
+                if (!hasScreenshot && !hasMedia) {
                   const body = block.querySelector('.tool-call-body');
                   if (body) {
                     const preview = (parsed.content || '').substring(0, 500);
@@ -3029,6 +3130,25 @@ const App = {
 
     const msg = `Update the artifact "${artifact.title}" (type: ${artifact.type}): ${changeRequest}\n\nProduce the full updated artifact wrapped in <artifact type="${artifact.type}" title="${artifact.title}"> tags.`;
     this.sendMessageInPanel(focusedPanel.id, msg);
+  },
+
+  // ── Media viewers for Action Panel ──────────────────────────
+  viewGeneratedImage(filename, dataUrl, prompt) {
+    const viewHTML = `
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+          <div style="font-size:12px;color:var(--text-secondary);line-height:1.4;">${esc(prompt)}</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">${esc(filename)}</div>
+        </div>
+        <div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--bg-page);">
+          <img src="${dataUrl}" style="max-width:100%;max-height:100%;border-radius:8px;box-shadow:0 2px 16px rgba(0,0,0,0.2);" />
+        </div>
+        <div style="padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0;">
+          <button onclick="(() => { const a=document.createElement('a'); a.href='${dataUrl}'; a.download='${esc(filename)}'; a.click(); })()" style="padding:4px 12px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Download</button>
+          <button onclick="navigator.clipboard.writeText('${esc(filename)}').then(()=>this.textContent='Copied!')" style="padding:4px 12px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Copy Filename</button>
+        </div>
+      </div>`;
+    this.openDynamicView('\u{1F5BC}', 'Generated Image', viewHTML);
   },
 
   // Open browser component dynamically
@@ -6719,7 +6839,7 @@ function formatContent(text) {
       const id = 'artifact-' + (++_artifactCounter);
       _artifacts[id] = { id, type, title, content: content.trim() };
       const placeholder = `__ARTIFACT_${artifactPlaceholders.length}__`;
-      const icon = type === 'html' ? '\u{1F310}' : type === 'code' ? '\u{1F4BB}' : type === 'svg' ? '\u{1F3A8}' : type === 'markdown' ? '\u{1F4C4}' : '\u{1F4E6}';
+      const icon = type === 'html' ? '\u{1F310}' : type === 'code' ? '\u{1F4BB}' : type === 'svg' ? '\u{1F3A8}' : type === 'markdown' ? '\u{1F4C4}' : type === 'image' ? '\u{1F5BC}' : type === 'video' ? '\u{1F3AC}' : type === 'audio' ? '\u{1F50A}' : '\u{1F4E6}';
       artifactPlaceholders.push(
         `<div class="artifact-card" onclick="App.showArtifact('${id}')">` +
         `<span class="artifact-icon">${icon}</span>` +

@@ -248,6 +248,7 @@ pub const ORCHESTRATOR_TOOLS: &[&str] = &[
     "save_memory", "create_tool", "install_package", "browser",
     "load_skill", "dispatch_agents", "execute_package_tool", "ask_user_questions",
     "open_agent_panel", "web_search", "web_scraper", "check_session",
+    "generate_image", "edit_image", "generate_video", "text_to_speech",
 ];
 
 /// Chat engine — stateless functions that operate on a database connection.

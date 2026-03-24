@@ -14,6 +14,7 @@
 pub mod manifest;
 pub mod executor;
 pub mod google;
+pub mod media;
 pub mod web;
 pub mod diagnostic;
 pub mod runtime;
@@ -164,6 +165,12 @@ impl ToolRegistry {
 
         // Self-diagnostic tool
         registry.register(Box::new(diagnostic::DiagnosticTool));
+
+        // Media generation tools (image, video, audio, editing)
+        registry.register(Box::new(media::GenerateImageTool));
+        registry.register(Box::new(media::EditImageTool));
+        registry.register(Box::new(media::GenerateVideoTool));
+        registry.register(Box::new(media::TextToSpeechTool));
 
         // Google API tools — Gmail/Calendar now provided by marketplace packages
         // Only Drive search remains as native (no marketplace package yet)
