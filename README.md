@@ -1,30 +1,58 @@
-# Chitty Workspace
+<p align="center">
+  <img src="Public/chitty-icon.png" alt="Chitty Workspace" width="120" />
+</p>
 
-A local-first AI assistant with agents, tools, marketplace packages, and bring-your-own-key (BYOK) provider support. Runs entirely on your machine — no cloud server required.
+<h1 align="center">Chitty Workspace</h1>
 
-## Documentation
+<p align="center">
+  <strong>Your local-first AI desktop assistant with agents, tools, and a marketplace.</strong>
+</p>
 
-- [Application Feature List and Usage Guide](docs/application-feature-list.md)
+<p align="center">
+  <a href="https://chitty.ai">chitty.ai</a> &middot;
+  <a href="https://chitty.ai/marketplace">Marketplace</a> &middot;
+  <a href="docs/application-feature-list.md">Documentation</a> &middot;
+  <a href="https://github.com/MTPython406/Chitty-Workspace/releases">Download</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/MTPython406/Chitty-Workspace/releases"><img src="https://img.shields.io/github/v/release/MTPython406/Chitty-Workspace?style=flat-square&label=release" alt="Release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/MTPython406/Chitty-Workspace?style=flat-square" alt="MIT License" /></a>
+  <a href="https://github.com/MTPython406/Chitty-Workspace/stargazers"><img src="https://img.shields.io/github/stars/MTPython406/Chitty-Workspace?style=flat-square" alt="Stars" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/badge/rust-2021-orange?style=flat-square&logo=rust" alt="Rust" />
+</p>
+
+---
 
 ## What is Chitty Workspace?
 
-Chitty Workspace is a standalone desktop AI assistant that gives you full control over your AI experience:
+Chitty Workspace is a standalone desktop AI assistant that runs entirely on your machine. Bring your own API keys, install tool packages from the marketplace, automate your browser, and schedule agents to work for you — all without sending data to a third-party server.
 
-- **Default Chitty Agent** — Built-in system administrator that knows your entire setup — tools, packages, providers, models, and can help you build anything
-- **Agent System** — Create specialized AI agents with custom instructions, tool sets, and execution configs
-- **Agent Builder** — AI-powered agent creation — describe what you need, Chitty builds it
-- **Marketplace Packages** — Install or build tool packages (web scraping, Google Cloud, social media, and more)
-- **Browser Automation** — Control your real Chrome/Edge browser via the Chitty Browser Extension
-- **Slash Commands** — `/schedule`, `/help`, and more — extensible command system
-- **Agent Scheduler** — Schedule agents to run tasks autonomously on cron expressions
-- **Native Tools** — File operations, terminal commands, code search built into the binary
-- **Persistent Memory** — Chitty remembers your preferences, project context, and feedback across sessions
-- **Project Context** — Drop a `chitty.md` in any project and Chitty automatically understands it
-- **Multi-Panel** — Run multiple agents side-by-side, Chitty can delegate tasks between panels
-- **Session Auto-Approve** — Approve once, auto-approve the rest of the session for smooth workflows
-- **BYOK Providers** — Use your own API keys for OpenAI, Anthropic, Google, xAI, or run models locally with Ollama
-- **Cross-Platform Terminal** — PowerShell (Windows), zsh (macOS), sh (Linux) — works everywhere
-- **100% Local** — All data stays on your machine in SQLite. API keys stored in OS keyring.
+**Key highlights:**
+
+- **100% Local** — All data stays on your machine. API keys stored in your OS keyring, never in plain text.
+- **Bring Your Own Key** — Use OpenAI, Anthropic, Google, xAI, or run models locally with Ollama.
+- **Marketplace Packages** — Extend capabilities with one-click installs: Google Cloud, Gmail, Calendar, Slack, and more.
+- **Browser Automation** — Control your real Chrome/Edge browser via the Chitty Browser Extension.
+- **Agent System** — Create specialized agents with custom instructions, scoped tools, and scheduled execution.
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **Default Chitty Agent** | Built-in system administrator that knows your entire setup |
+| **Agent Builder** | Describe what you need — Chitty builds the agent for you |
+| **Marketplace Packages** | Install tool packages for Google Cloud, Gmail, Calendar, Slack, social media, and more |
+| **Sub-Agent Architecture** | Packages generate focused sub-agents scoped to specific datasets or workflows |
+| **Browser Automation** | Navigate, click, type, screenshot — agents control your actual browser sessions |
+| **Slash Commands** | `/schedule`, `/help`, and more — extensible command system |
+| **Agent Scheduler** | Schedule agents to run autonomously on cron expressions |
+| **Native Tools** | File operations, terminal commands, code search, web search & scraping |
+| **Persistent Memory** | Remembers preferences, project context, and feedback across sessions |
+| **Project Context** | Drop a `chitty.md` in any project — Chitty automatically understands it |
+| **Multi-Panel** | Run multiple agents side-by-side with cross-panel delegation |
+| **Approval System** | Approve once, auto-approve for the session, or set agents to full auto mode |
 
 ## Quick Start
 
@@ -41,12 +69,12 @@ cd Chitty-Workspace
 cargo build --release
 ```
 
-The binary will be at `target/release/chitty-workspace.exe`.
+The binary will be at `target/release/chitty-workspace.exe` (Windows) or `target/release/chitty-workspace` (macOS/Linux).
 
 ### Run
 
 ```bash
-# Start Chitty Workspace (default — opens system tray + WebView2 UI)
+# Start Chitty Workspace (opens system tray + WebView2 UI)
 chitty-workspace
 
 # Show configuration
@@ -73,7 +101,7 @@ chitty-workspace agents
 │  │   memories + tools + history)                  │
 │  ├── Tool calling loop with approval system       │
 │  ├── Streaming SSE responses                      │
-│  └── Slash command system (/schedule, /help)       │
+│  └── Slash command system (/schedule, /help)      │
 ├──────────────────────────────────────────────────┤
 │  Agents            │  Providers (BYOK)            │
 │  ├── Chitty (sys)  │  ├── OpenAI                  │
@@ -90,104 +118,7 @@ chitty-workspace agents
 └──────────────────────────────────────────────────┘
 ```
 
-## Core Concepts
-
-### Agents
-
-An Agent is the central unit of Chitty Workspace. It combines:
-
-- **Instructions** — System prompt that defines the agent's role and behavior
-- **Tools** — Which tools the agent can use (empty = all tools)
-- **Execution Config** — Max iterations, temperature, max tokens, approval mode
-- **Preferences** — Preferred provider/model, project scope
-
-The default **Chitty** agent is a system administrator that understands the entire platform — tools, packages, providers, models, scheduling, and troubleshooting.
-
-### Marketplace Packages
-
-Packages are bundles of tools that extend Chitty's capabilities. Built-in packages include:
-
-| Package | Tools | Description |
-|---------|-------|-------------|
-| **web-tools** | web_search, web_scraper | Search the web and scrape websites |
-| **google-cloud** | gcloud_bigquery, cloud_storage | BigQuery queries and Cloud Storage |
-| **social-media** | x_twitter | Post and search on X/Twitter |
-
-See [Building Packages](#building-marketplace-packages) below to create your own.
-
-### Slash Commands
-
-Type `/` in the chat to use commands:
-
-| Command | Description |
-|---------|-------------|
-| `/schedule` | Create a new scheduled agent task |
-| `/schedules` | List all scheduled tasks |
-| `/help` | Show available commands |
-
-### Agent Scheduler
-
-Schedule agents to run tasks autonomously:
-
-```
-/schedule
-→ Agent: [Personal Assistant]
-→ Task: "Check my email and calendar, give me a morning briefing"
-→ Schedule: Weekdays at 9:00 AM
-→ Create Schedule ✓
-```
-
-Scheduled tasks run in the background with auto-approve enabled. View and manage with `/schedules`.
-
-### Browser Automation
-
-The Chitty Browser Extension gives agents full control of your real Chrome/Edge browser:
-
-- **Navigate** — Open any URL
-- **Click & Type** — Interact with page elements
-- **Screenshot** — Capture page state
-- **Read Text** — Extract content from pages
-- **Execute JS** — Run JavaScript on pages
-
-Your login sessions are available — agents can check Gmail, LinkedIn, GitHub, etc. using your existing sessions.
-
-### Approval System
-
-Sensitive actions (terminal commands, file writes, browser interactions) require user approval:
-
-- **Allow once** — Approve this single action
-- **Always allow for session** — Auto-approve all remaining actions this session
-- **Deny** — Reject the action
-
-Agents can also be configured with `approval_mode: "auto"` to skip approval entirely.
-
-### Memory System
-
-Chitty remembers what matters across conversations:
-
-| Type | Purpose | Scope |
-|------|---------|-------|
-| **User** | Preferences, expertise | Global |
-| **Feedback** | Corrections you've given | Global / Project |
-| **Project** | Project decisions and context | Project |
-| **Reference** | Pointers to external docs | Any |
-
-### Project Context (chitty.md)
-
-Drop a `chitty.md` (or `.chitty/chitty.md`) in any project directory. Chitty automatically loads it as context:
-
-```markdown
-# MyProject
-## Tech Stack
-React 18, TypeScript, Vite
-## How to Run
-npm run dev
-## Conventions
-- Use functional components with hooks
-- All API calls go through src/services/api.ts
-```
-
-### Providers
+## Providers
 
 Bring your own keys. Chitty supports:
 
@@ -200,151 +131,49 @@ Bring your own keys. Chitty supports:
 | **Ollama** | Local | Llama, Qwen, Mistral, Phi, etc. |
 | **HuggingFace** | Local (sidecar) | Any GGUF model |
 
-API keys are stored in your OS keyring (Windows Credential Manager / macOS Keychain / Linux Secret Service), never in plain text.
+## Marketplace Packages
 
----
+Packages extend Chitty with new tools. Browse and install from the [Chitty Marketplace](https://chitty.ai/marketplace), or build your own.
+
+| Package | Tools | Description |
+|---------|-------|-------------|
+| [google-cloud](https://github.com/MTPython406/chitty-pkg-google-cloud) | BigQuery, Cloud Storage | Query data and manage storage |
+| [google-gmail](https://github.com/MTPython406/chitty-pkg-google-gmail) | Gmail read, send | Read and send email |
+| [google-calendar](https://github.com/MTPython406/chitty-pkg-google-calendar) | Calendar list, create, update, delete, freebusy | Manage your calendar |
+| web-tools | web_search, web_scraper | Search the web and scrape pages |
+| social-media | x_twitter | Post and search on X/Twitter |
+
+See the [Package Development Guide](docs/application-feature-list.md) to build and publish your own packages.
 
 ## Building Marketplace Packages
 
-Marketplace packages let you extend Chitty with custom tools. Each package is a directory with a `package.json` manifest and one or more tool directories.
-
-### Package Structure
+Packages are directories with a `package.json` manifest and tool subdirectories. Each tool has a `manifest.json` and a script (Python, Node, PowerShell, or Shell).
 
 ```
-~/.chitty-workspace/tools/marketplace/
-└── my-package/
-    ├── package.json              # Package manifest
-    ├── my-tool/
-    │   ├── manifest.json         # Tool definition
-    │   └── tool.py               # Tool script (Python, Node, PowerShell, or Shell)
-    └── another-tool/
-        ├── manifest.json
-        └── tool.js
+my-package/
+├── package.json          # Package manifest
+├── SKILL.md              # Agent instructions (optional)
+├── my-tool/
+│   ├── manifest.json     # Tool definition (name, params, instructions)
+│   └── tool.py           # Script — reads JSON from stdin, writes JSON to stdout
+└── another-tool/
+    ├── manifest.json
+    └── tool.js
 ```
 
-### package.json
+Tools receive JSON on stdin and output JSON to stdout:
 
-```json
-{
-  "name": "my-package",
-  "display_name": "My Custom Package",
-  "vendor": "YourName",
-  "description": "A package that does something useful",
-  "version": "1.0.0",
-  "icon": "wrench",
-  "color": "#8b5cf6",
-  "tools": ["my-tool", "another-tool"],
-  "setup_steps": [
-    {
-      "id": "install_deps",
-      "label": "Install Python dependencies",
-      "check_command": "pip show requests",
-      "install_command": "pip install requests",
-      "help_text": "Installs the requests library for HTTP calls.",
-      "required": true
-    }
-  ]
-}
-```
-
-### Tool manifest.json
-
-```json
-{
-  "name": "my-tool",
-  "display_name": "My Tool",
-  "description": "Does something useful with a URL",
-  "runtime": "python",
-  "timeout_seconds": 30,
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "url": {
-        "type": "string",
-        "description": "The URL to process"
-      },
-      "format": {
-        "type": "string",
-        "description": "Output format (json or text)",
-        "enum": ["json", "text"]
-      }
-    },
-    "required": ["url"]
-  },
-  "instructions": "Use my-tool when the user asks to process a URL. Pass the URL and optional format parameter."
-}
-```
-
-### Tool Script
-
-Scripts receive JSON on stdin and must output JSON to stdout:
-
-**Python (tool.py):**
 ```python
-import sys
-import json
+import sys, json
 
 input_data = json.loads(sys.stdin.read())
 params = input_data.get("parameters", {})
-url = params.get("url", "")
 
-# Do your work here
-result = {"processed": url, "status": "ok"}
-
+result = {"processed": params.get("url"), "status": "ok"}
 print(json.dumps({"success": True, "result": result}))
 ```
 
-**Node.js (tool.js):**
-```javascript
-const input = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
-const params = input.parameters || {};
-
-const result = { processed: params.url, status: 'ok' };
-console.log(JSON.stringify({ success: true, result }));
-```
-
-### Supported Runtimes
-
-| Runtime | File Extension | Command |
-|---------|---------------|---------|
-| `python` | `.py` | `python tool.py` |
-| `node` | `.js` | `node tool.js` |
-| `powershell` | `.ps1` | `powershell -File tool.ps1` |
-| `shell` | `.sh` | `sh tool.sh` |
-
-### Setup Steps
-
-Setup steps run when the package is first installed. Each step has:
-
-| Field | Description |
-|-------|-------------|
-| `id` | Unique identifier |
-| `label` | Human-readable description |
-| `check_command` | Command to verify if already set up (exit 0 = done) |
-| `install_command` | Command to run if check fails |
-| `help_text` | Shown to user during setup |
-| `required` | If true, package won't work without it |
-
-### Tool Instructions
-
-The `instructions` field in `manifest.json` is injected into the LLM's system prompt. Write clear guidance for when and how the agent should use your tool:
-
-```
-"instructions": "Use web_scraper to extract structured data from web pages. Pass the URL and specify what elements to extract (text, links, tables, or specific CSS selectors). Returns clean extracted content."
-```
-
-### Testing Your Tool
-
-```bash
-# Test directly from the command line
-echo '{"parameters":{"url":"https://example.com"}}' | python my-tool/tool.py
-```
-
-### Publishing
-
-Packages can be shared as directories or published to the [Chitty Marketplace](https://chitty.ai/marketplace) for others to install.
-
----
+Supported runtimes: `python`, `node`, `powershell`, `shell`.
 
 ## Data Storage
 
@@ -353,15 +182,7 @@ Everything stays on your machine:
 ```
 ~/.chitty-workspace/
 ├── config.toml              # Settings
-├── workspace.db             # SQLite database
-│   ├── conversations        # Chat sessions
-│   ├── messages             # Full message history
-│   ├── agents               # Agent definitions
-│   ├── memories             # Persistent memories
-│   ├── scheduled_tasks      # Cron-based agent schedules
-│   ├── custom_tools         # User/AI-generated tools
-│   ├── token_usage          # Token tracking per conversation
-│   └── provider_configs     # Provider settings
+├── workspace.db             # SQLite database (conversations, agents, memories, schedules)
 ├── tools/
 │   ├── marketplace/         # Installed marketplace packages
 │   └── custom/              # User-created tools
@@ -376,25 +197,12 @@ Chitty runs a local server at `http://localhost:8770` with a REST API:
 |----------|--------|-------------|
 | `/api/agents` | GET/POST | List or create agents |
 | `/api/agents/:id` | GET/PUT/DELETE | Manage a specific agent |
+| `/api/agents/:id/sub-agents` | POST | Create a scoped sub-agent |
 | `/api/schedules` | GET/POST | List or create scheduled tasks |
-| `/api/schedules/:id` | GET/PUT/DELETE | Manage a scheduled task |
-| `/api/schedules/:id/run` | POST | Manually trigger a task |
+| `/api/skills` | GET | List available skills |
 | `/api/tools` | GET | List all available tools |
-| `/api/conversations` | GET | List conversations |
-| `/api/providers` | GET | List configured providers |
 | `/api/marketplace/packages` | GET | List installed packages |
-
-## Building the Installer
-
-```bash
-# 1. Build release binary
-cargo build --release
-
-# 2. Build installer (requires Inno Setup 6)
-"C:\Users\pauls\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer/ChittyWorkspaceInstaller.iss
-
-# Output: installer/output/ChittyWorkspace-Setup-0.1.0.exe
-```
+| `/api/providers` | GET | List configured providers |
 
 ## Tech Stack
 
@@ -403,8 +211,12 @@ cargo build --release
 - **UI:** System tray (tray-icon + tao) + WebView2 (wry)
 - **Storage:** SQLite (rusqlite, WAL mode)
 - **HTTP:** reqwest (LLM API calls) + axum (local UI server)
-- **Scheduling:** cron crate (expression parsing)
+- **Scheduling:** cron crate
 - **Secure Storage:** OS keyring (keyring crate)
+
+## Contributing
+
+Chitty Workspace is open source and we welcome contributions! Please see our contributing guidelines (coming soon) for details.
 
 ## License
 
@@ -412,4 +224,7 @@ cargo build --release
 
 ---
 
-Built by [DataVisions](https://datavisions.ai) — Chitty Workspace is a free, open-source product. For enterprise teams needing governance, multi-tenancy, and DataHub, see [DataVisions Enterprise](https://datavisions.ai).
+<p align="center">
+  Built by <a href="https://datavisions.ai">DataVisions.ai</a><br/>
+  <a href="https://chitty.ai">chitty.ai</a> — Free, open-source AI desktop assistant
+</p>
