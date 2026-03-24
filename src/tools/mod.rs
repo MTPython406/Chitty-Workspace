@@ -108,7 +108,9 @@ impl ToolResult {
         } else if let Some(s) = self.output.as_str() {
             s.to_string()
         } else {
-            serde_json::to_string_pretty(&self.output).unwrap_or_default()
+            // Use compact JSON (not pretty) to avoid control character issues
+            // when content contains large base64 strings (media tools)
+            serde_json::to_string(&self.output).unwrap_or_default()
         }
     }
 }

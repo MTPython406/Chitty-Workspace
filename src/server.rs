@@ -1891,7 +1891,21 @@ async fn process_chat(
                 .await;
             drop(tool_runtime);
 
-            let mut result_content = result.as_content_string();
+            let full_result_content = result.as_content_string();
+
+            // Send FULL ToolResult to SSE (frontend needs complete data for media rendering)
+            let _ = sse_tx
+                .send(StreamChunk::ToolResult {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    content: full_result_content.clone(),
+                    success: result.success,
+                    duration_ms,
+                })
+                .await;
+
+            // Now truncate for LLM context and DB (saves tokens)
+            let mut result_content = full_result_content;
 
             // Size-limit tool results to prevent context bloat
             // Browser screenshots (base64) can be 100K+ chars
@@ -1899,6 +1913,26 @@ async fn process_chat(
                 if let Some(start) = result_content.find("data:image/") {
                     let preview = result_content[..start.min(500)].to_string();
                     result_content = format!("{}[screenshot captured — image data stripped from context to save tokens]", preview);
+                }
+            }
+            // For media tools, strip base64 data from LLM context but keep metadata
+            if matches!(tc.name.as_str(), "generate_image" | "edit_image" | "generate_video" | "text_to_speech") {
+                // Replace base64 data with placeholder to save tokens
+                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&result_content) {
+                    if let Some(images) = val.get_mut("images").and_then(|v| v.as_array_mut()) {
+                        for img in images.iter_mut() {
+                            if let Some(obj) = img.as_object_mut() {
+                                obj.insert("base64".to_string(), serde_json::json!("[image data sent to UI]"));
+                            }
+                        }
+                    }
+                    if let Some(video) = val.get_mut("video").and_then(|v| v.as_object_mut()) {
+                        video.insert("base64".to_string(), serde_json::json!("[video data sent to UI]"));
+                    }
+                    if let Some(audio) = val.get_mut("audio").and_then(|v| v.as_object_mut()) {
+                        audio.insert("base64".to_string(), serde_json::json!("[audio data sent to UI]"));
+                    }
+                    result_content = serde_json::to_string(&val).unwrap_or(result_content);
                 }
             }
             // Cap any single tool result at 20K chars (prevents full HTML pages, huge JSON, etc.)
@@ -1911,23 +1945,6 @@ async fn process_chat(
             }
 
             tracing::info!("  Tool {} completed: success={}, {}ms, result_len={}", tc.name, result.success, duration_ms, result_content.len());
-            let result_preview = if result_content.len() > 200 {
-                format!("{}...", &result_content[..200])
-            } else {
-                result_content.clone()
-            };
-            tracing::debug!("  Tool {} result: {}", tc.name, result_preview);
-
-            // Send ToolResult SSE event
-            let _ = sse_tx
-                .send(StreamChunk::ToolResult {
-                    id: tc.id.clone(),
-                    name: tc.name.clone(),
-                    content: result_content.clone(),
-                    success: result.success,
-                    duration_ms,
-                })
-                .await;
 
             // Save tool result message to DB
             let db = state.db.clone();
@@ -3751,9 +3768,9 @@ async fn agent_builder_handler(
             StreamChunk::ToolCallStart { id, name } => Event::default()
                 .event("tool_call_start")
                 .data(serde_json::to_string(&serde_json::json!({"tool_call_id": id, "tool_name": name})).unwrap_or_default()),
-            StreamChunk::ToolResult { name, content, .. } => Event::default()
+            StreamChunk::ToolResult { id, name, content, success, duration_ms } => Event::default()
                 .event("tool_result")
-                .data(serde_json::to_string(&serde_json::json!({"tool_name": name, "content": content})).unwrap_or_default()),
+                .data(serde_json::to_string(&serde_json::json!({"tool_call_id": id, "tool_name": name, "content": content, "success": success, "duration_ms": duration_ms})).unwrap_or_default()),
             StreamChunk::Done => Event::default().event("done").data("{}"),
             StreamChunk::Error(err) => Event::default()
                 .event("error")
