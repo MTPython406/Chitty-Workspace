@@ -2418,6 +2418,12 @@ const App = {
                         body.classList.add('open');
                         const chevron = toolBlock.querySelector('.tool-call-chevron');
                         if (chevron) chevron.classList.add('open');
+                        // Attach video to message so it survives renderPanel()
+                        const lastMsgV = panel.messages[panel.messages.length - 1];
+                        if (lastMsgV && lastMsgV.role === 'assistant') {
+                          if (!lastMsgV.media) lastMsgV.media = [];
+                          lastMsgV.media.push({ type: 'video', filename: resultData.video.filename, prompt: resultData.prompt || '' });
+                        }
                       }
                     } catch (_) {}
                   }
@@ -2439,6 +2445,12 @@ const App = {
                         body.classList.add('open');
                         const chevron = toolBlock.querySelector('.tool-call-chevron');
                         if (chevron) chevron.classList.add('open');
+                        // Attach audio to message so it survives renderPanel()
+                        const lastMsgA = panel.messages[panel.messages.length - 1];
+                        if (lastMsgA && lastMsgA.role === 'assistant') {
+                          if (!lastMsgA.media) lastMsgA.media = [];
+                          lastMsgA.media.push({ type: 'audio', filename: resultData.audio.filename, prompt: resultData.text_preview || '' });
+                        }
                       }
                     } catch (_) {}
                   }

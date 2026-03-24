@@ -328,6 +328,9 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         // Media serving (generated images, videos, audio from ~/.chitty-workspace/media/)
         .route("/api/media/*filepath", get(serve_media_handler))
         .route("/api/media/capabilities", get(media_capabilities_handler))
+        // System defaults (per-capability provider/model preferences)
+        .route("/api/defaults", get(get_defaults_handler))
+        .route("/api/defaults", put(update_defaults_handler))
         .with_state(state.clone());
 
     // Try the requested port first, then fall back to nearby ports
@@ -5949,6 +5952,64 @@ async fn dispatch_single_agent(
         "response": final_text,
         "tool_calls": tool_trace,
     })
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// System defaults — per-capability provider/model preferences
+// ---------------------------------------------------------------------------
+
+async fn get_defaults_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    match config::AppConfig::load(&data_dir) {
+        Ok(cfg) => Json(serde_json::json!({
+            "chat_provider": cfg.defaults.chat_provider,
+            "chat_model": cfg.defaults.chat_model,
+            "system_agent_provider": cfg.defaults.system_agent_provider,
+            "system_agent_model": cfg.defaults.system_agent_model,
+            "image_provider": cfg.defaults.image_provider,
+            "image_model": cfg.defaults.image_model,
+            "video_provider": cfg.defaults.video_provider,
+            "video_model": cfg.defaults.video_model,
+            "tts_provider": cfg.defaults.tts_provider,
+            "tts_model": cfg.defaults.tts_model,
+            "stt_provider": cfg.defaults.stt_provider,
+            "stt_model": cfg.defaults.stt_model,
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn update_defaults_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let mut cfg = match config::AppConfig::load(&data_dir) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    };
+
+    // Partial update — only set fields that are present in the request
+    if let Some(v) = body.get("chat_provider") { cfg.defaults.chat_provider = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("chat_model") { cfg.defaults.chat_model = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("system_agent_provider") { cfg.defaults.system_agent_provider = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("system_agent_model") { cfg.defaults.system_agent_model = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("image_provider") { cfg.defaults.image_provider = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("image_model") { cfg.defaults.image_model = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("video_provider") { cfg.defaults.video_provider = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("video_model") { cfg.defaults.video_model = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("tts_provider") { cfg.defaults.tts_provider = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("tts_model") { cfg.defaults.tts_model = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("stt_provider") { cfg.defaults.stt_provider = v.as_str().map(|s| s.to_string()); }
+    if let Some(v) = body.get("stt_model") { cfg.defaults.stt_model = v.as_str().map(|s| s.to_string()); }
+
+    if let Err(e) = cfg.save(&data_dir) {
+        tracing::error!("Failed to save config: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+    }
+
+    tracing::info!("System defaults updated");
+    (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
 }
 
 // ---------------------------------------------------------------------------

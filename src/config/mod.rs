@@ -24,6 +24,9 @@ pub struct AppConfig {
     pub ollama: OllamaConfig,
     /// HuggingFace sidecar settings
     pub huggingface: HuggingFaceConfig,
+    /// System-wide defaults for each capability (chat, image, video, tts, stt)
+    #[serde(default)]
+    pub defaults: SystemDefaults,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +49,30 @@ pub struct HuggingFaceConfig {
     pub models_dir: Option<String>,
 }
 
+/// System-wide defaults for each capability type.
+/// Each tool/feature reads its default provider/model from here.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SystemDefaults {
+    /// Default provider/model for chat conversations
+    pub chat_provider: Option<String>,
+    pub chat_model: Option<String>,
+    /// Default provider/model for system operations (memory, compaction, summarization)
+    pub system_agent_provider: Option<String>,
+    pub system_agent_model: Option<String>,
+    /// Default provider/model for image generation
+    pub image_provider: Option<String>,
+    pub image_model: Option<String>,
+    /// Default provider/model for video generation
+    pub video_provider: Option<String>,
+    pub video_model: Option<String>,
+    /// Default provider/model for text-to-speech
+    pub tts_provider: Option<String>,
+    pub tts_model: Option<String>,
+    /// Default provider/model for speech-to-text
+    pub stt_provider: Option<String>,
+    pub stt_model: Option<String>,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -66,6 +93,7 @@ impl Default for AppConfig {
                 sidecar_port: 8766,
                 models_dir: Some("C:\\LLM Models".to_string()),
             },
+            defaults: SystemDefaults::default(),
         }
     }
 }

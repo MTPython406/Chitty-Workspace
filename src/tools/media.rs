@@ -25,22 +25,44 @@ fn unique_filename(prefix: &str, ext: &str) -> String {
     format!("{}{}_{}.{}", prefix, ts, hash, ext)
 }
 
-/// Get the provider and API key for media operations
-fn get_provider_config(args: &serde_json::Value) -> Result<(String, String), String> {
-    // Check if provider is explicitly specified in args
-    let provider = args["provider"].as_str()
-        .unwrap_or("xai")
-        .to_string();
+/// Get the provider and API key for media operations.
+/// Resolution order: 1) explicit arg, 2) system default for capability, 3) first provider with key
+fn get_provider_config(args: &serde_json::Value, capability: &str) -> Result<(String, String), String> {
+    // 1. Check if provider is explicitly specified in tool args
+    if let Some(p) = args["provider"].as_str() {
+        if let Ok(Some(key)) = crate::config::get_api_key(p) {
+            return Ok((p.to_string(), key));
+        }
+        return Err(format!("No API key configured for '{}'. Add one in Settings > Providers.", p));
+    }
 
-    // Get API key from keyring
-    let api_key = crate::config::get_api_key(&provider)
-        .map_err(|e| format!("Failed to access keyring: {}", e))?
-        .ok_or_else(|| format!(
-            "No API key configured for '{}'. Add one in Settings > Providers.",
-            provider
-        ))?;
+    // 2. Check system defaults for this capability
+    let data_dir = storage::default_data_dir();
+    if let Ok(config) = crate::config::AppConfig::load(&data_dir) {
+        let default_provider = match capability {
+            "image" => config.defaults.image_provider.as_deref(),
+            "video" => config.defaults.video_provider.as_deref(),
+            "tts" => config.defaults.tts_provider.as_deref(),
+            "stt" => config.defaults.stt_provider.as_deref(),
+            _ => None,
+        };
+        if let Some(p) = default_provider {
+            if let Ok(Some(key)) = crate::config::get_api_key(p) {
+                info!("Using system default provider '{}' for {}", p, capability);
+                return Ok((p.to_string(), key));
+            }
+        }
+    }
 
-    Ok((provider, api_key))
+    // 3. Fallback: find first provider with an API key
+    for provider in &["xai", "openai", "google"] {
+        if let Ok(Some(key)) = crate::config::get_api_key(provider) {
+            info!("Auto-selected provider '{}' for {} (no default set)", provider, capability);
+            return Ok((provider.to_string(), key));
+        }
+    }
+
+    Err(format!("No provider configured for {}. Add an API key in Settings > Providers.", capability))
 }
 
 // ─── Generate Image ─────────────────────────────────────────────────────────
@@ -104,7 +126,7 @@ impl NativeTool for GenerateImageTool {
             _ => return ToolResult::err("Missing required parameter: prompt"),
         };
 
-        let (provider, api_key) = match get_provider_config(args) {
+        let (provider, api_key) = match get_provider_config(args, "image") {
             Ok(v) => v,
             Err(e) => return ToolResult::err(e),
         };
@@ -233,7 +255,7 @@ impl NativeTool for EditImageTool {
             &image_bytes,
         );
 
-        let (provider, api_key) = match get_provider_config(args) {
+        let (provider, api_key) = match get_provider_config(args, "image") {
             Ok(v) => v,
             Err(e) => return ToolResult::err(e),
         };
@@ -340,7 +362,7 @@ impl NativeTool for GenerateVideoTool {
             _ => return ToolResult::err("Missing required parameter: prompt"),
         };
 
-        let (provider, api_key) = match get_provider_config(args) {
+        let (provider, api_key) = match get_provider_config(args, "video") {
             Ok(v) => v,
             Err(e) => return ToolResult::err(e),
         };
@@ -446,7 +468,7 @@ impl NativeTool for TextToSpeechTool {
             _ => return ToolResult::err("Missing required parameter: text"),
         };
 
-        let (provider, api_key) = match get_provider_config(args) {
+        let (provider, api_key) = match get_provider_config(args, "tts") {
             Ok(v) => v,
             Err(e) => return ToolResult::err(e),
         };
