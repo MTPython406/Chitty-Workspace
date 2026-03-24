@@ -815,9 +815,9 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   font-family: var(--font-main); font-weight: 500;
 }
 .generated-image {
-  max-width: 240px; border-radius: 8px; border: 1px solid var(--border);
+  max-width: 120px; border-radius: 6px; border: 1px solid var(--border);
   cursor: pointer; transition: all 0.2s ease;
-  max-height: 240px; object-fit: contain;
+  max-height: 120px; object-fit: cover;
 }
 .generated-image:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(59,130,246,0.15); }
 .media-grid {
@@ -825,6 +825,70 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   padding: 4px 0;
 }
 .media-grid.single { grid-template-columns: 1fr; }
+
+/* Media Manager — Action Panel split view */
+.media-manager { display: flex; flex: 1; overflow: hidden; }
+.media-manager-list {
+  width: 220px; min-width: 180px; border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+}
+.media-manager-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.media-manager-tab {
+  flex: 1; padding: 6px 4px; font-size: 11px; font-weight: 500; text-align: center;
+  cursor: pointer; color: var(--text-muted); border-bottom: 2px solid transparent;
+  transition: all 0.15s; background: none; border-top: none; border-left: none; border-right: none;
+}
+.media-manager-tab:hover { color: var(--text-primary); }
+.media-manager-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.media-manager-items {
+  flex: 1; overflow-y: auto; padding: 6px;
+}
+.media-manager-card {
+  position: relative; border-radius: 8px; overflow: hidden; cursor: pointer;
+  margin-bottom: 6px; border: 2px solid transparent; transition: border-color 0.15s;
+  background: #000;
+}
+.media-manager-card:hover { border-color: var(--accent); }
+.media-manager-card.selected { border-color: var(--accent); }
+.media-manager-card img, .media-manager-card video {
+  width: 100%; height: 100px; object-fit: cover; display: block;
+}
+.media-manager-card-overlay {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.85));
+  padding: 16px 8px 6px; color: #fff;
+}
+.media-manager-card-title {
+  font-size: 11px; font-weight: 600; line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.media-manager-card-meta {
+  font-size: 9px; opacity: 0.7; margin-top: 2px;
+}
+.media-manager-card .play-badge {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-size: 20px; color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+  pointer-events: none;
+}
+.media-manager-card .audio-badge {
+  display: flex; align-items: center; justify-content: center;
+  height: 100px; background: linear-gradient(135deg, #1e293b, #334155);
+}
+.media-manager-card .audio-badge span { font-size: 28px; }
+.media-manager-viewer {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-page);
+}
+.media-manager-viewer-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 12px;
+}
+.media-manager-count {
+  padding: 6px 8px; font-size: 10px; color: var(--text-muted);
+  text-align: center; border-top: 1px solid var(--border); flex-shrink: 0;
+}
+
 .generated-video {
   max-width: 100%; border-radius: 8px; border: 1px solid var(--border);
   background: #000;
@@ -2451,8 +2515,11 @@ const App = {
                           if (!lastMsg.media) lastMsg.media = [];
                           for (const img of resultData.images) {
                             lastMsg.media.push({ type: 'image', filename: img.filename, prompt: resultData.prompt || '' });
+                            this.addSessionMedia({ type: 'image', filename: img.filename, prompt: resultData.prompt || '' });
                           }
                         }
+                        // Auto-open Media Manager
+                        this.openMediaManager(resultData.images[0]?.filename);
                       }
                     } catch (mediaErr) { console.error('[MEDIA] image render error:', mediaErr); }
                   }
@@ -2479,7 +2546,10 @@ const App = {
                         if (lastMsgV && lastMsgV.role === 'assistant') {
                           if (!lastMsgV.media) lastMsgV.media = [];
                           lastMsgV.media.push({ type: 'video', filename: resultData.video.filename, prompt: resultData.prompt || '' });
+                          this.addSessionMedia({ type: 'video', filename: resultData.video.filename, prompt: resultData.prompt || '' });
                         }
+                        // Auto-open Media Manager
+                        this.openMediaManager(resultData.video.filename);
                       }
                     } catch (_) {}
                   }
@@ -2506,7 +2576,10 @@ const App = {
                         if (lastMsgA && lastMsgA.role === 'assistant') {
                           if (!lastMsgA.media) lastMsgA.media = [];
                           lastMsgA.media.push({ type: 'audio', filename: resultData.audio.filename, prompt: resultData.text_preview || '' });
+                          this.addSessionMedia({ type: 'audio', filename: resultData.audio.filename, prompt: resultData.text_preview || '' });
                         }
+                        // Auto-open Media Manager
+                        this.openMediaManager(resultData.audio.filename);
                       }
                     } catch (_) {}
                   }
@@ -3355,6 +3428,164 @@ const App = {
     this.toggleActionPanel(true);
   },
 
+  // ── Media Manager ──────────────────────────────────────────────
+  addSessionMedia(item) {
+    // item: { type: 'image'|'video'|'audio', filename, prompt, timestamp }
+    item.timestamp = item.timestamp || new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    _sessionMedia.push(item);
+  },
+
+  openMediaManager(selectedFilename) {
+    const viewHTML = `
+      <div class="media-manager">
+        <div class="media-manager-list">
+          <div class="media-manager-tabs">
+            <button class="media-manager-tab active" onclick="App.filterMediaManager('all', this)">All</button>
+            <button class="media-manager-tab" onclick="App.filterMediaManager('image', this)">Images</button>
+            <button class="media-manager-tab" onclick="App.filterMediaManager('video', this)">Videos</button>
+            <button class="media-manager-tab" onclick="App.filterMediaManager('audio', this)">Audio</button>
+          </div>
+          <div class="media-manager-items" id="mm-items"></div>
+          <div class="media-manager-count" id="mm-count"></div>
+        </div>
+        <div class="media-manager-viewer" id="mm-viewer">
+          <div class="media-manager-viewer-empty">Select media to preview</div>
+        </div>
+      </div>`;
+    this.openDynamicView('\u{1F4F7}', 'Media Manager', viewHTML);
+    this.toggleActionPanel(true);
+    this.renderMediaManagerItems('all', selectedFilename);
+  },
+
+  filterMediaManager(type, tabEl) {
+    document.querySelectorAll('.media-manager-tab').forEach(t => t.classList.remove('active'));
+    if (tabEl) tabEl.classList.add('active');
+    this.renderMediaManagerItems(type);
+  },
+
+  renderMediaManagerItems(filter, selectFilename) {
+    const container = document.getElementById('mm-items');
+    const countEl = document.getElementById('mm-count');
+    if (!container) return;
+
+    const items = filter === 'all' ? _sessionMedia : _sessionMedia.filter(m => m.type === filter);
+
+    if (items.length === 0) {
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:11px;">No media generated yet</div>';
+      if (countEl) countEl.textContent = '0 items in session';
+      return;
+    }
+
+    let html = '';
+    for (let i = items.length - 1; i >= 0; i--) {
+      const m = items[i];
+      const sel = (selectFilename && m.filename === selectFilename) ? ' selected' : (i === items.length - 1 && !selectFilename ? ' selected' : '');
+      const shortPrompt = (m.prompt || 'Untitled').substring(0, 40);
+      const typeLabel = m.type.charAt(0).toUpperCase() + m.type.slice(1);
+
+      if (m.type === 'image') {
+        const url = '/api/media/images/' + encodeURIComponent(m.filename);
+        html += `<div class="media-manager-card${sel}" onclick="App.selectMediaItem('${esc(m.filename)}', '${m.type}')">
+          <img src="${url}" alt="${esc(shortPrompt)}" loading="lazy" />
+          <div class="media-manager-card-overlay">
+            <div class="media-manager-card-title">${esc(shortPrompt)}</div>
+            <div class="media-manager-card-meta">${typeLabel} \u2022 ${m.timestamp}</div>
+          </div>
+        </div>`;
+      } else if (m.type === 'video') {
+        const url = '/api/media/videos/' + encodeURIComponent(m.filename);
+        html += `<div class="media-manager-card${sel}" onclick="App.selectMediaItem('${esc(m.filename)}', '${m.type}')">
+          <video src="${url}" preload="metadata" muted></video>
+          <span class="play-badge">\u25B6</span>
+          <div class="media-manager-card-overlay">
+            <div class="media-manager-card-title">${esc(shortPrompt)}</div>
+            <div class="media-manager-card-meta">${typeLabel} \u2022 ${m.timestamp}</div>
+          </div>
+        </div>`;
+      } else if (m.type === 'audio') {
+        html += `<div class="media-manager-card${sel}" onclick="App.selectMediaItem('${esc(m.filename)}', '${m.type}')">
+          <div class="audio-badge"><span>\u{1F3B5}</span></div>
+          <div class="media-manager-card-overlay">
+            <div class="media-manager-card-title">${esc(shortPrompt)}</div>
+            <div class="media-manager-card-meta">${typeLabel} \u2022 ${m.timestamp}</div>
+          </div>
+        </div>`;
+      }
+    }
+    container.innerHTML = html;
+    if (countEl) countEl.textContent = items.length + ' item' + (items.length !== 1 ? 's' : '') + ' in session';
+
+    // Auto-select the first (newest) or specified item
+    const toSelect = selectFilename || (items.length > 0 ? items[items.length - 1].filename : null);
+    if (toSelect) {
+      const item = _sessionMedia.find(m => m.filename === toSelect);
+      if (item) this.showMediaPreview(item);
+    }
+  },
+
+  selectMediaItem(filename, type) {
+    // Highlight selected card
+    document.querySelectorAll('.media-manager-card').forEach(c => c.classList.remove('selected'));
+    event.currentTarget?.classList.add('selected');
+    const item = _sessionMedia.find(m => m.filename === filename);
+    if (item) this.showMediaPreview(item);
+  },
+
+  showMediaPreview(item) {
+    const viewer = document.getElementById('mm-viewer');
+    if (!viewer) return;
+
+    let html = '';
+    if (item.type === 'image') {
+      const url = '/api/media/images/' + encodeURIComponent(item.filename);
+      html = `
+        <div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:12px;background:var(--bg-page);">
+          <img src="${url}" style="max-width:100%;max-height:100%;border-radius:8px;box-shadow:0 2px 16px rgba(0,0,0,0.2);" />
+        </div>
+        <div style="padding:6px 10px;border-top:1px solid var(--border);flex-shrink:0;">
+          <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;line-height:1.4;">${esc(item.prompt || '')}</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span style="font-size:9px;color:var(--text-muted);flex:1;">${esc(item.filename)}</span>
+            <button onclick="(() => { const a=document.createElement('a'); a.href='${url}'; a.download='${esc(item.filename)}'; a.click(); })()" style="padding:3px 8px;font-size:10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Download</button>
+          </div>
+        </div>`;
+    } else if (item.type === 'video') {
+      const url = '/api/media/videos/' + encodeURIComponent(item.filename);
+      html = `
+        <div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:12px;background:#000;">
+          <video controls autoplay preload="metadata" style="max-width:100%;max-height:100%;border-radius:8px;">
+            <source src="${url}" type="video/mp4" />
+          </video>
+        </div>
+        <div style="padding:6px 10px;border-top:1px solid var(--border);flex-shrink:0;">
+          <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;line-height:1.4;">${esc(item.prompt || '')}</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span style="font-size:9px;color:var(--text-muted);flex:1;">${esc(item.filename)}</span>
+            <button onclick="(() => { const a=document.createElement('a'); a.href='${url}'; a.download='${esc(item.filename)}'; a.click(); })()" style="padding:3px 8px;font-size:10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Download</button>
+          </div>
+        </div>`;
+    } else if (item.type === 'audio') {
+      const url = '/api/media/audio/' + encodeURIComponent(item.filename);
+      html = `
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg-page);">
+          <div style="text-align:center;width:100%;">
+            <div style="font-size:48px;margin-bottom:16px;">\u{1F3B5}</div>
+            <audio controls preload="metadata" style="width:100%;max-width:400px;">
+              <source src="${url}" type="audio/mpeg" />
+            </audio>
+          </div>
+        </div>
+        <div style="padding:6px 10px;border-top:1px solid var(--border);flex-shrink:0;">
+          <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;line-height:1.4;">${esc(item.prompt || '')}</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span style="font-size:9px;color:var(--text-muted);flex:1;">${esc(item.filename)}</span>
+            <button onclick="(() => { const a=document.createElement('a'); a.href='${url}'; a.download='${esc(item.filename)}'; a.click(); })()" style="padding:3px 8px;font-size:10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Download</button>
+          </div>
+        </div>`;
+    }
+    viewer.innerHTML = html;
+  },
+
   // Open browser component dynamically
   openBrowserView() {
     this.openDynamicView('🌐', 'Browser', `
@@ -3799,26 +4030,25 @@ const App = {
           for (const media of m.media) {
             if (media.type === 'image') {
               const imgUrl = '/api/media/images/' + encodeURIComponent(media.filename);
-              mediaHtml += `<div class="generated-media-container" style="margin-bottom:8px;">
+              mediaHtml += `<div class="generated-media-container" style="margin-bottom:4px;">
                 <img src="${imgUrl}" class="generated-image" alt="${esc(media.prompt || 'Generated image')}"
-                  onclick="App.viewGeneratedImage('${esc(media.filename)}', '${imgUrl}', '${esc(media.prompt || '')}')"
-                  style="max-height:240px;max-width:240px;cursor:pointer;" />
+                  onclick="App.openMediaManager('${esc(media.filename)}')" />
               </div>`;
             } else if (media.type === 'video') {
               const videoUrl = '/api/media/videos/' + encodeURIComponent(media.filename);
-              mediaHtml += `<div class="generated-media-container" style="margin-bottom:8px;">
-                <div class="video-thumb-wrapper" onclick="App.viewGeneratedVideo('${esc(media.filename)}', '${videoUrl}', '${esc(media.prompt || '')}')">
-                  <video class="generated-video-thumb" preload="metadata" muted>
+              mediaHtml += `<div class="generated-media-container" style="margin-bottom:4px;">
+                <div class="video-thumb-wrapper" onclick="App.openMediaManager('${esc(media.filename)}')" style="display:inline-block;">
+                  <video class="generated-video-thumb" preload="metadata" muted style="max-width:120px;max-height:80px;">
                     <source src="${videoUrl}" type="video/mp4" />
                   </video>
                 </div>
               </div>`;
             } else if (media.type === 'audio') {
               const audioUrl = '/api/media/audio/' + encodeURIComponent(media.filename);
-              mediaHtml += `<div class="generated-audio-container" style="margin-bottom:8px;">
-                <audio controls preload="metadata" style="width:100%;">
-                  <source src="${audioUrl}" type="audio/mpeg" />
-                </audio>
+              mediaHtml += `<div class="generated-media-container" style="margin-bottom:4px;">
+                <div onclick="App.openMediaManager('${esc(media.filename)}')" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:11px;color:var(--text-secondary);">
+                  <span>\u{1F3B5}</span> Audio generated
+                </div>
               </div>`;
             }
           }
@@ -7063,6 +7293,9 @@ function esc(s) {
 // Artifact storage (in-memory, per session)
 const _artifacts = {};
 let _artifactCounter = 0;
+
+// Session media storage — tracks all generated media for Media Manager
+const _sessionMedia = [];
 
 function formatContent(text) {
   if (!text) return '';
