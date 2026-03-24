@@ -2010,6 +2010,7 @@ const App = {
         const def = this.state.models.find(m => m.is_default);
         const sel = def || this.state.models[0];
         this.state.selectedModel = sel.model_id || sel.id;
+        this.state.selectedProvider = sel.provider_id || sel.provider || 'anthropic';
         const ms = document.getElementById('model-select');
         if (ms) ms.value = this.state.selectedModel;
       }
@@ -3919,7 +3920,14 @@ const App = {
     // Update all panel footer model selects
     document.querySelectorAll('.panel-model-select').forEach(sel => {
       sel.innerHTML = this.modelOptionsHTML();
-      if (this.state.selectedModel) sel.value = this.state.selectedModel;
+      if (this.state.selectedModel) {
+        sel.value = this.state.selectedModel;
+        // Sync provider from the selected option's data attribute
+        const opt = sel.selectedOptions[0];
+        if (opt && opt.dataset.provider) {
+          this.state.selectedProvider = opt.dataset.provider;
+        }
+      }
     });
   },
 
