@@ -792,9 +792,9 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   font-family: var(--font-main); font-weight: 500;
 }
 .generated-image {
-  max-width: 100%; border-radius: 8px; border: 1px solid var(--border);
+  max-width: 240px; border-radius: 8px; border: 1px solid var(--border);
   cursor: pointer; transition: all 0.2s ease;
-  max-height: 400px; object-fit: contain;
+  max-height: 240px; object-fit: contain;
 }
 .generated-image:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(59,130,246,0.15); }
 .media-grid {
@@ -3713,7 +3713,7 @@ const App = {
               mediaHtml += `<div class="generated-media-container" style="margin-bottom:8px;">
                 <img src="${imgUrl}" class="generated-image" alt="${esc(media.prompt || 'Generated image')}"
                   onclick="App.viewGeneratedImage('${esc(media.filename)}', '${imgUrl}', '${esc(media.prompt || '')}')"
-                  style="max-height:400px;cursor:pointer;" />
+                  style="max-height:240px;max-width:240px;cursor:pointer;" />
               </div>`;
             } else if (media.type === 'video') {
               const videoUrl = '/api/media/videos/' + encodeURIComponent(media.filename);
