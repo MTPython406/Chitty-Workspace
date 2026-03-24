@@ -705,6 +705,29 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   border-top-color: var(--accent); border-radius: 50%;
   animation: tool-spin 0.8s linear infinite; flex-shrink: 0;
 }
+/* Progress bar for long-running media tools */
+@keyframes media-progress {
+  0% { width: 0%; }
+  15% { width: 25%; }
+  40% { width: 50%; }
+  65% { width: 70%; }
+  85% { width: 85%; }
+  100% { width: 92%; }
+}
+.tool-call-progress {
+  position: relative; height: 3px; background: var(--border);
+  border-radius: 2px; margin: 6px 10px 2px; overflow: hidden;
+}
+.tool-call-progress-bar {
+  position: absolute; left: 0; top: 0; height: 100%;
+  background: linear-gradient(90deg, var(--accent), #60a5fa);
+  border-radius: 2px;
+  animation: media-progress 30s ease-out forwards;
+}
+.tool-call-progress-label {
+  font-size: 10px; color: var(--text-muted); margin: 2px 10px 4px;
+  font-family: var(--font-mono);
+}
 
 /* Artifact cards (rendered in chat when agent produces <artifact> output) */
 .artifact-card { display:flex; align-items:center; gap:10px; padding:10px 14px; margin:8px 0; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; cursor:pointer; transition:border-color 0.15s,background 0.15s; }
@@ -2325,13 +2348,17 @@ const App = {
                 'generate_image': '🖼️', 'edit_image': '✏️', 'generate_video': '🎬', 'text_to_speech': '🔊',
               };
               const icon = toolIcons[parsed.tool_name] || '⚡';
+              const isMediaTool = ['generate_image', 'edit_image', 'generate_video', 'text_to_speech'].includes(parsed.tool_name);
+              const progressHtml = isMediaTool ? `
+                  <div class="tool-call-progress"><div class="tool-call-progress-bar"></div></div>
+                  <div class="tool-call-progress-label">${parsed.tool_name === 'generate_video' ? 'Video generation typically takes 30-120s' : parsed.tool_name === 'generate_image' ? 'Generating with AI...' : 'Processing...'}</div>` : '';
               this.appendToolBlockInPanel(panelId,
                 `<div class="tool-call-block" data-tool-id="${parsed.tool_call_id}">
                   <div class="tool-call-header" onclick="this.querySelector('.tool-call-chevron')?.classList.toggle('open');this.parentElement.querySelector('.tool-call-body')?.classList.toggle('open')">
                     <span class="tool-call-icon">${icon}</span>
                     <span class="tool-call-label-text">${esc(friendlyLabel)}...</span>
-                    <span class="tool-call-spinner"></span>
-                  </div>
+                    ${isMediaTool ? '' : '<span class="tool-call-spinner"></span>'}
+                  </div>${progressHtml}
                   <div class="tool-call-body"></div>
                 </div>`);
             } else if (evType === 'tool_call_delta') {
@@ -2351,15 +2378,30 @@ const App = {
                 tc.success = parsed.success;
                 tc.duration = parsed.duration_ms;
               }
-              // Update chat panel tool block: replace spinner with status, update label
+              // Update chat panel tool block: replace spinner/progress with status, update label
               const toolBlock = document.querySelector(`[data-panel-id="${panelId}"] .tool-call-block[data-tool-id="${parsed.tool_call_id}"]`);
               if (toolBlock) {
+                // Remove progress bar if present (media tools)
+                const progressBar = toolBlock.querySelector('.tool-call-progress');
+                const progressLabel = toolBlock.querySelector('.tool-call-progress-label');
+                if (progressBar) progressBar.remove();
+                if (progressLabel) progressLabel.remove();
+
                 const spinner = toolBlock.querySelector('.tool-call-spinner');
                 if (spinner) {
                   if (parsed.success) {
                     spinner.outerHTML = `<span class="tool-call-status success">✓ ${parsed.duration_ms || 0}ms</span>`;
                   } else {
                     spinner.outerHTML = `<span class="tool-call-status error">✗ failed</span>`;
+                  }
+                } else {
+                  // Media tools don't have spinner — add status to header
+                  const header = toolBlock.querySelector('.tool-call-header');
+                  if (header) {
+                    const statusSpan = document.createElement('span');
+                    statusSpan.className = parsed.success ? 'tool-call-status success' : 'tool-call-status error';
+                    statusSpan.textContent = parsed.success ? `✓ ${((parsed.duration_ms || 0) / 1000).toFixed(1)}s` : '✗ failed';
+                    header.appendChild(statusSpan);
                   }
                 }
                 // Update label text from "Searching..." to past tense
