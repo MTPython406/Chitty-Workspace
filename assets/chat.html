@@ -2223,6 +2223,9 @@ const App = {
       panel.conversationId = convId;
       panel.name = data.title || 'Chat';
       panel.messages = (data.messages || []).filter(m => m.role !== 'system');
+      // Restore provider/model from conversation so dropdown matches
+      if (data.provider) this.state.selectedProvider = data.provider;
+      if (data.model) this.state.selectedModel = data.model;
       this.renderPanel(panelId);
     } catch (e) { console.error('loadConv:', e); }
   },
