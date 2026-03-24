@@ -2389,25 +2389,13 @@ const App = {
                         const chevron = toolBlock.querySelector('.tool-call-chevron');
                         if (chevron) chevron.classList.add('open');
 
-                        // ALSO insert image directly into chat messages area (more reliable than tool block)
-                        const panelMessages = document.querySelector(`[data-panel-id="${panelId}"] .panel-messages`);
-                        if (panelMessages) {
-                          const mediaDiv = document.createElement('div');
-                          mediaDiv.className = 'generated-media-container';
-                          mediaDiv.style.padding = '8px 48px 8px 12px';
-                          let mediaHtml = `<div class="${gridClass}">`;
+                        // Attach media to the last assistant message so it survives renderPanel()
+                        const lastMsg = panel.messages[panel.messages.length - 1];
+                        if (lastMsg && lastMsg.role === 'assistant') {
+                          if (!lastMsg.media) lastMsg.media = [];
                           for (const img of resultData.images) {
-                            const imgUrl = '/api/media/images/' + encodeURIComponent(img.filename);
-                            mediaHtml += `<img src="${imgUrl}" class="generated-image" alt="${esc(resultData.prompt || 'Generated image')}" onclick="App.viewGeneratedImage('${esc(img.filename)}', '${imgUrl}', '${esc(resultData.prompt || '')}')" style="max-height:400px;" />`;
+                            lastMsg.media.push({ type: 'image', filename: img.filename, prompt: resultData.prompt || '' });
                           }
-                          mediaHtml += `</div>`;
-                          mediaDiv.innerHTML = mediaHtml;
-                          // Insert before the last message (streaming text)
-                          const msgs = panelMessages.querySelectorAll('.message');
-                          const lastMsg = msgs.length ? msgs[msgs.length - 1] : null;
-                          if (lastMsg) panelMessages.insertBefore(mediaDiv, lastMsg);
-                          else panelMessages.appendChild(mediaDiv);
-                          panelMessages.scrollTop = panelMessages.scrollHeight;
                         }
                       }
                     } catch (mediaErr) { console.error('[MEDIA] image render error:', mediaErr); }
@@ -3716,8 +3704,37 @@ const App = {
       } else {
         const sc = m.streaming ? ' streaming-cursor' : '';
         const msgClass = m.role === 'user' ? 'user-msg' : 'assistant-msg';
+        // Render any attached media (images, video, audio) before text
+        let mediaHtml = '';
+        if (m.media && m.media.length > 0) {
+          for (const media of m.media) {
+            if (media.type === 'image') {
+              const imgUrl = '/api/media/images/' + encodeURIComponent(media.filename);
+              mediaHtml += `<div class="generated-media-container" style="margin-bottom:8px;">
+                <img src="${imgUrl}" class="generated-image" alt="${esc(media.prompt || 'Generated image')}"
+                  onclick="App.viewGeneratedImage('${esc(media.filename)}', '${imgUrl}', '${esc(media.prompt || '')}')"
+                  style="max-height:400px;cursor:pointer;" />
+              </div>`;
+            } else if (media.type === 'video') {
+              const videoUrl = '/api/media/videos/' + encodeURIComponent(media.filename);
+              mediaHtml += `<div class="generated-media-container" style="margin-bottom:8px;">
+                <video class="generated-video" controls preload="metadata" style="max-width:100%;border-radius:8px;">
+                  <source src="${videoUrl}" type="video/mp4" />
+                </video>
+              </div>`;
+            } else if (media.type === 'audio') {
+              const audioUrl = '/api/media/audio/' + encodeURIComponent(media.filename);
+              mediaHtml += `<div class="generated-audio-container" style="margin-bottom:8px;">
+                <audio controls preload="metadata" style="width:100%;">
+                  <source src="${audioUrl}" type="audio/mpeg" />
+                </audio>
+              </div>`;
+            }
+          }
+        }
         html += `<div class="message ${msgClass}">
           <div class="message-body">
+            ${mediaHtml}
             <div class="message-content${sc}">${formatContent(m.content)}</div>
           </div>
         </div>`;
