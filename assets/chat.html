@@ -2064,6 +2064,14 @@ const App = {
         this._ollamaModels = od.models || [];
       }
     } catch (_) { this._ollamaModels = []; }
+    // Also load HuggingFace sidecar models
+    try {
+      const sr = await fetch('/api/local/sidecar/models');
+      if (sr.ok) {
+        const sd = await sr.json();
+        this._sidecarModels = sd.models || [];
+      }
+    } catch (_) { this._sidecarModels = []; }
     this.renderModelSelect();
   },
 
@@ -3905,6 +3913,18 @@ const App = {
         const name = m.name || m.model;
         if (!allModels.find(x => (x.model_id || x.id) === name)) {
           allModels.push({ model_id: name, display_name: name, provider_id: 'ollama' });
+        }
+      }
+    }
+
+    // Add HuggingFace sidecar models if available
+    if (this._sidecarModels && this._sidecarModels.length) {
+      for (const m of this._sidecarModels) {
+        const name = m.name || m.model;
+        const sizeLabel = m.size_gb ? ` (${m.size_gb.toFixed(1)}GB)` : '';
+        const loadedLabel = m.loaded ? ' \u2713' : '';
+        if (!allModels.find(x => (x.model_id || x.id) === name)) {
+          allModels.push({ model_id: name, display_name: name + sizeLabel + loadedLabel, provider_id: 'huggingface' });
         }
       }
     }
