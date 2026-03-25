@@ -258,6 +258,38 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
 }
 .welcome-action-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--text-primary); }
 
+/* Onboarding setup */
+.onboard-container { width: 100%; max-width: 480px; margin-top: 8px; }
+.onboard-tagline { font-size: 12px; color: var(--text-muted); margin-bottom: 20px; text-align: center; letter-spacing: 0.5px; }
+.onboard-title { font-size: 22px; font-weight: 600; color: var(--text-primary); text-align: center; margin-bottom: 6px; }
+.onboard-subtitle { font-size: 13px; color: var(--text-muted); text-align: center; margin-bottom: 28px; }
+.onboard-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 10px; }
+.onboard-card {
+  display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+  cursor: pointer; transition: all 0.2s; margin-bottom: 8px;
+}
+.onboard-card:hover { border-color: var(--accent); background: var(--bg-hover); transform: translateY(-1px); box-shadow: 0 2px 8px rgba(59,130,246,0.1); }
+.onboard-card-icon { font-size: 28px; flex-shrink: 0; }
+.onboard-card-body { flex: 1; min-width: 0; }
+.onboard-card-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+.onboard-card-desc { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+.onboard-card-arrow { font-size: 16px; color: var(--text-muted); flex-shrink: 0; }
+.onboard-divider { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+.onboard-divider-line { flex: 1; height: 1px; background: var(--border); }
+.onboard-divider-text { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.onboard-providers { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.onboard-provider-card {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 10px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+  cursor: pointer; transition: all 0.2s; text-align: center;
+}
+.onboard-provider-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.onboard-provider-icon { font-size: 24px; }
+.onboard-provider-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.onboard-provider-sub { font-size: 10px; color: var(--text-muted); }
+.onboard-footer { margin-top: 20px; text-align: center; font-size: 11px; color: var(--text-muted); }
+
 /* ── View switcher (inside action panel tab bodies) ──────────── */
 .view-switcher {
   display: flex; gap: 0; padding: 0 8px; flex-shrink: 0;
@@ -2258,7 +2290,7 @@ const App = {
     }
 
     if (!this.state.selectedProvider || !this.state.selectedModel) {
-      panel.messages.push({ role: 'system', content: 'Error: Select a provider and model. Add your API key in Settings.' });
+      panel.messages = []; // Clear to show welcome/onboarding
       this.renderPanel(panelId);
       return;
     }
@@ -4008,6 +4040,66 @@ const App = {
 
   welcomeHTML(panel) {
     const isChitty = !panel.selectedAgent;
+    const hasProvider = this.state.selectedProvider && this.state.selectedModel;
+
+    // ── Onboarding: no provider configured ────────────────────
+    if (isChitty && !hasProvider) {
+      return `<div class="panel-welcome">
+        <div class="welcome-icon">${ICONS.robot}</div>
+        <div class="onboard-title">Welcome to Chitty Workspace</div>
+        <div class="onboard-tagline">Your Machine \u00b7 Your AI \u00b7 Your Rules</div>
+        <div class="onboard-container">
+          <div class="onboard-subtitle">Get started by connecting an AI provider. Your keys stay on your machine.</div>
+
+          <div class="onboard-section-label">Run locally \u2014 no API key needed</div>
+          <div class="onboard-card" onclick="App.openProviderSetup('ollama')">
+            <div class="onboard-card-icon">\u{1F4BB}</div>
+            <div class="onboard-card-body">
+              <div class="onboard-card-title">Run Local with Ollama</div>
+              <div class="onboard-card-desc">Free, private, runs on your GPU. Download models like Llama, Mistral, Qwen.</div>
+            </div>
+            <div class="onboard-card-arrow">\u2192</div>
+          </div>
+
+          <div class="onboard-divider">
+            <div class="onboard-divider-line"></div>
+            <div class="onboard-divider-text">or use a cloud provider</div>
+            <div class="onboard-divider-line"></div>
+          </div>
+
+          <div class="onboard-section-label">Bring your own API key</div>
+          <div class="onboard-providers">
+            <div class="onboard-provider-card" onclick="App.openProviderSetup('anthropic')">
+              <div class="onboard-provider-icon">\u{1F9E0}</div>
+              <div class="onboard-provider-name">Anthropic</div>
+              <div class="onboard-provider-sub">Claude Sonnet, Opus, Haiku</div>
+            </div>
+            <div class="onboard-provider-card" onclick="App.openProviderSetup('openai')">
+              <div class="onboard-provider-icon">\u{1F916}</div>
+              <div class="onboard-provider-name">OpenAI</div>
+              <div class="onboard-provider-sub">GPT-4o, o1, GPT-4.1</div>
+            </div>
+            <div class="onboard-provider-card" onclick="App.openProviderSetup('google')">
+              <div class="onboard-provider-icon">\u{1F48E}</div>
+              <div class="onboard-provider-name">Google</div>
+              <div class="onboard-provider-sub">Gemini Pro, Flash, Ultra</div>
+            </div>
+            <div class="onboard-provider-card" onclick="App.openProviderSetup('xai')">
+              <div class="onboard-provider-icon">\u26A1</div>
+              <div class="onboard-provider-name">xAI</div>
+              <div class="onboard-provider-sub">Grok 3, Grok 4</div>
+            </div>
+          </div>
+
+          <div class="onboard-footer">
+            All API keys are stored in your OS keyring \u2014 never sent to Chitty servers.
+            <br><a href="https://chitty.ai" target="_blank" style="color:var(--accent);text-decoration:none;">chitty.ai</a> \u00b7 Built by <a href="https://datavisions.ai" target="_blank" style="color:var(--accent);text-decoration:none;">DataVisions.ai</a>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    // ── Normal welcome (provider configured) ──────────────────
     const name = isChitty ? 'Chitty' : (this.state.agents.find(a => a.id === panel.selectedAgent)?.name || panel.name);
     const subtitle = isChitty
       ? 'System admin & AI assistant'
@@ -4028,6 +4120,35 @@ const App = {
     }
     html += '</div>';
     return html;
+  },
+
+  // Open provider setup — switches to Providers tab in Action Panel with focus
+  openProviderSetup(providerId) {
+    // Open Action Panel if not open
+    if (!this.state.actionPanelOpen) this.toggleActionPanel();
+    // Switch to Providers tab
+    const tabs = document.querySelectorAll('.action-tab');
+    tabs.forEach(t => t.classList.remove('active'));
+    const provTab = Array.from(tabs).find(t => t.textContent.trim() === 'Providers');
+    if (provTab) provTab.classList.add('active');
+    // Show providers content
+    document.querySelectorAll('.action-tab-content').forEach(c => c.style.display = 'none');
+    const provContent = document.getElementById('tab-providers');
+    if (provContent) provContent.style.display = 'flex';
+    // Expand the specific provider and focus the API key input
+    setTimeout(() => {
+      const providerEl = document.querySelector(`[data-provider-id="${providerId}"]`);
+      if (providerEl) {
+        providerEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Flash highlight
+        providerEl.style.borderColor = 'var(--accent)';
+        providerEl.style.boxShadow = '0 0 0 2px rgba(59,130,246,0.3)';
+        setTimeout(() => { providerEl.style.borderColor = ''; providerEl.style.boxShadow = ''; }, 2000);
+        // Focus the key input
+        const input = providerEl.querySelector('input[type="password"], input[type="text"]');
+        if (input) input.focus();
+      }
+    }, 300);
   },
 
   messagesHTML(panel) {
