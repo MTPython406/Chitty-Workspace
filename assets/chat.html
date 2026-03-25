@@ -4051,14 +4051,18 @@ const App = {
         <div class="onboard-container">
           <div class="onboard-subtitle">Get started by connecting an AI provider. Your keys stay on your machine.</div>
 
-          <div class="onboard-section-label">Run locally \u2014 no API key needed</div>
-          <div class="onboard-card" onclick="App.openProviderSetup('ollama')">
-            <div class="onboard-card-icon">\u{1F4BB}</div>
-            <div class="onboard-card-body">
-              <div class="onboard-card-title">Run Local with Ollama</div>
-              <div class="onboard-card-desc">Free, private, runs on your GPU. Download models like Llama, Mistral, Qwen.</div>
+          <div class="onboard-section-label">Run locally \u2014 free &amp; private</div>
+          <div class="onboard-providers">
+            <div class="onboard-provider-card" onclick="App.openProviderSetup('ollama')">
+              <div class="onboard-provider-icon">\u{1F4BB}</div>
+              <div class="onboard-provider-name">Ollama</div>
+              <div class="onboard-provider-sub">Llama, Mistral, Qwen, Gemma</div>
             </div>
-            <div class="onboard-card-arrow">\u2192</div>
+            <div class="onboard-provider-card" onclick="App.openProviderSetup('huggingface')">
+              <div class="onboard-provider-icon">\u{1F917}</div>
+              <div class="onboard-provider-name">HuggingFace</div>
+              <div class="onboard-provider-sub">GGUF models, local inference</div>
+            </div>
           </div>
 
           <div class="onboard-divider">
@@ -4126,15 +4130,8 @@ const App = {
   openProviderSetup(providerId) {
     // Open Action Panel if not open
     if (!this.state.actionPanelOpen) this.toggleActionPanel();
-    // Switch to Providers tab
-    const tabs = document.querySelectorAll('.action-tab');
-    tabs.forEach(t => t.classList.remove('active'));
-    const provTab = Array.from(tabs).find(t => t.textContent.trim() === 'Providers');
-    if (provTab) provTab.classList.add('active');
-    // Show providers content
-    document.querySelectorAll('.action-tab-content').forEach(c => c.style.display = 'none');
-    const provContent = document.getElementById('tab-providers');
-    if (provContent) provContent.style.display = 'flex';
+    // Use the proper tab switcher
+    this.switchActionTab('providers');
     // Expand the specific provider and focus the API key input
     setTimeout(() => {
       const providerEl = document.querySelector(`[data-provider-id="${providerId}"]`);
