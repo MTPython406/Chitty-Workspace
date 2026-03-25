@@ -20,7 +20,7 @@ Free, open-source product that promotes the DataVisions Enterprise platform.
 ### Building
 ```bash
 cd c:\github\ChittyWorkspace
-C:\Users\pauls\.cargo\bin\cargo.exe build --release
+cargo build --release
 ```
 
 ### Running
