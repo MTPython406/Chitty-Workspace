@@ -65,6 +65,8 @@ enum Commands {
 async fn main() -> anyhow::Result<()> {
     // Set up logging — write to file for reliable debugging on Windows
     let data_dir = crate::storage::default_data_dir();
+    // Ensure data directory exists (first run or after clean uninstall)
+    std::fs::create_dir_all(&data_dir).expect("Failed to create data directory");
     let log_path = data_dir.join("chitty.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
