@@ -39,9 +39,32 @@
       "required": true
     },
     {
+      "id": "enter_client_id",
+      "label": "Google OAuth Client ID",
+      "prompt_user": true,
+      "prompt_label": "OAuth Client ID",
+      "prompt_placeholder": "e.g. 123456789-abc123.apps.googleusercontent.com",
+      "prompt_help": "Create at console.cloud.google.com → APIs & Services → Credentials → OAuth client ID (Desktop app)",
+      "credentials_key": "oauth_google_client_id",
+      "help_text": "Create a Google Cloud project, enable the Gmail API, create an OAuth consent screen (External), then create an OAuth client ID (Desktop app type).",
+      "help_url": "https://console.cloud.google.com/apis/credentials",
+      "required": true
+    },
+    {
+      "id": "enter_client_secret",
+      "label": "Google OAuth Client Secret",
+      "prompt_user": true,
+      "prompt_label": "OAuth Client Secret",
+      "prompt_placeholder": "e.g. GOCSPX-...",
+      "prompt_help": "Found on the same page as your Client ID in Google Cloud Console",
+      "credentials_key": "oauth_google_client_secret",
+      "help_text": "The client secret from your OAuth client ID credentials page.",
+      "required": true
+    },
+    {
       "id": "oauth_connect",
       "label": "Connect to Google account",
-      "help_text": "Click 'Connect' to authorize Chitty Workspace to access your Gmail. A browser window will open for Google OAuth authorization.",
+      "help_text": "Click 'Connect' to authorize Chitty Workspace to access your Gmail. A browser window will open for Google sign-in.",
       "required": true
     }
   ],

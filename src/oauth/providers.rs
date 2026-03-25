@@ -110,32 +110,20 @@ pub fn get_template(provider: &str) -> Option<&'static ProviderTemplate> {
     ALL_TEMPLATES.iter().find(|t| t.provider == provider).copied()
 }
 
-/// First-party provider client_id (we manage the OAuth app)
-/// Google is first-party because we host the Chitty Marketplace on GCP.
-const GOOGLE_CLIENT_ID: &str = "706685776923-gp53edqle1d36fph5o8durm5iqc1ehm2.apps.googleusercontent.com";
-
-/// Build an OAuthConfig from a template + credentials.
-/// Google: first-party (client_id shipped, secret in keyring from installer)
-/// Everything else: user provides their own client_id + client_secret
+/// Build an OAuthConfig from a template + user-provided credentials.
+/// All providers are BYOK — users create their own OAuth apps and
+/// paste their client_id + client_secret into Chitty Settings.
+/// Credentials are stored in the OS keyring.
 pub fn get_config(provider: &str) -> Option<OAuthConfig> {
     let template = get_template(provider)?;
 
-    // Google is first-party — client_id is shipped, secret from keyring
-    let (client_id, client_secret) = if provider == "google" {
-        let secret = crate::config::get_api_key("oauth_google_client_secret")
-            .ok()
-            .flatten();
-        (GOOGLE_CLIENT_ID.to_string(), secret)
-    } else {
-        // User-managed — both credentials from keyring
-        let id = crate::config::get_api_key(&format!("oauth_{}_client_id", provider))
-            .ok()
-            .flatten()?; // Return None if not configured
-        let secret = crate::config::get_api_key(&format!("oauth_{}_client_secret", provider))
-            .ok()
-            .flatten();
-        (id, secret)
-    };
+    // All providers: user-managed credentials from keyring
+    let client_id = crate::config::get_api_key(&format!("oauth_{}_client_id", provider))
+        .ok()
+        .flatten()?; // Return None if not configured
+    let client_secret = crate::config::get_api_key(&format!("oauth_{}_client_secret", provider))
+        .ok()
+        .flatten();
 
     Some(OAuthConfig {
         provider: provider.to_string(),
