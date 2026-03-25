@@ -305,9 +305,6 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_agents_project
             ON agents(project_path);
 
-        CREATE INDEX IF NOT EXISTS idx_conversations_agent
-            ON conversations(agent_id);
-
         -- Update memory scope values
         UPDATE memories SET scope = 'agent' WHERE scope = 'skill';
         ",
@@ -323,6 +320,9 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
     if !has_agent_id {
         conn.execute_batch("ALTER TABLE conversations ADD COLUMN agent_id TEXT;")?;
     }
+
+    // Create index AFTER ensuring the column exists
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_conversations_agent ON conversations(agent_id);")?;
 
     tracing::info!("Database migrated to v4 (skills → agents rename)");
     Ok(())
