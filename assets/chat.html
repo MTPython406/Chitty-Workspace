@@ -4800,7 +4800,7 @@ const App = {
       </div>`;
     } else {
       html += `<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">
-        Ollama is not running. <a href="#" style="color:var(--accent);" onclick="event.preventDefault();fetch('/api/providers/ollama/start',{method:'POST'}).then(()=>setTimeout(()=>app.renderProvidersPanel(),2000));">Start Ollama</a>
+        Ollama is not running. <a href="#" style="color:var(--accent);" onclick="event.preventDefault();fetch('/api/providers/ollama/start',{method:'POST'}).then(()=>setTimeout(()=>App.renderProvidersPanel(),2000));">Start Ollama</a>
         or install from <a href="https://ollama.ai" target="_blank" style="color:var(--accent);">ollama.ai</a>
       </div>`;
     }
@@ -4998,7 +4998,7 @@ const App = {
         const data = await r.json();
         if (data.success) {
           // Re-render to update status
-          setTimeout(() => app.renderProvidersPanel(), 1000);
+          setTimeout(() => App.renderProvidersPanel(), 1000);
         } else {
           alert('Failed to start sidecar: ' + (data.error || 'Unknown error'));
           btn.textContent = '⚡ Start Sidecar';
@@ -5014,7 +5014,7 @@ const App = {
     /* ─── Stop sidecar ─── */
     document.getElementById('gguf-stop-btn')?.addEventListener('click', async () => {
       await fetch('/api/local/sidecar/stop', { method: 'POST' });
-      setTimeout(() => app.renderProvidersPanel(), 1000);
+      setTimeout(() => App.renderProvidersPanel(), 1000);
     });
 
     /* ─── Browse for GGUF file ─── */
@@ -5097,7 +5097,7 @@ const App = {
       if (data.success) {
         // Refresh the model list
         document.getElementById('gguf-scan-btn')?.click();
-        app.renderProvidersPanel();
+        App.renderProvidersPanel();
       } else {
         alert('Failed to load model: ' + (data.error || 'Unknown error'));
         document.getElementById('gguf-scan-btn')?.click();
@@ -5111,7 +5111,7 @@ const App = {
     try {
       await fetch('/api/local/sidecar/models/unload', { method: 'POST' });
       document.getElementById('gguf-scan-btn')?.click();
-      app.renderProvidersPanel();
+      App.renderProvidersPanel();
     } catch (e) {
       alert('Error unloading model: ' + e.message);
     }
