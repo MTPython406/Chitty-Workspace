@@ -476,7 +476,34 @@ impl ToolRuntime {
                 ToolResult::err(format!("Unknown tool: {}", name))
             }
         } else {
-            ToolResult::err(format!("Unknown tool: {}", name))
+            // Suggest closest matching tool name
+            let all_names = self.list_definitions().into_iter().map(|d| d.name).collect::<Vec<_>>();
+            let suggestion = all_names.iter()
+                .filter(|n| n.contains(name) || name.contains(n.as_str()))
+                .next()
+                .cloned()
+                .unwrap_or_default();
+            let hint = if !suggestion.is_empty() {
+                format!(". Did you mean '{}'?", suggestion)
+            } else {
+                let available = all_names.iter()
+                    .filter(|n| {
+                        // Simple similarity: shared prefix or contains
+                        let n_lower = n.to_lowercase();
+                        let name_lower = name.to_lowercase();
+                        n_lower.starts_with(&name_lower[..name_lower.len().min(3).max(1)])
+                            || n_lower.contains(&name_lower)
+                            || name_lower.contains(&n_lower)
+                    })
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>();
+                if !available.is_empty() {
+                    format!(". Similar tools: {}", available.join(", "))
+                } else {
+                    format!(". Available tools: {}", all_names.join(", "))
+                }
+            };
+            ToolResult::err(format!("Unknown tool: '{}'{}", name, hint))
         };
 
         let duration_ms = start.elapsed().as_millis() as u64;

@@ -146,6 +146,12 @@ pub fn build_request_body(
         "model": model,
         "messages": api_messages,
         "stream": stream,
+        // Qwen3-Coder recommended sampling parameters (also good defaults for most models)
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "repetition_penalty": 1.05,
+        "max_tokens": 65536,
     });
 
     if stream && include_stream_usage {

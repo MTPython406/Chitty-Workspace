@@ -28,8 +28,16 @@ temp_scripts/
 *.pem
 *.key
 
-# Installer output (binaries distributed via GitHub Releases)
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Installer build artifacts
 installer/output/
+installer/staging/
+installer/*.zip
+installer/get-pip.py
 
 # Claude Code local settings (machine-specific permissions)
 .claude/settings.local.json

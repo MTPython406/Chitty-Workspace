@@ -39,6 +39,20 @@ use crate::tools::{ToolContext, ToolRegistry, ToolRuntime};
 // Embed the chat UI HTML at compile time
 const CHAT_HTML: &str = include_str!("../assets/chat.html");
 
+/// Truncate a string at a safe UTF-8 char boundary.
+/// Returns at most `max_bytes` bytes, backing up to the previous char boundary if needed.
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Find the last char boundary at or before max_bytes
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 // ---------------------------------------------------------------------------
 // Browser Bridge — connects the browser native tool to the frontend iframe
 // ---------------------------------------------------------------------------
@@ -216,10 +230,32 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
     let app = Router::new()
         // Health check (for extension connectivity)
         .route("/health", get(|| async { "ok" }))
+        // Simple ping for testing external connectivity
+        .route("/api/ping", get(|| async {
+            axum::Json(serde_json::json!({"status": "ok", "timestamp": chrono::Utc::now().to_rfc3339()}))
+        }))
+        // Version info
+        .route("/api/version", get(|| async {
+            axum::Json(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "name": env!("CARGO_PKG_NAME"),
+            }))
+        }))
         // UI
         .route("/", get(index_handler))
         // Chat
         .route("/api/chat", post(chat_handler))
+        // Simple sync ask endpoint (for external apps)
+        .route("/api/ask", post(ask_handler))
+        // Agent API v1
+        .route("/api/v1/agents", get(v1_list_agents))
+        .route("/api/v1/agents/:id", get(v1_get_agent))
+        .route("/api/v1/sessions", get(v1_list_sessions).post(v1_create_session))
+        .route("/api/v1/sessions/:id", get(v1_get_session).delete(v1_delete_session))
+        .route("/api/v1/sessions/:id/chat", post(v1_session_chat))
+        .route("/api/v1/sessions/:id/ask", post(v1_session_ask))
+        .route("/api/v1/docs", get(v1_docs_html))
+        .route("/api/v1/docs.json", get(v1_docs_json))
         // Conversations
         .route("/api/conversations", get(list_conversations))
         .route("/api/conversations", post(create_conversation))
@@ -277,6 +313,7 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         // Extension HTTP polling — alternative to WebSocket for Manifest V3 service workers
         .route("/api/browser/poll", post(browser_poll_handler))
         .route("/api/browser/result", post(browser_result_handler))
+        .route("/api/browser/extension-info", get(browser_extension_info_handler))
         // Action approval system
         .route("/api/approval/respond", post(approval_response_handler))
         // OAuth integration flows (PKCE — no server needed)
@@ -324,6 +361,12 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/local/sidecar/models/register", post(sidecar_register_handler))
         .route("/api/local/sidecar/models/load", post(sidecar_load_handler))
         .route("/api/local/sidecar/models/unload", post(sidecar_unload_handler))
+        // HuggingFace sidecar media model management (image, video, TTS)
+        .route("/api/local/sidecar/media/models", get(sidecar_media_models_handler))
+        .route("/api/local/sidecar/media/models/register", post(sidecar_media_register_handler))
+        .route("/api/local/sidecar/media/models/unregister", post(sidecar_media_unregister_handler))
+        .route("/api/local/sidecar/media/models/load", post(sidecar_media_load_handler))
+        .route("/api/local/sidecar/media/models/unload", post(sidecar_media_unload_handler))
         // Direct GGUF scanning (no sidecar needed)
         .route("/api/local/gguf/scan", get(gguf_scan_local_handler))
         // Media serving (generated images, videos, audio from ~/.chitty-workspace/media/)
@@ -332,21 +375,40 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         // System defaults (per-capability provider/model preferences)
         .route("/api/defaults", get(get_defaults_handler))
         .route("/api/defaults", put(update_defaults_handler))
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::DELETE, axum::http::Method::OPTIONS])
+                .allow_headers(tower_http::cors::Any)
+        )
         .with_state(state.clone());
 
-    // Try the requested port first, then fall back to nearby ports
+    // Try the requested port first, then fall back to nearby ports.
+    // Use SO_REUSEADDR so we can reclaim the port immediately after restart
+    // (avoids Windows TCP TIME_WAIT / CLOSE_WAIT stale connections).
     let mut bound_port = port;
-    let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
-        Ok(l) => l,
+
+    let bind_with_reuse = |p: u16| -> std::io::Result<std::net::TcpListener> {
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", p).parse().unwrap();
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
+        socket.set_reuse_address(true)?;
+        socket.set_nonblocking(true)?;
+        socket.bind(&addr.into())?;
+        socket.listen(128)?;
+        Ok(socket.into())
+    };
+
+    let listener = match bind_with_reuse(port) {
+        Ok(std_listener) => tokio::net::TcpListener::from_std(std_listener)?,
         Err(_) => {
             // Port in use — try fallback ports
             let mut fallback_listener = None;
             for offset in 1..=10 {
                 let try_port = port + offset;
-                if let Ok(l) = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", try_port)).await {
+                if let Ok(std_listener) = bind_with_reuse(try_port) {
                     bound_port = try_port;
                     tracing::warn!("Port {} in use, using fallback port {}", port, try_port);
-                    fallback_listener = Some(l);
+                    fallback_listener = Some(tokio::net::TcpListener::from_std(std_listener)?);
                     break;
                 }
             }
@@ -408,6 +470,100 @@ async fn start_oauth_https_listener(state: Arc<AppState>) -> anyhow::Result<()> 
 /// Strip screenshot base64 data from tool results to keep LLM context small.
 /// Replaces the huge base64 blob with a text summary so the agent knows
 /// a screenshot was taken without the 500KB+ payload in context.
+/// Parse tool calls that GGUF models output as text instead of structured tool_calls.
+/// Supports: XML tags, JSON in tags, bare JSON objects.
+/// Returns Some((tool_calls, cleaned_text)) or None if no tool calls found.
+fn parse_tool_calls_from_text(text: &str) -> Option<(Vec<crate::providers::ToolCall>, String)> {
+    use crate::providers::ToolCall;
+    let mut calls = Vec::new();
+    let mut cleaned = text.to_string();
+
+    // Pattern 1: XML-style tool calls — multiple formats seen from GGUF models:
+    //   a) <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
+    //   b) <function=name><parameter=key>value</parameter></function></tool_call>  (no opening tag)
+    //   c) <function=name><parameter=key>value</parameter></function>              (no wrapper at all)
+    // We match the <function=name>...</function> core and optionally consume surrounding tags.
+    let xml_re = regex::Regex::new(
+        r"(?s)(?:<tool_call>\s*)?<function=(\w+)>(.*?)</function>\s*(?:</tool_call>)?"
+    ).ok()?;
+    let param_re = regex::Regex::new(
+        r"(?s)<parameter=(\w+)>\s*(.*?)\s*</parameter>"
+    ).ok()?;
+
+    for cap in xml_re.captures_iter(text) {
+        let func_name = cap[1].to_string();
+        let params_block = &cap[2];
+        let mut args = serde_json::Map::new();
+        for pcap in param_re.captures_iter(params_block) {
+            let key = pcap[1].to_string();
+            let val = pcap[2].trim().to_string();
+            // Try parse as JSON value, fallback to string
+            let json_val = serde_json::from_str(&val)
+                .unwrap_or_else(|_| serde_json::Value::String(val));
+            args.insert(key, json_val);
+        }
+        calls.push(ToolCall {
+            id: format!("call_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..12].to_string()),
+            name: func_name,
+            arguments: serde_json::Value::Object(args),
+        });
+    }
+    if !calls.is_empty() {
+        cleaned = xml_re.replace_all(&cleaned, "").to_string();
+        return Some((calls, cleaned));
+    }
+
+    // Pattern 2: JSON inside <tool_call> tags
+    let json_tag_re = regex::Regex::new(
+        r"(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>"
+    ).ok()?;
+    for cap in json_tag_re.captures_iter(text) {
+        let mut json_str = cap[1].trim().to_string();
+        // Handle doubled braces: {{...}} → {...}
+        if json_str.starts_with("{{") && json_str.ends_with("}}") {
+            json_str = json_str[1..json_str.len()-1].to_string();
+        }
+        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json_str) {
+            if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
+                let args = obj.get("arguments")
+                    .or_else(|| obj.get("parameters"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                calls.push(ToolCall {
+                    id: format!("call_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..12].to_string()),
+                    name: name.to_string(),
+                    arguments: args,
+                });
+            }
+        }
+    }
+    if !calls.is_empty() {
+        cleaned = json_tag_re.replace_all(&cleaned, "").to_string();
+        return Some((calls, cleaned));
+    }
+
+    // Pattern 3: Bare JSON {"name": "tool_name", "parameters": {...}} or {"name": "tool_name", "arguments": {...}}
+    let bare_re = regex::Regex::new(
+        r#"\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"(?:parameters|arguments)"\s*:\s*(\{[^{}]*\})\s*\}"#
+    ).ok()?;
+    for cap in bare_re.captures_iter(text) {
+        let func_name = cap[1].to_string();
+        if let Ok(args) = serde_json::from_str::<serde_json::Value>(&cap[2]) {
+            calls.push(ToolCall {
+                id: format!("call_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..12].to_string()),
+                name: func_name,
+                arguments: args,
+            });
+        }
+    }
+    if !calls.is_empty() {
+        cleaned = bare_re.replace_all(&cleaned, "").to_string();
+        return Some((calls, cleaned));
+    }
+
+    None
+}
+
 fn strip_screenshot_base64(content: &str) -> String {
     // Try to parse as JSON and check for screenshot_base64
     if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(content) {
@@ -668,6 +824,7 @@ fn action_requires_approval(tool_name: &str, action: &str, auto_approve: bool) -
         "browser" => matches!(action, "click" | "type" | "execute_js" | "open"),
         "terminal" => true,
         "file_writer" => true,
+        "file_editor" => true,
         "install_package" => true,
         _ => false,
     }
@@ -681,7 +838,7 @@ fn describe_action(tool_name: &str, args: &serde_json::Value) -> (String, serde_
             let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("unknown");
             (
                 format!("Navigate browser to {}", url),
-                serde_json::json!({ "action": "open", "url": url, "icon": "🌐" })
+                serde_json::json!({ "action": "open", "url": url, "icon": "web" })
             )
         }
         ("browser", "click") => {
@@ -694,7 +851,7 @@ fn describe_action(tool_name: &str, args: &serde_json::Value) -> (String, serde_
         ("browser", "type") => {
             let selector = args.get("selector").and_then(|v| v.as_str()).unwrap_or("?");
             let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            let preview = if text.len() > 100 { format!("{}...", &text[..100]) } else { text.to_string() };
+            let preview = if text.len() > 100 { format!("{}...", safe_truncate(&text, 100)) } else { text.to_string() };
             (
                 format!("Type text into: {}", selector),
                 serde_json::json!({ "action": "type", "selector": selector, "text_preview": preview, "icon": "⌨️" })
@@ -702,7 +859,7 @@ fn describe_action(tool_name: &str, args: &serde_json::Value) -> (String, serde_
         }
         ("browser", "execute_js") => {
             let script = args.get("script").and_then(|v| v.as_str()).unwrap_or("");
-            let preview = if script.len() > 80 { format!("{}...", &script[..80]) } else { script.to_string() };
+            let preview = if script.len() > 80 { format!("{}...", safe_truncate(&script, 80)) } else { script.to_string() };
             (
                 format!("Execute JavaScript on page"),
                 serde_json::json!({ "action": "execute_js", "script_preview": preview, "icon": "⚡" })
@@ -710,10 +867,10 @@ fn describe_action(tool_name: &str, args: &serde_json::Value) -> (String, serde_
         }
         ("terminal", _) => {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("?");
-            let preview = if cmd.len() > 120 { format!("{}...", &cmd[..120]) } else { cmd.to_string() };
+            let preview = if cmd.len() > 120 { format!("{}...", safe_truncate(&cmd, 120)) } else { cmd.to_string() };
             (
                 format!("Run terminal command: {}", preview),
-                serde_json::json!({ "action": "terminal", "command": preview, "icon": "💻" })
+                serde_json::json!({ "action": "terminal", "command": preview, "icon": "term" })
             )
         }
         ("file_writer", _) => {
@@ -723,6 +880,14 @@ fn describe_action(tool_name: &str, args: &serde_json::Value) -> (String, serde_
                 serde_json::json!({ "action": "write", "path": path, "icon": "📝" })
             )
         }
+        ("file_editor", _) => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+            let count = args.get("edits").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+            (
+                format!("Edit file: {} ({} change{})", path, count, if count == 1 { "" } else { "s" }),
+                serde_json::json!({ "action": "edit", "path": path, "edit_count": count, "icon": "✏️" })
+            )
+        }
         ("install_package", _) => {
             let runtime = args.get("runtime").and_then(|v| v.as_str()).unwrap_or("?");
             let packages = args.get("packages").and_then(|v| v.as_array())
@@ -730,7 +895,7 @@ fn describe_action(tool_name: &str, args: &serde_json::Value) -> (String, serde_
                 .unwrap_or_else(|| "?".to_string());
             (
                 format!("Install {} packages: {}", runtime, packages),
-                serde_json::json!({ "action": "install", "runtime": runtime, "packages": packages, "icon": "📦" })
+                serde_json::json!({ "action": "install", "runtime": runtime, "packages": packages, "icon": "pkg" })
             )
         }
         _ => (
@@ -798,6 +963,40 @@ async fn browser_result_handler(
     }
 
     StatusCode::OK
+}
+
+/// Returns info about the browser extension: where to find it, install steps, connection status.
+async fn browser_extension_info_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let connected = state.browser_bridge.is_connected();
+
+    // Find extension directory — prefer the user-accessible copy in the data dir
+    let data_dir = crate::storage::default_data_dir();
+    let data_ext = data_dir.join("extension");
+    let extension_path = if data_ext.exists() {
+        Some(data_ext.display().to_string())
+    } else if let Ok(exe) = std::env::current_exe() {
+        // Fallback: next to the executable (dev mode)
+        exe.parent()
+            .map(|dir| dir.join("extension"))
+            .filter(|p| p.exists())
+            .map(|p| p.display().to_string())
+    } else { None };
+
+    axum::Json(serde_json::json!({
+        "connected": connected,
+        "extension_path": extension_path,
+        "install_steps": [
+            "Open Chrome or Edge and go to chrome://extensions",
+            "Enable 'Developer mode' (toggle in the top-right corner)",
+            "Click 'Load unpacked'",
+            "Select the extension folder from your Chitty Workspace installation",
+            "The Chitty icon will appear in your browser toolbar",
+            "Click it to verify it shows 'Connected' (green badge)"
+        ],
+        "note": "The extension connects to Chitty on localhost:8770. Make sure Chitty Workspace is running."
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,6 +1344,714 @@ async fn chat_handler(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+// ---------------------------------------------------------------------------
+// Simple sync /api/ask endpoint — for external apps
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct AskRequest {
+    /// The user's question or prompt
+    #[serde(alias = "question")]
+    message: String,
+    /// Provider ID (e.g., "ollama", "openai"). Defaults to "ollama"
+    #[serde(default = "default_provider")]
+    provider: String,
+    /// Model name. Defaults to "gpt-oss:20b"
+    #[serde(default = "default_model")]
+    model: String,
+    /// Optional agent to use
+    #[serde(default)]
+    agent_id: Option<String>,
+    /// Optional project directory for context
+    #[serde(default)]
+    project_path: Option<String>,
+    /// Max tool-calling iterations (default 10)
+    #[serde(default = "default_max_iter")]
+    max_iterations: u32,
+    /// Auto-approve all tool calls (default true for API usage)
+    #[serde(default = "default_true")]
+    auto_approve: bool,
+}
+
+fn default_provider() -> String { "ollama".to_string() }
+fn default_model() -> String { "gpt-oss:20b".to_string() }
+fn default_max_iter() -> u32 { 10 }
+
+#[derive(Serialize)]
+struct AskResponse {
+    reply: String,
+    conversation_id: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<AskToolCall>,
+}
+
+#[derive(Serialize)]
+struct AskToolCall {
+    tool: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<String>,
+    success: bool,
+}
+
+/// Simple synchronous ask endpoint for external applications.
+///
+/// POST /api/ask
+/// Request: { "message": "...", "provider": "ollama", "model": "gpt-oss:20b" }
+/// Response: { "reply": "...", "conversation_id": "...", "tool_calls": [...] }
+///
+/// Unlike /api/chat (SSE streaming), this returns a single JSON response
+/// after the full agent loop completes. Perfect for scripts, Flask apps,
+/// and external integrations.
+async fn ask_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AskRequest>,
+) -> impl IntoResponse {
+    // Create a conversation
+    let cid = uuid::Uuid::new_v4().to_string();
+    let title = if req.message.len() > 50 {
+        format!("{}...", &req.message[..47])
+    } else {
+        req.message.clone()
+    };
+    if let Ok(conn) = state.db.connect() {
+        let _ = conn.execute(
+            "INSERT INTO conversations (id, title, provider, model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))",
+            rusqlite::params![cid, title, &req.provider, &req.model],
+        );
+    }
+
+    // Create provider
+    let provider = match create_provider(&state, &req.provider).await {
+        Ok(p) => p,
+        Err(e) => return (axum::http::StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({"error": format!("Provider error: {}", e)}))).into_response(),
+    };
+
+    // Assemble context
+    let (ctx, _exec_cfg, effective_pp) = {
+        let conn = match state.db.connect() {
+            Ok(c) => c,
+            Err(e) => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({"error": format!("DB error: {}", e)}))).into_response(),
+        };
+        let all_defs = {
+            let rt = state.tool_runtime.read().await;
+            rt.list_definitions()
+        };
+        let sr = &state.skill_registry;
+        match crate::chat::ChatEngine::assemble_context(
+            &conn, &cid, req.agent_id.as_deref(), req.project_path.as_deref(), &all_defs, sr
+        ) {
+            Ok(v) => v,
+            Err(e) => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({"error": format!("Context error: {}", e)}))).into_response(),
+        }
+    };
+
+    // Build messages
+    let mut messages = vec![
+        ChatMessage { role: "system".to_string(), content: ctx.system_prompt.clone(), tool_calls: None, tool_call_id: None },
+        ChatMessage { role: "user".to_string(), content: req.message.clone(), tool_calls: None, tool_call_id: None },
+    ];
+
+    // Use the pre-built tool definitions from context assembly
+    let tools_ref = if ctx.tools.is_empty() { None } else { Some(ctx.tools.as_slice()) };
+
+    let working_dir = std::path::PathBuf::from(
+        effective_pp.as_deref().unwrap_or(".")
+    );
+    let tool_ctx = crate::tools::ToolContext {
+        working_dir,
+        db: state.db.clone(),
+        conversation_id: cid.clone(),
+    };
+
+    let mut full_reply = String::new();
+    let mut tool_call_log: Vec<AskToolCall> = Vec::new();
+
+    // Agent loop (non-streaming)
+    for _iter in 0..req.max_iterations {
+        let response = match provider.chat(&req.model, &messages, tools_ref).await {
+            Ok(r) => r,
+            Err(e) => {
+                return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(serde_json::json!({"error": format!("LLM error: {}", e)}))).into_response();
+            }
+        };
+
+        // Collect text
+        if !response.content.is_empty() {
+            full_reply.push_str(&response.content);
+        }
+
+        // Process tool calls
+        if let Some(ref tcs) = response.tool_calls {
+            messages.push(response.clone());
+
+            for tc in tcs {
+                let tool_runtime = state.tool_runtime.read().await;
+                let (result, _dur) = tool_runtime.execute(&tc.name, &tc.arguments, &tool_ctx).await;
+                drop(tool_runtime);
+
+                let result_str = result.as_content_string();
+                let success = result.success;
+
+                tool_call_log.push(AskToolCall {
+                    tool: tc.name.clone(),
+                    result: Some(if result_str.len() > 500 {
+                        format!("{}...", &result_str[..500])
+                    } else {
+                        result_str.clone()
+                    }),
+                    success,
+                });
+
+                messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: result_str,
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+            }
+        } else {
+            // No tool calls — model is done
+            break;
+        }
+    }
+
+    // Save messages to DB
+    if let Ok(conn) = state.db.connect() {
+        let _ = conn.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?1, ?2, 'user', ?3, datetime('now'))",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), &cid, &req.message],
+        );
+        let _ = conn.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?1, ?2, 'assistant', ?3, datetime('now'))",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), &cid, &full_reply],
+        );
+    }
+
+    axum::Json(AskResponse {
+        reply: full_reply,
+        conversation_id: cid,
+        tool_calls: tool_call_log,
+    }).into_response()
+}
+
+// ===========================================================================
+// Agent API v1 — structured endpoints for external integrations
+// ===========================================================================
+
+#[derive(Deserialize)]
+struct V1CreateSessionRequest {
+    agent_id: String,
+    #[serde(default)]
+    project_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct V1ChatRequest {
+    message: String,
+}
+
+/// GET /api/v1/agents — list all agents
+async fn v1_list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let db = state.db.clone();
+    let agents = db
+        .with_conn(|conn| AgentsManager::list(conn))
+        .await
+        .unwrap_or_default();
+
+    Json(agents.iter().map(|a| serde_json::json!({
+        "id": a.id,
+        "name": a.name,
+        "description": a.description,
+        "project_path": a.project_path,
+        "preferred_provider": a.preferred_provider,
+        "preferred_model": a.preferred_model,
+        "tags": a.tags,
+    })).collect::<Vec<_>>()).into_response()
+}
+
+/// GET /api/v1/agents/:id — get agent by ID
+async fn v1_get_agent(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    match db.with_conn(move |conn| AgentsManager::load(conn, &id)).await {
+        Ok(Some(agent)) => Json(serde_json::json!(agent)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Agent not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// POST /api/v1/sessions — create a new session for an agent
+async fn v1_create_session(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<V1CreateSessionRequest>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let agent_id = req.agent_id.clone();
+    let project_path = req.project_path.clone();
+
+    // Load agent to validate it exists and get provider/model defaults
+    let agent = match db.with_conn({
+        let aid = agent_id.clone();
+        move |conn| AgentsManager::load(conn, &aid)
+    }).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Agent not found"})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    let provider = agent.preferred_provider.clone().unwrap_or_else(|| "ollama".to_string());
+    let model = agent.preferred_model.clone().unwrap_or_else(|| "gpt-oss:20b".to_string());
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    let sid = session_id.clone();
+    let aid = agent_id.clone();
+    let pp = project_path.clone();
+    let prov = provider.clone();
+    let mdl = model.clone();
+
+    match db.with_conn(move |conn| {
+        conn.execute(
+            "INSERT INTO conversations (id, title, agent_id, project_path, provider, model, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))",
+            rusqlite::params![sid, "New session", aid, pp, prov, mdl],
+        )?;
+        Ok(())
+    }).await {
+        Ok(()) => Json(serde_json::json!({
+            "session_id": session_id,
+            "provider": provider,
+            "model": model,
+            "agent": {
+                "id": agent.id,
+                "name": agent.name,
+                "description": agent.description,
+            }
+        })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// GET /api/v1/sessions — list sessions (conversations with agent_id)
+async fn v1_list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let db = state.db.clone();
+    match db.with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, agent_id, project_path, provider, model, created_at, updated_at \
+             FROM conversations WHERE agent_id IS NOT NULL ORDER BY updated_at DESC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "title": row.get::<_, Option<String>>(1)?,
+                "agent_id": row.get::<_, Option<String>>(2)?,
+                "project_path": row.get::<_, Option<String>>(3)?,
+                "provider": row.get::<_, String>(4)?,
+                "model": row.get::<_, String>(5)?,
+                "created_at": row.get::<_, String>(6)?,
+                "updated_at": row.get::<_, String>(7)?,
+            }))
+        })?;
+        let sessions: Vec<serde_json::Value> = rows.filter_map(|r| r.ok()).collect();
+        Ok(sessions)
+    }).await {
+        Ok(sessions) => Json(serde_json::json!({"sessions": sessions})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// GET /api/v1/sessions/:id — get session with message history
+async fn v1_get_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let session_id = id.clone();
+    match db.with_conn(move |conn| {
+        let conv: Option<serde_json::Value> = conn.query_row(
+            "SELECT id, title, agent_id, project_path, provider, model, created_at, updated_at \
+             FROM conversations WHERE id = ?1",
+            rusqlite::params![session_id],
+            |row| Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "title": row.get::<_, Option<String>>(1)?,
+                "agent_id": row.get::<_, Option<String>>(2)?,
+                "project_path": row.get::<_, Option<String>>(3)?,
+                "provider": row.get::<_, String>(4)?,
+                "model": row.get::<_, String>(5)?,
+                "created_at": row.get::<_, String>(6)?,
+                "updated_at": row.get::<_, String>(7)?,
+            })),
+        ).ok();
+
+        let messages = ChatEngine::get_messages(conn, &id)?;
+        Ok((conv, messages))
+    }).await {
+        Ok((Some(conv), messages)) => Json(serde_json::json!({
+            "session": conv,
+            "messages": messages.iter().map(|m| serde_json::json!({
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "tool_calls": m.tool_calls,
+                "tool_call_id": m.tool_call_id,
+                "created_at": m.created_at,
+            })).collect::<Vec<_>>(),
+        })).into_response(),
+        Ok((None, _)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// DELETE /api/v1/sessions/:id — delete a session
+async fn v1_delete_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    match db.with_conn(move |conn| ChatEngine::delete_conversation(conn, &id)).await {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// POST /api/v1/sessions/:id/chat — send message to session, get SSE stream
+async fn v1_session_chat(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(req): Json<V1ChatRequest>,
+) -> impl IntoResponse {
+    // Load the session's config from DB
+    let db = state.db.clone();
+    let sid = session_id.clone();
+    let conv = match db.with_conn(move |conn| {
+        conn.query_row(
+            "SELECT id, provider, model, agent_id, project_path FROM conversations WHERE id = ?1",
+            rusqlite::params![sid],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            )),
+        ).map_err(|e| anyhow::anyhow!("Session not found: {}", e))
+    }).await {
+        Ok(c) => c,
+        Err(_) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        ).into_response(),
+    };
+
+    // Build ChatRequest from session config and forward to chat_handler
+    let chat_req = ChatRequest {
+        conversation_id: Some(conv.0),
+        message: req.message,
+        provider: conv.1,
+        model: conv.2,
+        agent_id: conv.3,
+        project_path: conv.4,
+    };
+
+    chat_handler(State(state), Json(chat_req)).await.into_response()
+}
+
+/// POST /api/v1/sessions/:id/ask — send message to session, get sync JSON response
+async fn v1_session_ask(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(req): Json<V1ChatRequest>,
+) -> impl IntoResponse {
+    // Load the session's config from DB
+    let db = state.db.clone();
+    let sid = session_id.clone();
+    let conv = match db.with_conn(move |conn| {
+        conn.query_row(
+            "SELECT id, provider, model, agent_id, project_path FROM conversations WHERE id = ?1",
+            rusqlite::params![sid],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            )),
+        ).map_err(|e| anyhow::anyhow!("Session not found: {}", e))
+    }).await {
+        Ok(c) => c,
+        Err(_) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        ).into_response(),
+    };
+
+    // Build AskRequest from session config and forward to ask_handler
+    let ask_req = AskRequest {
+        message: req.message,
+        provider: conv.1,
+        model: conv.2,
+        agent_id: conv.3,
+        project_path: conv.4,
+        max_iterations: default_max_iter(),
+        auto_approve: true,
+    };
+
+    ask_handler(State(state), Json(ask_req)).await.into_response()
+}
+
+const V1_DOCS_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chitty Agent API v1</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;padding:2rem;max-width:960px;margin:0 auto}
+h1{color:#4fc3f7;font-size:2rem;margin-bottom:.25rem}
+h2{color:#4fc3f7;font-size:1.4rem;margin:2rem 0 1rem;border-bottom:1px solid #333;padding-bottom:.4rem}
+h3{color:#81d4fa;font-size:1.1rem;margin:1.2rem 0 .5rem}
+p,li{color:#ccc;font-size:.95rem}
+a{color:#4fc3f7;text-decoration:none}
+a:hover{text-decoration:underline}
+.subtitle{color:#888;font-size:1rem;margin-bottom:.5rem}
+.base-url{background:#16213e;border:1px solid #333;border-radius:6px;padding:.5rem 1rem;display:inline-block;margin:.5rem 0 1rem;font-family:monospace;color:#4fc3f7}
+code{background:#16213e;color:#4fc3f7;padding:.15rem .4rem;border-radius:3px;font-size:.88rem}
+pre{background:#0f0f23;border:1px solid #333;border-radius:6px;padding:1rem;overflow-x:auto;margin:.75rem 0;font-size:.85rem;line-height:1.5}
+pre code{background:none;padding:0;color:#e0e0e0}
+.card{background:#16213e;border:1px solid #2a2a4a;border-radius:8px;padding:1.2rem;margin:.75rem 0}
+.method{display:inline-block;padding:.15rem .5rem;border-radius:3px;font-weight:700;font-size:.8rem;margin-right:.5rem;font-family:monospace}
+.get{background:#1b5e20;color:#a5d6a7}
+.post{background:#0d47a1;color:#90caf9}
+.delete{background:#b71c1c;color:#ef9a9a}
+.endpoint{font-family:monospace;color:#e0e0e0;font-size:.95rem}
+.step{display:flex;align-items:flex-start;gap:.75rem;margin:.5rem 0}
+.step-num{background:#4fc3f7;color:#1a1a2e;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem;flex-shrink:0}
+table{width:100%;border-collapse:collapse;margin:.75rem 0;font-size:.88rem}
+th{background:#16213e;color:#4fc3f7;text-align:left;padding:.6rem .8rem;border:1px solid #333}
+td{padding:.6rem .8rem;border:1px solid #2a2a4a}
+tr:nth-child(even){background:#16213e}
+.tab-bar{display:flex;gap:0;margin-top:.75rem}
+.tab-bar button{background:#0f0f23;color:#888;border:1px solid #333;border-bottom:none;padding:.4rem 1rem;cursor:pointer;font-size:.85rem;border-radius:6px 6px 0 0}
+.tab-bar button.active{background:#16213e;color:#4fc3f7;border-color:#4fc3f7}
+.tab-content{display:none}
+.tab-content.active{display:block}
+.error-row td:first-child{font-weight:700;color:#ef9a9a;white-space:nowrap}
+@media(max-width:600px){body{padding:1rem}h1{font-size:1.5rem}pre{font-size:.78rem;padding:.75rem}}
+</style></head><body>
+
+<h1>Chitty Agent API v1</h1>
+<p class="subtitle">Local agents-as-a-service</p>
+<div class="base-url">http://localhost:8770</div>
+
+<h2>Getting Started</h2>
+<div class="card">
+<div class="step"><div class="step-num">1</div><div>List agents &mdash; <code>GET /api/v1/agents</code></div></div>
+<div class="step"><div class="step-num">2</div><div>Create session &mdash; <code>POST /api/v1/sessions</code> with <code>{ "agent_id": "chitty" }</code></div></div>
+<div class="step"><div class="step-num">3</div><div>Chat &mdash; <code>POST /api/v1/sessions/{id}/chat</code> with <code>{ "message": "hello" }</code></div></div>
+</div>
+
+<h2>API Reference</h2>
+
+<h3>Agents</h3>
+<div class="card">
+<p><span class="method get">GET</span><span class="endpoint">/api/v1/agents</span> &mdash; List available agents</p>
+<pre><code>Response: { "agents": [{ "id", "name", "description", "project_path", "preferred_provider", "preferred_model" }] }</code></pre>
+</div>
+<div class="card">
+<p><span class="method get">GET</span><span class="endpoint">/api/v1/agents/:id</span> &mdash; Get agent details</p>
+<pre><code>Response: Full agent object</code></pre>
+</div>
+
+<h3>Sessions</h3>
+<div class="card">
+<p><span class="method post">POST</span><span class="endpoint">/api/v1/sessions</span> &mdash; Create session</p>
+<pre><code>Body: { "agent_id": "chitty", "project_path": "c:\\my\\project" }
+
+Response: { "session_id": "abc-123", "agent": { "id", "name", "description" }, "provider", "model" }</code></pre>
+</div>
+<div class="card">
+<p><span class="method get">GET</span><span class="endpoint">/api/v1/sessions</span> &mdash; List active sessions</p>
+</div>
+<div class="card">
+<p><span class="method get">GET</span><span class="endpoint">/api/v1/sessions/:id</span> &mdash; Get session with message history</p>
+</div>
+<div class="card">
+<p><span class="method delete">DELETE</span><span class="endpoint">/api/v1/sessions/:id</span> &mdash; End session</p>
+</div>
+
+<h3>Chat</h3>
+<div class="card">
+<p><span class="method post">POST</span><span class="endpoint">/api/v1/sessions/:id/chat</span> &mdash; Send message (SSE stream)</p>
+<pre><code>Body: { "message": "your question here" }
+
+Returns: Server-Sent Events stream</code></pre>
+</div>
+<div class="card">
+<p><span class="method post">POST</span><span class="endpoint">/api/v1/sessions/:id/ask</span> &mdash; Send message (JSON response)</p>
+<pre><code>Body: { "message": "your question here" }
+
+Returns: { "reply": "...", "tool_calls": [...] }</code></pre>
+</div>
+
+<h2>SSE Event Reference</h2>
+<table>
+<tr><th>Event</th><th>Data</th><th>Description</th></tr>
+<tr><td><code>meta</code></td><td>{ session_id, message_id }</td><td>Session metadata, sent first</td></tr>
+<tr><td><code>text</code></td><td>{ content }</td><td>Assistant text chunk</td></tr>
+<tr><td><code>thinking</code></td><td>{ content }</td><td>Status/thinking update</td></tr>
+<tr><td><code>tool_call_start</code></td><td>{ id, name }</td><td>Tool execution starting</td></tr>
+<tr><td><code>tool_result</code></td><td>{ id, name, success, content, duration_ms }</td><td>Tool execution result</td></tr>
+<tr><td><code>iteration_start</code></td><td>{ iteration, max }</td><td>New iteration in agent loop</td></tr>
+<tr><td><code>done</code></td><td>{}</td><td>Stream complete</td></tr>
+<tr><td><code>error</code></td><td>{ message }</td><td>Error occurred</td></tr>
+</table>
+
+<h2>Code Examples</h2>
+<div class="tab-bar">
+<button class="active" onclick="showTab('js')">JavaScript</button>
+<button onclick="showTab('py')">Python</button>
+<button onclick="showTab('curl')">curl</button>
+</div>
+
+<div id="tab-js" class="tab-content active">
+<pre><code>// Create session
+const session = await fetch('/api/v1/sessions', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({ agent_id: 'chitty' })
+}).then(r =&gt; r.json());
+
+// Chat with SSE
+const response = await fetch(`/api/v1/sessions/${session.session_id}/chat`, {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({ message: 'Hello!' })
+});
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  const lines = decoder.decode(value).split('\n');
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const event = JSON.parse(line.slice(6));
+      // Handle event...
+    }
+  }
+}</code></pre>
+</div>
+
+<div id="tab-py" class="tab-content">
+<pre><code>import requests
+
+# Create session
+session = requests.post('http://localhost:8770/api/v1/sessions',
+    json={'agent_id': 'chitty'}).json()
+
+# Ask (non-streaming)
+reply = requests.post(
+    f'http://localhost:8770/api/v1/sessions/{session["session_id"]}/ask',
+    json={'message': 'Hello!'}).json()
+print(reply['reply'])</code></pre>
+</div>
+
+<div id="tab-curl" class="tab-content">
+<pre><code># List agents
+curl http://localhost:8770/api/v1/agents
+
+# Create session
+curl -X POST http://localhost:8770/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "chitty"}'
+
+# Chat (SSE stream)
+curl -N http://localhost:8770/api/v1/sessions/SESSION_ID/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello"}'</code></pre>
+</div>
+
+<h2>Error Handling</h2>
+<table>
+<tr><th>Status</th><th>Meaning</th></tr>
+<tr class="error-row"><td>400</td><td>Bad Request &mdash; Missing or invalid parameters</td></tr>
+<tr class="error-row"><td>404</td><td>Not Found &mdash; Agent or session not found</td></tr>
+<tr class="error-row"><td>500</td><td>Internal Server Error &mdash; Server-side error</td></tr>
+</table>
+<pre><code>Error format: { "error": "description" }</code></pre>
+
+<script>
+function showTab(id){
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-bar button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body></html>"#;
+
+/// GET /api/v1/docs — HTML documentation page
+async fn v1_docs_html() -> impl IntoResponse {
+    axum::response::Html(V1_DOCS_HTML)
+}
+
+/// GET /api/v1/docs.json — OpenAPI spec (placeholder)
+async fn v1_docs_json() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "openapi": "3.0.0",
+        "info": {
+            "title": "Chitty Agent API",
+            "version": "1.0",
+            "description": "API for managing agents and agent sessions in Chitty Workspace"
+        },
+        "paths": {
+            "/api/v1/agents": { "get": { "summary": "List all agents" } },
+            "/api/v1/agents/{id}": { "get": { "summary": "Get agent by ID" } },
+            "/api/v1/sessions": {
+                "get": { "summary": "List sessions" },
+                "post": { "summary": "Create a new session" }
+            },
+            "/api/v1/sessions/{id}": {
+                "get": { "summary": "Get session with messages" },
+                "delete": { "summary": "Delete session" }
+            },
+            "/api/v1/sessions/{id}/chat": { "post": { "summary": "Send message (SSE stream)" } },
+            "/api/v1/sessions/{id}/ask": { "post": { "summary": "Send message (sync JSON)" } }
+        }
+    }))
+}
+
 /// Create a provider instance from the provider ID string.
 async fn create_provider(
     state: &Arc<AppState>,
@@ -1172,9 +2079,8 @@ async fn create_provider(
             Ok(Box::new(OllamaProvider::new(url)))
         }
         ProviderId::Huggingface => {
-            let _url = base_url.unwrap_or_else(|| "http://localhost:8766".to_string());
-            // LocalProvider will be added in Phase 2 — for now, use the sidecar URL
-            anyhow::bail!("Local sidecar provider not yet implemented. Use Ollama for local models.")
+            let url = base_url.unwrap_or_else(|| "http://localhost:8766".to_string());
+            Ok(Box::new(crate::providers::local_sidecar::LocalSidecarProvider::new(url)))
         }
         _ => {
             // Cloud providers require API keys
@@ -1315,8 +2221,9 @@ async fn process_chat(
     let current_tools = context.tools;
     let max_iterations = exec_config.max_iterations;
 
-    // 3b. Model-aware context budget
-    let model_context_tokens = get_model_context_window(&provider_str, &model_str);
+    // 3b. Model-aware context budget (agent context_length overrides model default)
+    let model_context_tokens = exec_config.context_length
+        .unwrap_or_else(|| get_model_context_window(&provider_str, &model_str));
     let context_budget_pct = exec_config.context_budget_pct.max(10).min(95); // clamp to 10-95%
     let token_budget = (model_context_tokens as u64 * context_budget_pct as u64 / 100) as usize;
     let char_budget = token_budget * 4; // rough chars-to-tokens estimate
@@ -1329,6 +2236,9 @@ async fn process_chat(
     // Agent Execution Loop (mirrors DataVisions streaming_executor)
     // =========================================================================
     let mut iteration: u32 = 0;
+
+    // Loop detection: track recent tool call signatures to break stuck loops
+    let mut recent_tool_sigs: Vec<String> = Vec::new();
 
     loop {
         iteration += 1;
@@ -1376,6 +2286,12 @@ async fn process_chat(
         } else {
             Some(current_tools.as_slice())
         };
+
+        // 3c. Smart tool result compression — shrink OLD tool results to save context
+        // Keep last 3 tool-result pairs intact, compress older ones to ~200 chars
+        if iteration > 1 {
+            smart_compress_old_tool_results(&mut current_messages);
+        }
 
         // 4. Context budget check & compaction (model-aware)
         // Count ALL content: message text + tool_calls JSON + tool definitions
@@ -1477,7 +2393,7 @@ async fn process_chat(
         // Log message roles and sizes for debugging
         for (mi, msg) in current_messages.iter().enumerate() {
             let preview = if msg.content.len() > 120 {
-                format!("{}...", &msg.content[..120])
+                format!("{}...", safe_truncate(&msg.content, 120))
             } else {
                 msg.content.clone()
             };
@@ -1497,7 +2413,19 @@ async fn process_chat(
         )
         .await?;
 
-        // 5. No tool calls → save assistant message, done
+        // 5. Fallback: parse tool calls from text output (GGUF models often output them as text)
+        let (mut full_text, mut tool_calls) = if tool_calls.is_empty() && !full_text.is_empty() && tools_for_call.is_some() {
+            match parse_tool_calls_from_text(&full_text) {
+                Some((parsed_calls, cleaned_text)) => {
+                    tracing::info!("Fallback parsed {} tool call(s) from text output", parsed_calls.len());
+                    (cleaned_text, parsed_calls)
+                }
+                None => (full_text, tool_calls),
+            }
+        } else {
+            (full_text, tool_calls)
+        };
+
         tracing::info!("LLM returned: {}chars text, {} tool calls", full_text.len(), tool_calls.len());
 
         // Log LLM response details
@@ -1513,7 +2441,7 @@ async fn process_chat(
             for tc in &tool_calls {
                 let args_preview = {
                     let s = tc.arguments.to_string();
-                    if s.len() > 200 { format!("{}...", &s[..200]) } else { s }
+                    if s.len() > 200 { format!("{}...", safe_truncate(&s, 200)) } else { s }
                 };
                 tracing::info!("  Tool call: {}({}) args={}", tc.name, tc.id, args_preview);
                 let _ = sse_tx
@@ -1523,28 +2451,111 @@ async fn process_chat(
                     )))
                     .await;
             }
+
+            // ── Loop detection: break stuck models repeating the same failing tool call ──
+            // Build a signature from tool name + args for each call this iteration
+            let iter_sig: String = tool_calls.iter()
+                .map(|tc| format!("{}:{}", tc.name, tc.arguments))
+                .collect::<Vec<_>>()
+                .join("|");
+            recent_tool_sigs.push(iter_sig.clone());
+
+            // Check if last 3 iterations used the exact same tool call(s)
+            let sig_len = recent_tool_sigs.len();
+            if sig_len >= 3 {
+                let last3 = &recent_tool_sigs[sig_len-3..];
+                if last3[0] == last3[1] && last3[1] == last3[2] {
+                    tracing::warn!("Loop detected: same tool call repeated 3 times: {}", &last3[0][..last3[0].len().min(100)]);
+                    let _ = sse_tx
+                        .send(StreamChunk::Thinking(
+                            "Loop detected — same tool call failed 3 times, forcing text response...".to_string()
+                        ))
+                        .await;
+
+                    // Inject a system nudge telling the model to stop and respond to the user
+                    current_messages.push(ChatMessage {
+                        role: "system".to_string(),
+                        content: "STOP: You have called the same tool with the same arguments 3 times and it keeps failing. \
+                                  Do NOT call it again. Instead, explain to the user what you were trying to do, what error you \
+                                  encountered, and suggest an alternative approach or ask the user for help.".to_string(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+
+                    // Force a text-only response (no tools)
+                    let (loop_text, _, _, _, _, _) = stream_and_collect(
+                        provider.as_ref(), &model_str, &current_messages, None, &sse_tx,
+                    ).await?;
+
+                    if !loop_text.is_empty() {
+                        let _ = sse_tx.send(StreamChunk::Done).await;
+                    } else {
+                        let _ = sse_tx.send(StreamChunk::Text(
+                            "I got stuck in a loop trying the same thing repeatedly. The command keeps failing. \
+                             Could you check the error and help me understand what's going wrong?".to_string()
+                        )).await;
+                        let _ = sse_tx.send(StreamChunk::Done).await;
+                    }
+                    break;
+                }
+            }
         }
 
         if !full_text.is_empty() {
             let text_preview = if full_text.len() > 200 {
-                format!("{}...", &full_text[..200])
+                format!("{}...", safe_truncate(&full_text, 200))
             } else {
                 full_text.clone()
             };
             tracing::info!("  LLM text preview: {}", text_preview);
         }
 
-        // Handle empty response (LLM returned nothing — likely context too large or API issue)
+        // Handle empty response — 3-stage recovery to keep the conversation alive
         if full_text.is_empty() && tool_calls.is_empty() {
             tracing::warn!("LLM returned empty response at iteration {} (prompt_chars={})", iteration, prompt_chars);
+
+            // ── Stage 1: Retry without tools (tool schemas often confuse local models) ──
             let _ = sse_tx.send(StreamChunk::Thinking(
-                "WARNING: LLM returned empty response (0 text, 0 tool calls)".to_string()
+                "Empty response — retrying without tools...".to_string()
             )).await;
-            let _ = sse_tx.send(StreamChunk::Text(
-                "I wasn't able to generate a response. This may be due to the conversation being too long. Please try starting a new session or simplifying your request.".to_string()
-            )).await;
-            let _ = sse_tx.send(StreamChunk::Done).await;
-            break;
+            tracing::info!("Empty response recovery stage 1: retrying without tools");
+
+            let (retry_text, retry_calls, _, _, _, _) = stream_and_collect(
+                provider.as_ref(), &model_str, &current_messages, None, &sse_tx,
+            ).await?;
+
+            if !retry_text.is_empty() || !retry_calls.is_empty() {
+                tracing::info!("Stage 1 recovery succeeded: {} chars, {} tool calls", retry_text.len(), retry_calls.len());
+                full_text = retry_text;
+                tool_calls = retry_calls;
+                // Fall through to normal response handling below
+            } else {
+                // ── Stage 2: Compact context + retry without tools ──
+                let _ = sse_tx.send(StreamChunk::Thinking(
+                    "Still empty — compacting context and retrying...".to_string()
+                )).await;
+                tracing::info!("Empty response recovery stage 2: compact + retry (budget={})", char_budget / 2);
+
+                truncate_compact(&mut current_messages, char_budget / 2);
+
+                let (retry2_text, retry2_calls, _, _, _, _) = stream_and_collect(
+                    provider.as_ref(), &model_str, &current_messages, None, &sse_tx,
+                ).await?;
+
+                if !retry2_text.is_empty() || !retry2_calls.is_empty() {
+                    tracing::info!("Stage 2 recovery succeeded: {} chars, {} tool calls", retry2_text.len(), retry2_calls.len());
+                    full_text = retry2_text;
+                    tool_calls = retry2_calls;
+                } else {
+                    // ── Stage 3: Give up gracefully (conversation stays open for next user message) ──
+                    tracing::warn!("All recovery stages failed — giving up for this turn");
+                    let _ = sse_tx.send(StreamChunk::Text(
+                        "I wasn't able to generate a response after retrying. The model may be struggling with this conversation's complexity. You can try rephrasing your request or I'll try again with your next message.".to_string()
+                    )).await;
+                    let _ = sse_tx.send(StreamChunk::Done).await;
+                    break;
+                }
+            }
         }
 
         if tool_calls.is_empty() {
@@ -1820,7 +2831,7 @@ async fn process_chat(
                 // Stream: Agent start
                 let _ = sse_tx.send(StreamChunk::AgentStart {
                     agent_name: display_pkg.clone(),
-                    agent_icon: "📦".to_string(),
+                    agent_icon: "pkg".to_string(),
                     instruction: format!("Direct call: {}", tool_name),
                 }).await;
 
@@ -1838,7 +2849,7 @@ async fn process_chat(
 
                 let result_content = result.as_content_string();
                 let result_preview = if result_content.len() > 300 {
-                    format!("{}...", &result_content[..300])
+                    format!("{}...", safe_truncate(&result_content, 300))
                 } else {
                     result_content.clone()
                 };
@@ -1985,6 +2996,148 @@ async fn process_chat(
     // Always send Done to close the SSE stream cleanly
     let _ = sse_tx.send(StreamChunk::Done).await;
 
+    // Background-refresh chitty.md if the project has one and it's stale.
+    // Skip for large models (>30B) to avoid blocking the LLM queue.
+    let model_size_ok = !model_str.contains("120b") && !model_str.contains("70b") && !model_str.contains("72b");
+    if model_size_ok {
+        if let Some(ref pp) = effective_project_path {
+            let pp = pp.clone();
+            let state_bg = state.clone();
+            let prov_bg = provider_str.clone();
+            let mdl_bg = model_str.clone();
+            tokio::spawn(async move {
+                // Small delay to let the main response finish first
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if let Err(e) = refresh_chitty_md(&pp, &state_bg, &prov_bg, &mdl_bg).await {
+                    tracing::warn!("chitty.md background refresh failed: {}", e);
+                }
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Background-refresh chitty.md using the LLM.
+/// Only runs if the file exists and hasn't been updated in the last 30 minutes.
+/// Creates a one-shot non-streaming LLM call to review and update the file.
+async fn refresh_chitty_md(
+    project_path: &str,
+    state: &Arc<AppState>,
+    provider_str: &str,
+    model_str: &str,
+) -> anyhow::Result<()> {
+    let path = std::path::Path::new(project_path);
+
+    // Only refresh if file exists and is stale
+    if !crate::chat::context::needs_refresh(path) {
+        return Ok(());
+    }
+
+    tracing::info!("Background refreshing chitty.md for {}", project_path);
+
+    // Load current chitty.md
+    let current = crate::chat::context::load_project_context(path)?
+        .map(|ctx| ctx.content)
+        .unwrap_or_default();
+
+    // Create provider
+    let provider = create_provider(state, provider_str).await?;
+
+    // Build a focused prompt for updating chitty.md
+    let prompt = format!(
+        "You are updating a project context file (chitty.md) for the project at: {}\n\n\
+         Current chitty.md:\n```\n{}\n```\n\n\
+         Instructions:\n\
+         1. Use the file_reader tool to scan the project directory (path: \".\") at depth 2\n\
+         2. Read any key files you think are important (entry points, configs)\n\
+         3. Update the chitty.md to accurately reflect the project\n\
+         4. Keep it COMPACT — under 500 tokens. Include: project name, stack, entry points, key files, build command\n\
+         5. Use the file_writer tool to write the updated content to .chitty/chitty.md\n\
+         6. Do NOT add verbose descriptions. The agent will use tool calls for details.",
+        project_path, current
+    );
+
+    // Get tool definitions (only file_reader and file_writer)
+    let all_defs = {
+        let rt = state.tool_runtime.read().await;
+        rt.list_definitions()
+    };
+    let allowed_tools = ["file_reader", "file_writer"];
+    let tools: Vec<serde_json::Value> = all_defs.iter()
+        .filter(|d| allowed_tools.contains(&d.name.as_str()))
+        .map(|d| serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": d.name,
+                "description": d.description,
+                "parameters": d.parameters,
+            }
+        }))
+        .collect();
+
+    let mut messages = vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: "You are a project analyzer. Update the chitty.md file concisely. Use tools to read files, then write the updated chitty.md.".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: prompt,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ];
+
+    let tools_ref = if tools.is_empty() { None } else { Some(tools.as_slice()) };
+
+    // Simple tool-calling loop (max 5 iterations, non-streaming)
+    let working_dir = std::path::PathBuf::from(project_path);
+    let ctx = crate::tools::ToolContext {
+        working_dir,
+        db: state.db.clone(),
+        conversation_id: format!("refresh-{}", uuid::Uuid::new_v4()),
+    };
+
+    for _iter in 0..5 {
+        let response = provider.chat(model_str, &messages, tools_ref).await?;
+
+        if let Some(ref tcs) = response.tool_calls {
+            // Add assistant message with tool calls
+            messages.push(response.clone());
+
+            for tc in tcs {
+                // Only allow file_reader and file_writer
+                if !allowed_tools.contains(&tc.name.as_str()) {
+                    messages.push(ChatMessage {
+                        role: "tool".to_string(),
+                        content: "Tool not allowed in background refresh.".to_string(),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                    continue;
+                }
+
+                let tool_runtime = state.tool_runtime.read().await;
+                let (result, _dur) = tool_runtime.execute(&tc.name, &tc.arguments, &ctx).await;
+                drop(tool_runtime);
+
+                messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: result.as_content_string(),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+            }
+        } else {
+            // No tool calls — model is done
+            break;
+        }
+    }
+
+    tracing::info!("chitty.md background refresh completed for {}", project_path);
     Ok(())
 }
 
@@ -2935,6 +4088,8 @@ struct CreateAgentRequest {
     compaction_strategy: Option<String>,
     #[serde(default)]
     max_conversation_turns: Option<u32>,
+    #[serde(default)]
+    context_length: Option<u32>,
 }
 
 fn default_approval_mode_req() -> String {
@@ -2964,6 +4119,7 @@ async fn create_agent(
         context_budget_pct: req.context_budget_pct,
         compaction_strategy: req.compaction_strategy,
         max_conversation_turns: req.max_conversation_turns,
+        context_length: req.context_length,
         package_id: None, // User-created agents have no package link
         parent_agent_id: None,
     };
@@ -3007,6 +4163,7 @@ async fn update_agent(
         context_budget_pct: req.context_budget_pct,
         compaction_strategy: req.compaction_strategy,
         max_conversation_turns: req.max_conversation_turns,
+        context_length: req.context_length,
         package_id: None, // Preserved on update — package agents keep their link
         parent_agent_id: None,
     };
@@ -3209,7 +4366,8 @@ fn get_model_context_window(provider_id: &str, model_id: &str) -> u32 {
             }
         }
         "google" => 1_000_000, // gemini models
-        "ollama" => 8_192,     // conservative default for local models
+        "ollama" => 131_072,   // Ollama models typically support 32K-128K; use generous default
+        "huggingface" => 32_768, // GGUF sidecar default context (matches our n_ctx=32768)
         _ => 128_000,          // safe fallback
     }
 }
@@ -3439,6 +4597,60 @@ fn aggressive_compact(messages: &mut Vec<ChatMessage>) {
             tool_calls: None,
             tool_call_id: None,
         });
+    }
+}
+
+/// Smart context compression — compresses old tool results while keeping recent ones intact.
+/// Runs before each LLM call to prevent context bloat from accumulating tool results.
+///
+/// Strategy:
+/// - Keep last 6 messages (3 tool result/response pairs) fully intact
+/// - Compress older tool results to a ~200 char summary
+/// - Compress older assistant messages with tool_calls to just the tool call names
+/// - Leave system messages and user messages untouched
+fn smart_compress_old_tool_results(messages: &mut Vec<ChatMessage>) {
+    if messages.len() <= 8 {
+        return; // Not enough messages to compress
+    }
+
+    // Protect system prompt (index 0) and last 6 messages
+    let protect_last = 6.min(messages.len().saturating_sub(1));
+    let compress_end = messages.len() - protect_last;
+
+    for i in 1..compress_end {
+        let msg = &mut messages[i];
+
+        // Compress old tool results: keep first 200 chars + summary
+        if msg.role == "tool" && msg.content.len() > 300 {
+            let safe_end = msg.content.char_indices().nth(200).map(|(idx, _)| idx).unwrap_or(200.min(msg.content.len()));
+            let original_len = msg.content.len();
+            msg.content = format!(
+                "{}\n[... {} chars total — older result compressed]",
+                &msg.content[..safe_end],
+                original_len
+            );
+        }
+
+        // Compress old assistant messages that only had tool_calls (no text):
+        // These are just "I'm calling tool X" — the result is in the next message
+        if msg.role == "assistant" && msg.content.is_empty() && msg.tool_calls.is_some() {
+            if let Some(ref tcs) = msg.tool_calls {
+                let names: Vec<String> = tcs.iter().map(|tc| tc.name.clone()).collect();
+                // Keep the tool_calls for API formatting, but add a note
+                msg.content = format!("[Called: {}]", names.join(", "));
+            }
+        }
+
+        // Compress old assistant messages with very long text responses
+        if msg.role == "assistant" && msg.content.len() > 500 && msg.tool_calls.is_none() {
+            let safe_end = msg.content.char_indices().nth(300).map(|(idx, _)| idx).unwrap_or(300.min(msg.content.len()));
+            let original_len = msg.content.len();
+            msg.content = format!(
+                "{}\n[... {} chars total — older response compressed]",
+                &msg.content[..safe_end],
+                original_len
+            );
+        }
     }
 }
 
@@ -5492,6 +6704,93 @@ async fn sidecar_unload_handler() -> impl IntoResponse {
     }
 }
 
+// ─── Sidecar Media Model Handlers ──────────────────────
+
+/// GET /api/local/sidecar/media/models — List media models from sidecar
+async fn sidecar_media_models_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::list_media_models(&base_url).await {
+        Ok(models) => Json(serde_json::json!({ "models": models })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string(), "models": [] })),
+    }
+}
+
+/// POST /api/local/sidecar/media/models/register — Register a media model directory
+async fn sidecar_media_register_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let path = match body.get("path").and_then(|p| p.as_str()) {
+        Some(p) => p.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'path'" })),
+    };
+    let name = body.get("name").and_then(|n| n.as_str());
+    let model_type = body.get("model_type").and_then(|t| t.as_str());
+    let pipeline_class = body.get("pipeline_class").and_then(|p| p.as_str());
+
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::register_media_model(&base_url, &path, name, model_type, pipeline_class).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/sidecar/media/models/unregister — Remove a media model from registry
+async fn sidecar_media_unregister_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let name = match body.get("name").and_then(|n| n.as_str()) {
+        Some(n) => n.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'name'" })),
+    };
+
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::unregister_media_model(&base_url, &name).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/sidecar/media/models/load — Load a media model into GPU
+async fn sidecar_media_load_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let model = match body.get("model").and_then(|m| m.as_str()) {
+        Some(m) => m.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'model'" })),
+    };
+    let dtype = body.get("dtype").and_then(|d| d.as_str());
+
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::load_media_model(&base_url, &model, dtype).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/sidecar/media/models/unload — Unload media model from GPU
+async fn sidecar_media_unload_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+
+    match crate::huggingface::unload_media_model(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
 /// GET /api/local/gguf/scan — Scan for GGUF files locally (no sidecar needed)
 /// Scans ~/.chitty-workspace/models/ and configured extra directories
 async fn gguf_scan_local_handler() -> impl IntoResponse {
@@ -5905,7 +7204,7 @@ async fn dispatch_single_agent(
     let mut tool_trace: Vec<serde_json::Value> = Vec::new();
     let mut final_text = String::new();
     let display_name = agent.name.clone();
-    let agent_icon = agent.package_id.as_deref().unwrap_or("📦").to_string();
+    let agent_icon = agent.package_id.as_deref().unwrap_or("pkg").to_string();
 
     // Stream: Agent started
     let _ = parent_sse.send(StreamChunk::AgentStart {
@@ -5992,7 +7291,7 @@ async fn dispatch_single_agent(
 
             let result_content = result.as_content_string();
             let result_preview = if result_content.len() > 300 {
-                format!("{}...", &result_content[..300])
+                format!("{}...", safe_truncate(&result_content, 300))
             } else {
                 result_content.clone()
             };
@@ -6026,7 +7325,7 @@ async fn dispatch_single_agent(
     // Stream: Agent completed
     let _ = parent_sse.send(StreamChunk::AgentComplete {
         agent_name: display_name.clone(),
-        response: if final_text.len() > 500 { format!("{}...", &final_text[..500]) } else { final_text.clone() },
+        response: if final_text.len() > 500 { format!("{}...", safe_truncate(&final_text, 500)) } else { final_text.clone() },
     }).await;
 
     serde_json::json!({
@@ -6188,11 +7487,15 @@ async fn media_capabilities_handler() -> Json<serde_json::Value> {
                 "speech_to_text": false
             },
             "huggingface": {
-                "image_generation": false,
+                "image_generation": true,
                 "image_editing": false,
-                "video_generation": false,
-                "text_to_speech": false,
-                "speech_to_text": false
+                "video_generation": true,
+                "text_to_speech": true,
+                "speech_to_text": false,
+                "local": true,
+                "models": {
+                    "note": "User-registered local models (Flux, SDXL, SD3, CogVideoX, Wan, Bark, SpeechT5, etc.)"
+                }
             }
         }
     }))

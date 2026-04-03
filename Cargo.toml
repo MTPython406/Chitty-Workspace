@@ -1,6 +1,6 @@
 [package]
 name = "chitty-workspace"
-version = "0.1.0"
+version = "0.1.4"
 edition = "2021"
 description = "Chitty Workspace - Local AI assistant with agents, tools, and BYOK providers"
 authors = ["DataVisions"]
@@ -63,6 +63,16 @@ which = "6"
 regex = "1"
 scraper = "0.21"
 url = "2"
+socket2 = "0.5"
+
+# Tree-sitter (structural code analysis)
+tree-sitter = { version = "0.24", optional = true }
+tree-sitter-rust = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
 
 # SSE parsing (for streaming LLM responses)
 eventsource-stream = "0.2"
@@ -73,8 +83,13 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 chromiumoxide = { version = "0.7", features = ["tokio-runtime"], optional = true }
 
 [features]
-default = []
+default = ["tree-sitter-tools"]
 cdp-browser = ["chromiumoxide"]
+tree-sitter-tools = [
+    "tree-sitter", "tree-sitter-rust", "tree-sitter-python",
+    "tree-sitter-javascript", "tree-sitter-typescript",
+    "tree-sitter-go", "tree-sitter-json",
+]
 
 [profile.release]
 opt-level = "z"

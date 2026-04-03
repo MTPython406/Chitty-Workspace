@@ -34,7 +34,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Start Chitty Workspace (default)
-    Run,
+    Run {
+        /// Start in headless mode (no tray icon or window — server only, access via browser)
+        #[arg(long)]
+        headless: bool,
+
+        /// Port to listen on
+        #[arg(long, default_value = "8770")]
+        port: u16,
+    },
     /// Show current configuration
     Config,
     /// List installed agents
@@ -44,8 +52,8 @@ enum Commands {
         /// Message to send to the LLM
         #[arg(default_value = "Hello, what can you do?")]
         message: String,
-        /// Provider to use (xai, anthropic, openai)
-        #[arg(short, long, default_value = "xai")]
+        /// Provider to use (ollama, huggingface, xai, anthropic, openai)
+        #[arg(short, long, default_value = "ollama")]
         provider: String,
         /// Model to use
         #[arg(short, long)]
@@ -53,6 +61,29 @@ enum Commands {
         /// Agent ID to use
         #[arg(short = 'a', long)]
         agent: Option<String>,
+    },
+    /// Chat with an agent from CLI (headless — supports tool calling)
+    Chat {
+        /// Message to send
+        message: String,
+        /// Provider to use (ollama, huggingface, xai, anthropic, openai)
+        #[arg(short, long, default_value = "ollama")]
+        provider: String,
+        /// Model to use
+        #[arg(short, long)]
+        model: Option<String>,
+        /// Agent ID or name
+        #[arg(short = 'a', long)]
+        agent: Option<String>,
+        /// Max tool-calling iterations (default: 10)
+        #[arg(long, default_value = "10")]
+        max_iterations: u32,
+        /// Auto-approve all tool calls (no prompts)
+        #[arg(long)]
+        auto_approve: bool,
+        /// Project path for context
+        #[arg(short = 'd', long)]
+        project: Option<String>,
     },
     /// Test agent builder from CLI
     TestAgentBuilder {
@@ -94,8 +125,8 @@ async fn main() -> anyhow::Result<()> {
         return handle_protocol_url(url).await;
     }
 
-    match cli.command.unwrap_or(Commands::Run) {
-        Commands::Run => {
+    match cli.command.unwrap_or(Commands::Run { headless: false, port: 8770 }) {
+        Commands::Run { headless, port } => {
             tracing::info!("Starting Chitty Workspace v{}", env!("CARGO_PKG_VERSION"));
 
             // Register chitty:// protocol handler (Windows)
@@ -109,6 +140,24 @@ async fn main() -> anyhow::Result<()> {
 
             // Load config (creates default if missing)
             let _config = config::AppConfig::load(&data_dir)?;
+
+            // Copy browser extension to data directory (user-accessible location)
+            // MSIX installs to protected WindowsApps — Chrome can't load unpacked from there
+            let ext_dest = data_dir.join("extension");
+            if !ext_dest.exists() {
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Some(exe_dir) = exe.parent() {
+                        let ext_src = exe_dir.join("extension");
+                        if ext_src.exists() {
+                            if let Err(e) = copy_dir_recursive(&ext_src, &ext_dest) {
+                                tracing::warn!("Failed to copy browser extension: {}", e);
+                            } else {
+                                tracing::info!("Browser extension copied to {:?}", ext_dest);
+                            }
+                        }
+                    }
+                }
+            }
 
             // Browser bridge — connects to the Chitty Browser Extension via WebSocket
             let browser_bridge = std::sync::Arc::new(server::BrowserBridge::new());
@@ -134,8 +183,11 @@ async fn main() -> anyhow::Result<()> {
                     defs.len(), tool_registry.list_definitions().len());
             }
 
-            // Start the HTTP server in the background
-            let port: u16 = 8770;
+            // Start the HTTP server on a DEDICATED thread with its own tokio runtime.
+            // This prevents the tao/Win32 event loop from starving the async I/O driver.
+            // Without this, external HTTP clients (curl, Flask) hang because the main
+            // thread's message pump interferes with tokio's I/O on Windows.
+            let port: u16 = port;
             let bound_port = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
             let server_db = db.clone();
             let server_tools = tool_registry.clone();
@@ -143,14 +195,22 @@ async fn main() -> anyhow::Result<()> {
             let server_bridge = browser_bridge.clone();
             let server_skills = skill_registry.clone();
             let bp = bound_port.clone();
-            tokio::spawn(async move {
-                if let Err(e) = server::start(server_db, server_tools, server_runtime, server_bridge, server_skills, port, bp).await {
-                    tracing::error!("Server error: {}", e);
-                }
+
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .worker_threads(4)
+                    .build()
+                    .expect("Failed to create server runtime");
+
+                rt.block_on(async move {
+                    if let Err(e) = server::start(server_db, server_tools, server_runtime, server_bridge, server_skills, port, bp).await {
+                        tracing::error!("Server error: {}", e);
+                    }
+                });
             });
 
             // Poll for server readiness (up to 5 seconds)
-            // Wait for the server to store its actual bound port
             let mut actual_port = port;
             let mut ready = false;
             for attempt in 0..100 {
@@ -170,8 +230,19 @@ async fn main() -> anyhow::Result<()> {
                 tracing::error!("Server failed to start within 5 seconds");
             }
 
-            // Run the UI event loop (blocking — takes over the main thread)
-            ui::run(actual_port)?;
+            if headless {
+                // Headless mode — no tray icon or window, just the HTTP server.
+                // Users access the chat UI via browser at http://127.0.0.1:{port}
+                eprintln!("Chitty Workspace v{} running at http://127.0.0.1:{}", env!("CARGO_PKG_VERSION"), actual_port);
+                eprintln!("Open this URL in your browser. Press Ctrl+C to stop.");
+                tracing::info!("Headless mode — waiting for Ctrl+C");
+                tokio::signal::ctrl_c().await?;
+                eprintln!("Shutting down.");
+            } else {
+                // Desktop mode — run the UI event loop (blocking — takes over the main thread).
+                // The server runs on its own thread so this doesn't block HTTP requests.
+                ui::run(actual_port)?;
+            }
         }
         Commands::Config => {
             let data_dir = storage::default_data_dir();
@@ -186,17 +257,18 @@ async fn main() -> anyhow::Result<()> {
             let data_dir = storage::default_data_dir();
             let db = storage::Database::new(&data_dir)?;
             let conn = db.connect()?;
-            let mut stmt = conn.prepare("SELECT name, description FROM agents ORDER BY name")?;
+            let mut stmt = conn.prepare("SELECT id, name, description FROM agents ORDER BY name")?;
             let rows = stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
                 ))
             })?;
             let mut count = 0;
             for row in rows {
-                let (name, desc) = row?;
-                println!("  {} - {}", name, desc);
+                let (id, name, desc) = row?;
+                println!("  {} ({}) - {}", id, name, desc);
                 count += 1;
             }
             if count == 0 {
@@ -207,43 +279,8 @@ async fn main() -> anyhow::Result<()> {
             println!("=== Chitty Workspace CLI Test ===");
             println!("Provider: {}", provider);
 
-            // Resolve provider
-            let provider_id = match provider.as_str() {
-                "xai" => providers::ProviderId::Xai,
-                "anthropic" => providers::ProviderId::Anthropic,
-                "openai" => providers::ProviderId::Openai,
-                other => {
-                    eprintln!("Unknown provider: {}", other);
-                    std::process::exit(1);
-                }
-            };
-
-            // Get API key from keyring (same format as config::get_api_key)
-            let api_key = match config::get_api_key(&provider) {
-                Ok(Some(k)) => k,
-                Ok(None) => {
-                    eprintln!("No API key found for '{}'. Set one in Settings > API Keys.", provider);
-                    std::process::exit(1);
-                }
-                Err(e) => {
-                    eprintln!("Failed to read API key for '{}': {}", provider, e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Create provider
-            let llm: Box<dyn providers::Provider> = match provider_id {
-                providers::ProviderId::Xai => {
-                    Box::new(providers::adaptors::xai::XaiProvider::new(api_key, None))
-                }
-                providers::ProviderId::Anthropic => {
-                    Box::new(providers::cloud::AnthropicProvider::new(api_key, None))
-                }
-                _ => {
-                    eprintln!("Provider '{}' not yet supported in CLI test", provider);
-                    std::process::exit(1);
-                }
-            };
+            // Create provider (local providers don't need API keys)
+            let llm: Box<dyn providers::Provider> = create_cli_provider(&provider)?;
 
             // Resolve model
             let model_id = match model {
@@ -357,6 +394,9 @@ async fn main() -> anyhow::Result<()> {
             }
             let _ = stream_handle.await;
         }
+        Commands::Chat { message, provider, model, agent, max_iterations, auto_approve, project } => {
+            run_cli_chat(message, provider, model, agent, max_iterations, auto_approve, project).await?;
+        }
         Commands::TestAgentBuilder { description } => {
             println!("=== Chitty Workspace Agent Builder CLI Test ===");
             println!("Description: {}", description);
@@ -456,6 +496,308 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Create an LLM provider from a provider name string.
+/// Local providers (ollama, huggingface) don't need API keys.
+fn create_cli_provider(provider: &str) -> anyhow::Result<Box<dyn providers::Provider>> {
+    match provider {
+        "ollama" => {
+            Ok(Box::new(providers::ollama::OllamaProvider::new(
+                "http://localhost:11434".to_string(),
+            )))
+        }
+        "huggingface" => {
+            Ok(Box::new(providers::local_sidecar::LocalSidecarProvider::new(
+                "http://localhost:8766".to_string(),
+            )))
+        }
+        "xai" | "anthropic" | "openai" => {
+            let api_key = config::get_api_key(provider)?
+                .ok_or_else(|| anyhow::anyhow!("No API key found for '{}'. Set one in Settings > API Keys.", provider))?;
+            match provider {
+                "xai" => Ok(Box::new(providers::adaptors::xai::XaiProvider::new(api_key, None))),
+                "anthropic" => Ok(Box::new(providers::cloud::AnthropicProvider::new(api_key, None))),
+                "openai" => Ok(Box::new(providers::adaptors::xai::XaiProvider::new(
+                    api_key,
+                    Some("https://api.openai.com/v1".to_string()),
+                ))),
+                _ => unreachable!(),
+            }
+        }
+        other => anyhow::bail!("Unknown provider: {}. Use: ollama, huggingface, xai, anthropic, openai", other),
+    }
+}
+
+/// CLI chat with agent support and tool-calling loop.
+async fn run_cli_chat(
+    message: String,
+    provider_name: String,
+    model: Option<String>,
+    agent_id: Option<String>,
+    max_iterations: u32,
+    auto_approve: bool,
+    project_path: Option<String>,
+) -> anyhow::Result<()> {
+    eprintln!("=== Chitty Workspace CLI Chat ===");
+
+    // Initialize infrastructure
+    let data_dir = storage::default_data_dir();
+    let db = storage::Database::new(&data_dir)?;
+    let _config = config::AppConfig::load(&data_dir)?;
+    let browser_bridge = std::sync::Arc::new(server::BrowserBridge::new());
+    let skill_registry = std::sync::Arc::new(skills::SkillRegistry::new(&data_dir, None));
+    let tool_runtime = tools::ToolRuntime::new(&data_dir, browser_bridge.clone(), skill_registry.clone())?;
+
+    // Resolve agent (by ID or name)
+    let resolved_agent_id = if let Some(ref agent_ref) = agent_id {
+        let conn = db.connect()?;
+        // Try loading by ID first
+        if agents::AgentsManager::load(&conn, agent_ref)?.is_some() {
+            Some(agent_ref.clone())
+        } else {
+            // Try by name
+            let mut stmt = conn.prepare("SELECT id FROM agents WHERE name = ?1 COLLATE NOCASE")?;
+            let id: Option<String> = stmt.query_row(rusqlite::params![agent_ref], |row| row.get(0)).ok();
+            if id.is_none() {
+                eprintln!("Agent '{}' not found. Run 'chitty-workspace agents' to list available agents.", agent_ref);
+                std::process::exit(1);
+            }
+            id
+        }
+    } else {
+        None
+    };
+
+    // Create provider
+    let llm = create_cli_provider(&provider_name)?;
+
+    // Resolve model (use agent default, explicit flag, or discover)
+    let model_id = if let Some(m) = model {
+        m
+    } else if let Some(ref aid) = resolved_agent_id {
+        let conn = db.connect()?;
+        let agent = agents::AgentsManager::load(&conn, aid)?.unwrap();
+        agent.preferred_model.unwrap_or_else(|| {
+            eprintln!("No model specified and agent has no preferred model. Use -m to specify.");
+            std::process::exit(1);
+        })
+    } else {
+        // Discover first available model
+        eprintln!("Discovering models...");
+        let models = llm.list_models().await?;
+        match models.into_iter().next() {
+            Some(m) => {
+                eprintln!("Using model: {}", m.id);
+                m.id
+            }
+            None => {
+                eprintln!("No models found for provider '{}'", provider_name);
+                std::process::exit(1);
+            }
+        }
+    };
+
+    // Assemble context
+    let all_tool_defs = tool_runtime.list_definitions();
+    let conversation_id = uuid::Uuid::new_v4().to_string();
+
+    let (ctx, exec_config, _effective_project) = {
+        let conn = db.connect()?;
+        chat::ChatEngine::assemble_context(
+            &conn,
+            &conversation_id,
+            resolved_agent_id.as_deref(),
+            project_path.as_deref(),
+            &all_tool_defs,
+            &skill_registry,
+        )?
+    };
+
+    let effective_max_iter = if max_iterations != 10 { max_iterations } else { exec_config.max_iterations };
+
+    eprintln!("Provider: {} | Model: {} | Agent: {} | Max iterations: {} | Auto-approve: {}",
+        provider_name, model_id,
+        resolved_agent_id.as_deref().unwrap_or("(default)"),
+        effective_max_iter, auto_approve);
+    eprintln!("Tools available: {} | Message: {}", ctx.tools.len(), message);
+    eprintln!("---");
+
+    // Build initial messages
+    let mut messages = vec![
+        providers::ChatMessage {
+            role: "system".to_string(),
+            content: ctx.system_prompt,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ];
+    // Add any conversation history from context
+    messages.extend(ctx.messages);
+    // Add user message
+    messages.push(providers::ChatMessage {
+        role: "user".to_string(),
+        content: message,
+        tool_calls: None,
+        tool_call_id: None,
+    });
+
+    let tools_json = if ctx.tools.is_empty() { None } else { Some(ctx.tools.as_slice()) };
+
+    // Tool-calling loop
+    for iteration in 0..effective_max_iter {
+        // Stream response from provider
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<providers::StreamChunk>(256);
+
+        let model_clone = model_id.clone();
+        let msgs_clone = messages.clone();
+        let tools_clone = ctx.tools.clone();
+        let tools_ref = if tools_clone.is_empty() { None } else { Some(tools_clone) };
+
+        let stream_handle = tokio::spawn(async move {
+            let mut full_text = String::new();
+            let mut pending_calls: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new(); // id -> (name, args_json)
+            let mut in_thinking = false;
+
+            while let Some(chunk) = rx.recv().await {
+                match chunk {
+                    providers::StreamChunk::Thinking(t) => {
+                        if !in_thinking {
+                            eprint!("[thinking] ");
+                            in_thinking = true;
+                        }
+                        let _ = t; // suppress thinking content
+                        eprint!(".");
+                    }
+                    providers::StreamChunk::Text(t) => {
+                        if in_thinking { eprintln!(); in_thinking = false; }
+                        print!("{}", t);
+                        full_text.push_str(&t);
+                    }
+                    providers::StreamChunk::ToolCallStart { id, name } => {
+                        if in_thinking { eprintln!(); in_thinking = false; }
+                        pending_calls.insert(id, (name, String::new()));
+                    }
+                    providers::StreamChunk::ToolCallDelta { id, arguments } => {
+                        if let Some((_, ref mut args)) = pending_calls.get_mut(&id) {
+                            args.push_str(&arguments);
+                        }
+                    }
+                    providers::StreamChunk::ToolCallEnd { id: _ } => {}
+                    providers::StreamChunk::Done => break,
+                    providers::StreamChunk::Error(e) => {
+                        eprintln!("\n[ERROR] {}", e);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if in_thinking { eprintln!(); }
+
+            // Build tool calls
+            let tool_calls: Vec<providers::ToolCall> = pending_calls.into_iter().map(|(id, (name, args_json))| {
+                let arguments = serde_json::from_str(&args_json).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                providers::ToolCall { id, name, arguments }
+            }).collect();
+
+            (full_text, tool_calls)
+        });
+
+        // Send to LLM
+        let tools_for_call = tools_ref.as_deref();
+        if let Err(e) = llm.chat_stream(&model_clone, &msgs_clone, tools_for_call, tx).await {
+            eprintln!("[ERROR] Stream failed: {}", e);
+            break;
+        }
+
+        let (full_text, tool_calls) = stream_handle.await?;
+
+        if tool_calls.is_empty() {
+            // No tool calls — done
+            if !full_text.is_empty() { println!(); }
+            break;
+        }
+
+        // Add assistant message with tool calls
+        messages.push(providers::ChatMessage {
+            role: "assistant".to_string(),
+            content: full_text,
+            tool_calls: Some(tool_calls.clone()),
+            tool_call_id: None,
+        });
+
+        eprintln!("\n[Iteration {}/{}] {} tool call(s)", iteration + 1, effective_max_iter, tool_calls.len());
+
+        // Execute each tool call
+        for tc in &tool_calls {
+            eprintln!("[TOOL] {}({})", tc.name, serde_json::to_string(&tc.arguments).unwrap_or_default());
+
+            // Approval gate
+            if !auto_approve {
+                eprint!("  Execute? [y/N] ");
+                use std::io::Write;
+                std::io::stderr().flush().ok();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).ok();
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    eprintln!("  Denied.");
+                    messages.push(providers::ChatMessage {
+                        role: "tool".to_string(),
+                        content: "Tool call denied by user.".to_string(),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                    continue;
+                }
+            }
+
+            let tool_ctx = tools::ToolContext {
+                working_dir: project_path.as_ref().map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
+                db: db.clone(),
+                conversation_id: conversation_id.clone(),
+            };
+
+            let (result, duration_ms) = tool_runtime.execute(&tc.name, &tc.arguments, &tool_ctx).await;
+
+            let result_str = result.as_content_string();
+            let truncated = if result_str.len() > 10_000 {
+                format!("{}... [truncated, {} chars total]", &result_str[..10_000], result_str.len())
+            } else {
+                result_str
+            };
+
+            eprintln!("  [RESULT] success={} ({}ms) {}", result.success,
+                duration_ms,
+                if truncated.len() > 200 { format!("{}...", &truncated[..200]) } else { truncated.clone() });
+
+            messages.push(providers::ChatMessage {
+                role: "tool".to_string(),
+                content: truncated,
+                tool_calls: None,
+                tool_call_id: Some(tc.id.clone()),
+            });
+        }
+    }
+
+    eprintln!("---\nChat complete.");
     Ok(())
 }
 

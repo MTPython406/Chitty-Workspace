@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -56,6 +56,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if current < 12 {
         migrate_v12(conn)?;
+    }
+    if current < 13 {
+        migrate_v13(conn)?;
     }
 
     conn.execute(
@@ -556,5 +559,24 @@ fn migrate_v12(conn: &Connection) -> Result<()> {
     )?;
 
     tracing::info!("Database migrated to v12 (sub-agent architecture)");
+    Ok(())
+}
+
+/// V13: Add context_length to agents for per-agent context window override
+fn migrate_v13(conn: &Connection) -> Result<()> {
+    // Check if column already exists before adding (idempotent migration)
+    let has_column: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='context_length'")?
+        .query_row([], |row| row.get::<_, i64>(0))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_column {
+        conn.execute_batch(
+            "ALTER TABLE agents ADD COLUMN context_length INTEGER;",
+        )?;
+    }
+
+    tracing::info!("Database migrated to v13 (agent context_length)");
     Ok(())
 }

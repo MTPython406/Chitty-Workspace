@@ -5,6 +5,7 @@
 
 pub mod adaptors;
 pub mod cloud;
+pub mod local_sidecar;
 pub mod ollama;
 
 use serde::{Deserialize, Serialize};

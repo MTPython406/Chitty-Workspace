@@ -285,7 +285,8 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   cursor: pointer; transition: all 0.2s; text-align: center;
 }
 .onboard-provider-card:hover { border-color: var(--accent); background: var(--bg-hover); }
-.onboard-provider-icon { font-size: 24px; }
+.onboard-provider-icon { font-size: 24px; display: flex; align-items: center; justify-content: center; min-height: 28px; }
+.onboard-provider-icon svg { display: block; }
 .onboard-provider-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 .onboard-provider-sub { font-size: 10px; color: var(--text-muted); }
 .onboard-footer { margin-top: 20px; text-align: center; font-size: 11px; color: var(--text-muted); }
@@ -1019,6 +1020,8 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
   font-size: 12px; color: var(--text-muted); width: 16px; text-align: center;
 }
 .provider-card-status.ok { color: #10b981; }
+.provider-card-icon { display: inline-flex; align-items: center; margin-right: 2px; vertical-align: middle; }
+.provider-card-icon svg { display: block; }
 .provider-card-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .provider-card-meta { font-size: 11px; color: var(--text-muted); }
 .provider-card-actions {
@@ -1748,7 +1751,7 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <div id="topbar-left">
       <svg id="topbar-icon" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
       <div>
-        <div id="topbar-title">Chitty Workspace</div>
+        <div id="topbar-title">Chitty Workspace <span id="topbar-version" style="font-size:11px;font-weight:400;color:var(--text-muted);"></span></div>
         <div id="topbar-subtitle">0 panels open</div>
       </div>
     </div>
@@ -1817,12 +1820,13 @@ html, body { height: 100%; font-family: var(--font-sans); font-size: 14px; color
     <button class="modal-close" id="settings-close">&times;</button>
     <h2>Settings</h2>
     <div class="settings-tabs">
-      <button class="settings-tab active" data-tab="tokens">Usage</button>
+      <button class="settings-tab active" data-tab="agents">Agents</button>
+      <button class="settings-tab" data-tab="tokens">Usage</button>
     </div>
-    <div id="tab-agents" class="settings-tab-content" style="display:none;">
+    <div id="tab-agents" class="settings-tab-content active">
       <div id="agents-settings"></div>
     </div>
-    <div id="tab-tokens" class="settings-tab-content active">
+    <div id="tab-tokens" class="settings-tab-content">
       <div id="token-settings"></div>
     </div>
   </div>
@@ -1872,6 +1876,7 @@ const App = {
   /* ── Init ───────────────────────────────────────────────────────── */
   async init() {
     this.loadTheme();
+    this.loadVersion();
     this.bindGlobalEvents();
     this.initBrowserWs();
     await this.loadProviders();
@@ -1881,6 +1886,16 @@ const App = {
     await this.loadConversations();
     this.addPanel();
     document.addEventListener('click', () => this.closeAllPopovers());
+  },
+
+  /* ── Version ─────────────────────────────────────────────────────── */
+  async loadVersion() {
+    try {
+      const r = await fetch('/api/version');
+      const data = await r.json();
+      const el = document.getElementById('topbar-version');
+      if (el && data.version) el.textContent = 'v' + data.version;
+    } catch (_) {}
   },
 
   /* ── Theme ──────────────────────────────────────────────────────── */
@@ -1935,6 +1950,7 @@ const App = {
         document.querySelectorAll('.settings-tab-content').forEach(c => c.classList.remove('active'));
         tab.classList.add('active');
         document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+        if (tab.dataset.tab === 'agents') this.renderAgentsSettings();
         if (tab.dataset.tab === 'tokens') this.renderTokenSettings();
         if (tab.dataset.tab === 'marketplace') this.renderMarketplaceSettings();
       });
@@ -2064,15 +2080,37 @@ const App = {
         this._ollamaModels = od.models || [];
       }
     } catch (_) { this._ollamaModels = []; }
-    // Also load HuggingFace sidecar models
+    // Load GGUF models — always scan filesystem, merge with sidecar status
+    this._sidecarModels = [];
     try {
+      // 1. Filesystem scan — always works, gives us the model list
+      const dr = await fetch('/api/local/gguf/scan');
+      if (dr.ok) {
+        const dd = await dr.json();
+        this._sidecarModels = (dd.models || []).map(m => ({ ...m, loaded: false }));
+      }
+      // 2. If sidecar is running, update loaded status
       const sr = await fetch('/api/local/sidecar/models');
       if (sr.ok) {
         const sd = await sr.json();
-        this._sidecarModels = sd.models || [];
+        const sidecarModels = sd.models || [];
+        if (sidecarModels.length) {
+          // Merge: update loaded status from sidecar
+          for (const sm of sidecarModels) {
+            const existing = this._sidecarModels.find(m => m.name === sm.name);
+            if (existing) {
+              existing.loaded = sm.loaded || false;
+              if (sm.capabilities) existing.capabilities = sm.capabilities;
+            } else {
+              this._sidecarModels.push(sm);
+            }
+          }
+        }
       }
-    } catch (_) { this._sidecarModels = []; }
+    } catch (_) {}
     this.renderModelSelect();
+    // Show/hide unload buttons based on loaded state
+    this.updateUnloadButtons();
   },
 
   async loadConversations() {
@@ -2297,6 +2335,17 @@ const App = {
       return;
     }
 
+    // Auto-detect provider/model from panel footer select if not set
+    if (!this.state.selectedProvider || !this.state.selectedModel) {
+      const modelSel = document.querySelector(`[data-panel-id="${panelId}"] .panel-model-select`);
+      if (modelSel && modelSel.value) {
+        this.state.selectedModel = modelSel.value;
+        const opt = modelSel.selectedOptions[0];
+        if (opt && opt.dataset.provider) {
+          this.state.selectedProvider = opt.dataset.provider;
+        }
+      }
+    }
     if (!this.state.selectedProvider || !this.state.selectedModel) {
       panel.messages = []; // Clear to show welcome/onboarding
       this.renderPanel(panelId);
@@ -2433,6 +2482,12 @@ const App = {
               }
             } else if (evType === 'tool_call_start') {
               toolCalls[parsed.tool_call_id] = { name: parsed.tool_name, args: '', result: null };
+              // Store tool call on the assistant message so it survives renderPanel()
+              const lastMsg = panel.messages[panel.messages.length - 1];
+              if (lastMsg && lastMsg.role === 'assistant') {
+                if (!lastMsg.toolCalls) lastMsg.toolCalls = [];
+                lastMsg.toolCalls.push({ id: parsed.tool_call_id, name: parsed.tool_name, args: '', result: null, success: null });
+              }
               // Use tool name as tag for specificity
               const toolTag = (parsed.tool_name || 'tool').substring(0, 12);
               this.activityLog(toolTag, `<span class="hl">Calling ${esc(parsed.tool_name)}</span> <span class="dim">id=${esc(parsed.tool_call_id)}</span>`);
@@ -2440,23 +2495,16 @@ const App = {
               const toolLabels = {
                 'web_search': 'Searching the web', 'web_scraper': 'Reading web page',
                 'file_reader': 'Reading file', 'file_writer': 'Writing file',
-                'terminal': 'Running command', 'browser': 'Using browser',
+                'terminal': 'Running command...', 'browser': 'Using browser',
                 'save_memory': 'Saving to memory', 'load_skill': 'Loading skill',
-                'code_search': 'Searching code', 'create_tool': 'Creating tool',
+                'code_search': 'Searching code', 'code_outline': 'Analyzing code structure',
+                'create_tool': 'Creating tool',
                 'execute_package_tool': 'Running package tool', 'dispatch_agents': 'Dispatching agents',
-                'check_session': 'Checking session health', 'install_package': 'Installing package',
+                'check_session': 'Checking session', 'install_package': 'Installing package',
                 'generate_image': 'Generating image', 'edit_image': 'Editing image',
                 'generate_video': 'Generating video', 'text_to_speech': 'Converting to speech',
               };
               const friendlyLabel = toolLabels[parsed.tool_name] || ('Using ' + parsed.tool_name);
-              const toolIcons = {
-                'web_search': '🔍', 'web_scraper': '🌐', 'file_reader': '📄', 'file_writer': '✏️',
-                'terminal': '💻', 'browser': '🌐', 'save_memory': '💾', 'load_skill': '📦',
-                'code_search': '🔎', 'create_tool': '🔧', 'check_session': '🩺',
-                'execute_package_tool': '📦', 'dispatch_agents': '🤖', 'install_package': '📥',
-                'generate_image': '🖼️', 'edit_image': '✏️', 'generate_video': '🎬', 'text_to_speech': '🔊',
-              };
-              const icon = toolIcons[parsed.tool_name] || '⚡';
               const isMediaTool = ['generate_image', 'edit_image', 'generate_video', 'text_to_speech'].includes(parsed.tool_name);
               const progressHtml = isMediaTool ? `
                   <div class="tool-call-progress"><div class="tool-call-progress-bar"></div></div>
@@ -2464,8 +2512,7 @@ const App = {
               this.appendToolBlockInPanel(panelId,
                 `<div class="tool-call-block" data-tool-id="${parsed.tool_call_id}">
                   <div class="tool-call-header" onclick="this.querySelector('.tool-call-chevron')?.classList.toggle('open');this.parentElement.querySelector('.tool-call-body')?.classList.toggle('open')">
-                    <span class="tool-call-icon">${icon}</span>
-                    <span class="tool-call-label-text">${esc(friendlyLabel)}...</span>
+                    <span class="tool-call-label-text">${esc(friendlyLabel)}</span>
                     ${isMediaTool ? '' : '<span class="tool-call-spinner"></span>'}
                   </div>${progressHtml}
                   <div class="tool-call-body"></div>
@@ -2486,6 +2533,17 @@ const App = {
                 tc.result = parsed.content;
                 tc.success = parsed.success;
                 tc.duration = parsed.duration_ms;
+              }
+              // Update stored tool call on message so it survives renderPanel()
+              const lastMsg = panel.messages[panel.messages.length - 1];
+              if (lastMsg && lastMsg.toolCalls) {
+                const stored = lastMsg.toolCalls.find(t => t.id === parsed.tool_call_id);
+                if (stored) {
+                  stored.args = tc ? tc.args : '';
+                  stored.result = parsed.content ? parsed.content.substring(0, 500) : '';
+                  stored.success = parsed.success;
+                  stored.duration = parsed.duration_ms;
+                }
               }
               // Update chat panel tool block: replace spinner/progress with status, update label
               const toolBlock = document.querySelector(`[data-panel-id="${panelId}"] .tool-call-block[data-tool-id="${parsed.tool_call_id}"]`);
@@ -2513,11 +2571,54 @@ const App = {
                     header.appendChild(statusSpan);
                   }
                 }
-                // Update label text from "Searching..." to past tense
+                // Update label with summary from args (file path, command, etc.)
                 const labelEl = toolBlock.querySelector('.tool-call-label-text');
-                if (labelEl) {
-                  const txt = labelEl.textContent.replace('...', '');
-                  labelEl.textContent = parsed.success ? txt : txt + ' — failed';
+                if (labelEl && tc) {
+                  let summary = '';
+                  try {
+                    const args = typeof tc.args === 'string' ? JSON.parse(tc.args) : tc.args;
+                    if (args) {
+                      const tn = parsed.tool_name;
+                      if ((tn === 'file_reader' || tn === 'file_writer' || tn === 'code_outline') && args.path) {
+                        summary = args.path;
+                      } else if (tn === 'terminal' && args.command) {
+                        summary = args.command.length > 60 ? args.command.substring(0, 57) + '...' : args.command;
+                      } else if (tn === 'code_search' && args.query) {
+                        summary = args.query;
+                      } else if (tn === 'web_search' && args.query) {
+                        summary = args.query;
+                      } else if (tn === 'web_scraper' && args.url) {
+                        summary = args.url;
+                      } else if (tn === 'save_memory' && args.name) {
+                        summary = args.name;
+                      } else if (tn === 'load_skill' && args.skill_name) {
+                        summary = args.skill_name;
+                      } else if (tn === 'browser' && args.action) {
+                        summary = args.action + (args.url ? ': ' + args.url : '');
+                      } else if (tn === 'execute_package_tool' && args.package) {
+                        summary = args.package + '.' + (args.tool || '');
+                      } else if (tn === 'dispatch_agents' && args.tasks) {
+                        summary = args.tasks.map(t => t.agent).join(', ');
+                      } else if (tn === 'install_package' && args.url) {
+                        summary = args.url;
+                      }
+                    }
+                  } catch(e) {}
+                  const doneLabels = {
+                    'web_search': 'Searched', 'web_scraper': 'Read page',
+                    'file_reader': 'Read file', 'file_writer': 'Write file',
+                    'terminal': 'Run command', 'browser': 'Browser',
+                    'save_memory': 'Saved memory', 'load_skill': 'Loaded skill',
+                    'code_search': 'Code search', 'code_outline': 'Code outline',
+                    'create_tool': 'Created tool',
+                    'execute_package_tool': 'Package tool', 'dispatch_agents': 'Dispatched',
+                    'check_session': 'Session check', 'install_package': 'Installed',
+                    'generate_image': 'Generated image', 'edit_image': 'Edited image',
+                    'generate_video': 'Generated video', 'text_to_speech': 'Text to speech',
+                  };
+                  const doneLabel = doneLabels[parsed.tool_name] || parsed.tool_name;
+                  const fullLabel = summary ? doneLabel + ': ' + summary : doneLabel;
+                  labelEl.textContent = parsed.success ? fullLabel : fullLabel + ' — failed';
                   if (!parsed.success) labelEl.style.color = 'var(--danger)';
                 }
                 // Add chevron for expand
@@ -3330,8 +3431,23 @@ const App = {
     let previewHTML = '';
     let codeContent = esc(artifact.content);
 
-    if (artifact.type === 'html') {
-      // Sandboxed iframe for HTML artifacts
+    // Check if content is a URL (for app-type artifacts or HTML artifacts with just a URL)
+    const contentTrimmed = artifact.content.trim();
+    const isUrl = /^https?:\/\//.test(contentTrimmed);
+
+    if (artifact.type === 'app' || (artifact.type === 'html' && isUrl)) {
+      // URL-based artifact — load in iframe via src attribute
+      previewHTML = `
+        <div id="artifact-preview-area" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:var(--bg-input);border-radius:4px;margin:4px 8px;">
+            <span style="font-size:11px;color:var(--text-secondary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(contentTrimmed)}</span>
+            <a href="${esc(contentTrimmed)}" target="_blank" style="font-size:11px;color:var(--accent);text-decoration:none;">Open ↗</a>
+          </div>
+          <iframe id="artifact-iframe" src="${esc(contentTrimmed)}"
+            style="flex:1;border:none;background:#fff;border-radius:0 0 6px 6px;min-height:300px;"></iframe>
+        </div>`;
+    } else if (artifact.type === 'html') {
+      // Sandboxed iframe for inline HTML artifacts
       previewHTML = `
         <div id="artifact-preview-area" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
           <iframe id="artifact-iframe" sandbox="allow-scripts" srcdoc="${esc(artifact.content)}"
@@ -3364,7 +3480,7 @@ const App = {
         </div>
       </div>`;
 
-    this.openDynamicView('\u{1F4E6}', artifact.title, viewHTML);
+    this.openDynamicView('[pkg]', artifact.title, viewHTML);
   },
 
   toggleArtifactView(id) {
@@ -3451,7 +3567,7 @@ const App = {
           <button onclick="navigator.clipboard.writeText('${esc(filename)}').then(()=>this.textContent='Copied!')" style="padding:4px 12px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Copy Filename</button>
         </div>
       </div>`;
-    this.openDynamicView('\u{1F5BC}', 'Generated Image', viewHTML);
+    this.openDynamicView('[img]', 'Generated Image', viewHTML);
   },
 
   viewGeneratedVideo(filename, videoUrl, prompt) {
@@ -3471,7 +3587,7 @@ const App = {
           <button onclick="navigator.clipboard.writeText('${esc(filename)}').then(()=>this.textContent='Copied!')" style="padding:4px 12px;font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Copy Filename</button>
         </div>
       </div>`;
-    this.openDynamicView('\u{1F3AC}', 'Generated Video', viewHTML);
+    this.openDynamicView('[vid]', 'Generated Video', viewHTML);
     this.toggleActionPanel(true);
   },
 
@@ -3499,7 +3615,7 @@ const App = {
           <div class="media-manager-viewer-empty">Select media to preview</div>
         </div>
       </div>`;
-    this.openDynamicView('\u{1F4F7}', 'Media Manager', viewHTML);
+    this.openDynamicView('[media]', 'Media Manager', viewHTML);
     this.toggleActionPanel(true);
     this.renderMediaManagerItems('all', selectedFilename);
   },
@@ -3551,7 +3667,7 @@ const App = {
         </div>`;
       } else if (m.type === 'audio') {
         html += `<div class="media-manager-card${sel}" onclick="App.selectMediaItem('${esc(m.filename)}', '${m.type}')">
-          <div class="audio-badge"><span>\u{1F3B5}</span></div>
+          <div class="audio-badge"><span>&#9835;</span></div>
           <div class="media-manager-card-overlay">
             <div class="media-manager-card-title">${esc(shortPrompt)}</div>
             <div class="media-manager-card-meta">${typeLabel} \u2022 ${m.timestamp}</div>
@@ -3616,7 +3732,7 @@ const App = {
       html = `
         <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg-page);">
           <div style="text-align:center;width:100%;">
-            <div style="font-size:48px;margin-bottom:16px;">\u{1F3B5}</div>
+            <div style="font-size:48px;margin-bottom:16px;">&#9835;</div>
             <audio controls preload="metadata" style="width:100%;max-width:400px;">
               <source src="${url}" type="audio/mpeg" />
             </audio>
@@ -3884,6 +4000,7 @@ const App = {
   /* ── Settings ───────────────────────────────────────────────────── */
   openSettings() {
     document.getElementById('settings-overlay').classList.add('visible');
+    this.renderAgentsSettings();
     this.renderIntegrations();
   },
   closeSettings() {
@@ -3933,7 +4050,7 @@ const App = {
 
     // Group by provider
     const groups = {};
-    const providerNames = { anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI', google: 'Google AI', ollama: 'Ollama', huggingface: 'Local (GGUF)' };
+    const providerNames = { anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI', google: 'Google AI', ollama: 'Local Models', huggingface: 'Local Models (GGUF)' };
     for (const m of allModels) {
       const pid = m.provider_id || 'other';
       if (!groups[pid]) groups[pid] = [];
@@ -3981,6 +4098,14 @@ const App = {
           this.state.selectedProvider = opt.dataset.provider;
         }
       }
+    });
+  },
+
+  updateUnloadButtons() {
+    const isLocal = this.state.selectedProvider === 'huggingface';
+    const hasLoaded = (this._sidecarModels || []).some(m => m.loaded);
+    document.querySelectorAll('.panel-unload-btn').forEach(btn => {
+      btn.style.display = (isLocal || hasLoaded) ? '' : 'none';
     });
   },
 
@@ -4051,6 +4176,7 @@ const App = {
             <select class="panel-model-select input-footer-select" title="Select Model">
               ${this.modelOptionsHTML()}
             </select>
+            <button class="panel-unload-btn" title="Unload local model / Stop generation" style="display:none;background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-muted);font-size:10px;padding:2px 6px;cursor:pointer;margin-left:4px;">&#9632;</button>
           </div>
         </div>
       </div>
@@ -4074,14 +4200,14 @@ const App = {
           <div class="onboard-section-label">Run locally \u2014 free &amp; private</div>
           <div class="onboard-providers">
             <div class="onboard-provider-card" onclick="App.openProviderSetup('ollama')">
-              <div class="onboard-provider-icon">\u{1F4BB}</div>
-              <div class="onboard-provider-name">Ollama</div>
-              <div class="onboard-provider-sub">Llama, Mistral, Qwen, Gemma</div>
+              <div class="onboard-provider-icon">${providerIcon('ollama', 28)}</div>
+              <div class="onboard-provider-name">Local Models</div>
+              <div class="onboard-provider-sub">Gemma 4, Llama 3, DeepSeek, Qwen</div>
             </div>
             <div class="onboard-provider-card" onclick="App.openProviderSetup('huggingface')">
-              <div class="onboard-provider-icon">\u{1F917}</div>
-              <div class="onboard-provider-name">HuggingFace</div>
-              <div class="onboard-provider-sub">GGUF models, local inference</div>
+              <div class="onboard-provider-icon">${providerIcon('huggingface', 28)}</div>
+              <div class="onboard-provider-name">GGUF Models</div>
+              <div class="onboard-provider-sub">Download and run any GGUF model</div>
             </div>
           </div>
 
@@ -4094,22 +4220,22 @@ const App = {
           <div class="onboard-section-label">Bring your own API key</div>
           <div class="onboard-providers">
             <div class="onboard-provider-card" onclick="App.openProviderSetup('anthropic')">
-              <div class="onboard-provider-icon">\u{1F9E0}</div>
+              <div class="onboard-provider-icon">${providerIcon('anthropic', 28)}</div>
               <div class="onboard-provider-name">Anthropic</div>
               <div class="onboard-provider-sub">Claude Sonnet, Opus, Haiku</div>
             </div>
             <div class="onboard-provider-card" onclick="App.openProviderSetup('openai')">
-              <div class="onboard-provider-icon">\u{1F916}</div>
+              <div class="onboard-provider-icon">${providerIcon('openai', 28)}</div>
               <div class="onboard-provider-name">OpenAI</div>
               <div class="onboard-provider-sub">GPT-4o, o1, GPT-4.1</div>
             </div>
             <div class="onboard-provider-card" onclick="App.openProviderSetup('google')">
-              <div class="onboard-provider-icon">\u{1F48E}</div>
+              <div class="onboard-provider-icon">${providerIcon('google', 28)}</div>
               <div class="onboard-provider-name">Google</div>
               <div class="onboard-provider-sub">Gemini Pro, Flash, Ultra</div>
             </div>
             <div class="onboard-provider-card" onclick="App.openProviderSetup('xai')">
-              <div class="onboard-provider-icon">\u26A1</div>
+              <div class="onboard-provider-icon">${providerIcon('xai', 28)}</div>
               <div class="onboard-provider-name">xAI</div>
               <div class="onboard-provider-sub">Grok 3, Grok 4</div>
             </div>
@@ -4135,7 +4261,7 @@ const App = {
     if (isChitty) {
       html += `<div class="welcome-actions">
         <button class="welcome-action-btn" onclick="App.sendBuildAgentMessage()">
-          <span style="font-size:16px;">\u{1F6E0}</span> Build an Agent
+          <span style="font-size:16px;">&#9881;</span> Build an Agent
         </button>
         <button class="welcome-action-btn" onclick="App.openMarketplace()">
           <span style="font-size:16px;">\u{1F4E6}</span> Marketplace
@@ -4199,15 +4325,53 @@ const App = {
               const audioUrl = '/api/media/audio/' + encodeURIComponent(media.filename);
               mediaHtml += `<div class="generated-media-container" style="margin-bottom:4px;">
                 <div onclick="App.openMediaManager('${esc(media.filename)}')" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:11px;color:var(--text-secondary);">
-                  <span>\u{1F3B5}</span> Audio generated
+                  <span>&#9835;</span> Audio generated
                 </div>
               </div>`;
             }
           }
         }
+        // Render tool calls (persist across renderPanel)
+        let toolHtml = '';
+        if (m.toolCalls && m.toolCalls.length > 0) {
+          for (const tc of m.toolCalls) {
+            const doneLabels = {
+              'web_search': 'Searched', 'web_scraper': 'Read page',
+              'file_reader': 'Read file', 'file_writer': 'Write file',
+              'terminal': 'Run command', 'browser': 'Browser',
+              'save_memory': 'Saved memory', 'load_skill': 'Loaded skill',
+              'code_search': 'Code search', 'code_outline': 'Code outline',
+              'create_tool': 'Created tool',
+              'execute_package_tool': 'Package tool', 'dispatch_agents': 'Dispatched',
+              'check_session': 'Session check', 'install_package': 'Installed',
+              'generate_image': 'Generated image', 'edit_image': 'Edited image',
+              'generate_video': 'Generated video', 'text_to_speech': 'Text to speech',
+            };
+            let summary = '';
+            try {
+              const args = tc.args ? (typeof tc.args === 'string' ? JSON.parse(tc.args) : tc.args) : {};
+              if ((tc.name === 'file_reader' || tc.name === 'file_writer' || tc.name === 'code_outline') && args.path) summary = args.path;
+              else if (tc.name === 'terminal' && args.command) summary = args.command.length > 60 ? args.command.substring(0, 57) + '...' : args.command;
+              else if (tc.name === 'code_search' && args.query) summary = args.query;
+              else if (tc.name === 'browser' && args.action) summary = args.action + (args.url ? ': ' + args.url : '');
+            } catch(e) {}
+            const label = doneLabels[tc.name] || tc.name;
+            const fullLabel = summary ? label + ': ' + summary : label;
+            const statusClass = tc.success === true ? 'success' : tc.success === false ? 'error' : '';
+            const statusText = tc.success === true ? ('done > ' + (tc.duration || 0) + 'ms') : tc.success === false ? 'failed' : '';
+            toolHtml += `<div class="tool-call-block" data-tool-id="${tc.id}">
+              <div class="tool-call-header" onclick="this.querySelector('.tool-call-chevron')?.classList.toggle('open');this.parentElement.querySelector('.tool-call-body')?.classList.toggle('open')">
+                <span class="tool-call-label-text"${tc.success === false ? ' style="color:var(--danger)"' : ''}>${esc(fullLabel)}</span>
+                <span class="tool-call-status ${statusClass}">${statusText}</span>
+                <span class="tool-call-chevron">&#9654;</span>
+              </div>
+              <div class="tool-call-body">${tc.result ? '<pre style="margin:0;padding:8px;font-size:11px;line-height:1.4;white-space:pre-wrap;word-break:break-all;">' + esc(tc.result.substring(0, 500)) + '</pre>' : ''}</div>
+            </div>`;
+          }
+        }
         html += `<div class="message ${msgClass}">
           <div class="message-body">
-            ${mediaHtml}
+            ${toolHtml}${mediaHtml}
             <div class="message-content${sc}">${formatContent(m.content)}</div>
           </div>
         </div>`;
@@ -4617,7 +4781,7 @@ const App = {
     });
     // Model selector (in input footer) — also updates provider from data attribute
     const modelSel = el.querySelector('.panel-model-select');
-    if (modelSel) modelSel.addEventListener('change', () => {
+    if (modelSel) modelSel.addEventListener('change', async () => {
       this.state.selectedModel = modelSel.value;
       const opt = modelSel.selectedOptions[0];
       if (opt && opt.dataset.provider) {
@@ -4625,6 +4789,23 @@ const App = {
       }
       // Sync all panel model selects
       document.querySelectorAll('.panel-model-select').forEach(s => { if (s !== modelSel) s.value = modelSel.value; });
+      // Auto-load local GGUF model when selected
+      if (opt && opt.dataset.provider === 'huggingface') {
+        const modelName = modelSel.value;
+        const sidecarModel = (this._sidecarModels || []).find(m => m.name === modelName);
+        if (sidecarModel && !sidecarModel.loaded) {
+          this.activityLog('info', `Loading local model: ${modelName}...`);
+          try { await this.loadGgufModel(modelName); } catch (e) { console.error('Auto-load model:', e); }
+        }
+      }
+    });
+    // Unload button for local models
+    const unloadBtn = el.querySelector('.panel-unload-btn');
+    if (unloadBtn) unloadBtn.addEventListener('click', async () => {
+      try {
+        await this.unloadGgufModel();
+        this.activityLog('info', 'Local model unloaded');
+      } catch (e) { console.error('Unload:', e); }
     });
     // Project path
     const projInput = el.querySelector('.panel-project-path');
@@ -4735,6 +4916,7 @@ const App = {
         <div class="provider-card-header">
           <div class="provider-card-info">
             <span class="provider-card-status ${p.has_key ? 'ok' : ''}">${p.has_key ? '✓' : '○'}</span>
+            <span class="provider-card-icon">${providerIcon(p.provider_id, 18)}</span>
             <span class="provider-card-name">${esc(p.display_name)}</span>
           </div>
           <div class="provider-card-meta">${modelCount} model${modelCount !== 1 ? 's' : ''}</div>
@@ -4767,6 +4949,7 @@ const App = {
       <div class="provider-card-header">
         <div class="provider-card-info">
           <span class="provider-card-status ${ollamaStatus.running ? 'ok' : ''}">${ollamaStatus.running ? '✓' : '○'}</span>
+          <span class="provider-card-icon">${providerIcon('ollama', 18)}</span>
           <span class="provider-card-name">Ollama</span>
         </div>
         <div class="provider-card-meta">${ollamaStatus.running ? ollamaModels.length + ' model' + (ollamaModels.length !== 1 ? 's' : '') + ' loaded' : 'Not running'}</div>
@@ -4811,6 +4994,7 @@ const App = {
       <div class="provider-card-header">
         <div class="provider-card-info">
           <span class="provider-card-status" id="sidecar-status-dot">○</span>
+          <span class="provider-card-icon">${providerIcon('huggingface', 18)}</span>
           <span class="provider-card-name">Local Models (GGUF)</span>
         </div>
         <div class="provider-card-meta" id="sidecar-status-text">Checking...</div>
@@ -4822,11 +5006,32 @@ const App = {
       </div>
       <div class="provider-card-actions" style="flex-wrap:wrap;gap:6px;">
         <button class="provider-card-btn" id="gguf-scan-btn">🔍 Scan Models</button>
-        <button class="provider-card-btn" id="gguf-sidecar-btn">⚡ Start Sidecar</button>
+        <button class="provider-card-btn" id="gguf-sidecar-btn" style="display:none;">⚡ Starting...</button>
         <button class="provider-card-btn" id="gguf-stop-btn" style="display:none;">⏹ Stop Sidecar</button>
         <button class="provider-card-btn" id="gguf-browse-btn">📂 Browse File</button>
       </div>
       <div id="gguf-models-list" style="margin-top:8px;"></div>
+    </div>`;
+
+    /* Media Models (Image, Video, TTS via diffusers/transformers) */
+    html += `<div class="provider-card local-provider">
+      <div class="provider-card-header">
+        <div class="provider-card-info">
+          <span class="provider-card-status" id="media-status-dot">○</span>
+          <span class="provider-card-icon">🎨</span>
+          <span class="provider-card-name">Local Media Models</span>
+        </div>
+        <div class="provider-card-meta" id="media-status-text">Image · Video · TTS</div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);padding:8px 0;line-height:1.6;">
+        Register local diffusion models (Flux, SDXL, CogVideoX, Bark, etc.) for image, video, and speech generation.<br>
+        Set <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">image_provider: huggingface</code> in System Defaults to use locally.
+      </div>
+      <div class="provider-card-actions" style="flex-wrap:wrap;gap:6px;">
+        <button class="provider-card-btn" id="media-refresh-btn">🔄 Refresh</button>
+        <button class="provider-card-btn" id="media-register-btn">📂 Register Model</button>
+      </div>
+      <div id="media-models-list" style="margin-top:8px;"></div>
     </div>`;
 
     /* ─── Runtime Monitoring ─── */
@@ -4944,6 +5149,8 @@ const App = {
           stopBtn.style.display = 'none';
         }
       } catch (_) {}
+      // Auto-scan models on panel load
+      document.getElementById('gguf-scan-btn')?.click();
     })();
 
     /* ─── Scan models (works without sidecar — direct filesystem scan) ─── */
@@ -4972,10 +5179,13 @@ const App = {
             const sizeGb = m.size_gb ? m.size_gb.toFixed(1) : (m.size_bytes ? (m.size_bytes / (1024*1024*1024)).toFixed(1) : '?');
             const quant = m.quantization ? ` · ${m.quantization}` : '';
             const loaded = m.loaded ? ' · <span style="color:var(--success);font-weight:600;">LOADED</span>' : '';
+            const capColors = { text:'#6b7280', tools:'#3b82f6', code:'#a855f7', vision:'#f59e0b', reasoning:'#ef4444', audio:'#10b981', tts:'#ec4899', image:'#f97316' };
+            const capBadges = (m.capabilities || ['text']).map(c => `<span style="display:inline-block;padding:0 4px;margin-right:2px;border-radius:3px;font-size:9px;font-weight:600;background:${capColors[c]||'#6b7280'}22;color:${capColors[c]||'#6b7280'};">${c}</span>`).join('');
             return `<div class="local-model-item" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--bg-card);border-radius:6px;margin-bottom:4px;">
               <div>
                 <div style="font-size:12px;font-weight:500;">${safeName}</div>
                 <div style="font-size:10px;color:var(--text-muted);">${sizeGb} GB${quant}${loaded}</div>
+                <div style="margin-top:2px;">${capBadges}</div>
               </div>
               <div style="display:flex;gap:4px;">
                 ${!m.loaded ? `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App.loadGgufModel('${safeName}')">Load</button>` : `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App.unloadGgufModel()">Unload</button>`}
@@ -5048,6 +5258,92 @@ const App = {
       input.click();
     });
 
+    /* ─── Media Models: Refresh ─── */
+    document.getElementById('media-refresh-btn')?.addEventListener('click', async () => {
+      const list = document.getElementById('media-models-list');
+      list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);">Loading media models...</div>';
+      try {
+        const r = await fetch('/api/local/sidecar/media/models');
+        const data = await r.json();
+        const models = data.models || [];
+        if (!models.length) {
+          list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);">No media models registered. Click "Register Model" to add one.</div>';
+        } else {
+          const typeIcons = { image: '🖼️', video: '🎬', tts: '🔊' };
+          const typeColors = { image: '#f97316', video: '#8b5cf6', tts: '#ec4899' };
+          list.innerHTML = models.map(m => {
+            const safeName = (m.name || '').replaceAll('&','&amp;').replaceAll("'","&#39;").replaceAll('"','&quot;');
+            const sizeGb = m.size_gb ? m.size_gb.toFixed(1) : '?';
+            const mtype = m.model_type || 'image';
+            const icon = typeIcons[mtype] || '🖼️';
+            const color = typeColors[mtype] || '#f97316';
+            const pipeline = m.pipeline_class ? ` · ${m.pipeline_class}` : '';
+            const loaded = m.loaded ? ' · <span style="color:var(--success);font-weight:600;">LOADED</span>' : '';
+            const typeBadge = `<span style="display:inline-block;padding:0 4px;margin-right:2px;border-radius:3px;font-size:9px;font-weight:600;background:${color}22;color:${color};">${mtype}</span>`;
+            return `<div class="local-model-item" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--bg-card);border-radius:6px;margin-bottom:4px;">
+              <div>
+                <div style="font-size:12px;font-weight:500;">${icon} ${safeName}</div>
+                <div style="font-size:10px;color:var(--text-muted);">${sizeGb} GB${pipeline}${loaded}</div>
+                <div style="margin-top:2px;">${typeBadge}</div>
+              </div>
+              <div style="display:flex;gap:4px;">
+                ${!m.loaded ? `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App.loadMediaModel('${safeName}')">Load</button>` : `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App.unloadMediaModel()">Unload</button>`}
+                <button class="provider-card-btn" style="font-size:10px;padding:2px 8px;color:var(--danger);" onclick="App.unregisterMediaModel('${safeName}')">✕</button>
+              </div>
+            </div>`;
+          }).join('');
+        }
+        // Update status dot
+        const dot = document.getElementById('media-status-dot');
+        const loadedModel = models.find(m => m.loaded);
+        if (dot) {
+          dot.style.color = loadedModel ? 'var(--success)' : 'var(--text-muted)';
+          dot.textContent = loadedModel ? '●' : '○';
+        }
+        const statusText = document.getElementById('media-status-text');
+        if (statusText) {
+          statusText.textContent = loadedModel ? `Loaded: ${loadedModel.name}` : 'Image · Video · TTS';
+        }
+      } catch (e) {
+        list.innerHTML = `<div style="font-size:11px;color:var(--text-muted);">Sidecar not running. Start it from the GGUF section above.</div>`;
+      }
+    });
+
+    /* ─── Media Models: Register ─── */
+    document.getElementById('media-register-btn')?.addEventListener('click', () => {
+      const path = prompt('Enter the full path to the model directory:\n\n(e.g., C:\\Models\\FLUX.1-dev or C:\\Models\\bark)');
+      if (!path) return;
+      const typeChoice = prompt('Model type:\n  1) image (Flux, SDXL, SD3, etc.)\n  2) video (CogVideoX, Wan, LTX-Video)\n  3) tts (Bark, SpeechT5, Parler)\n\nEnter 1, 2, or 3:', '1');
+      const typeMap = { '1': 'image', '2': 'video', '3': 'tts' };
+      const modelType = typeMap[typeChoice] || 'image';
+
+      (async () => {
+        try {
+          const running = await App.ensureSidecarRunning();
+          if (!running) {
+            alert('Could not start the inference engine. Check that Python is available.');
+            return;
+          }
+          const r = await fetch('/api/local/sidecar/media/models/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, model_type: modelType }),
+          });
+          const data = await r.json();
+          if (data.success) {
+            document.getElementById('media-refresh-btn')?.click();
+          } else {
+            alert('Failed to register: ' + (data.error || data.detail || 'Unknown error'));
+          }
+        } catch (err) {
+          alert('Error: ' + err.message);
+        }
+      })();
+    });
+
+    // Auto-refresh media models on panel load
+    setTimeout(() => document.getElementById('media-refresh-btn')?.click(), 500);
+
     /* ─── Monitor refresh ─── */
     document.getElementById('monitor-refresh-btn')?.addEventListener('click', async () => {
       try {
@@ -5083,11 +5379,40 @@ const App = {
     document.getElementById('monitor-refresh-btn')?.click();
   },
 
+  /* ── Ensure sidecar is running (auto-start if needed) ──── */
+  async ensureSidecarRunning() {
+    try {
+      const r = await fetch('/api/local/sidecar/status');
+      const s = await r.json();
+      if (s.running) return true;
+    } catch (_) {}
+    // Not running — start it automatically
+    try {
+      const r = await fetch('/api/local/sidecar/start', { method: 'POST' });
+      const data = await r.json();
+      if (data.success) {
+        // Wait a moment for sidecar to be ready
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  },
+
   /* ── GGUF model load/unload helpers ──── */
   async loadGgufModel(name) {
     const list = document.getElementById('gguf-models-list');
     if (list) list.innerHTML = `<div style="font-size:11px;color:var(--text-muted);">Loading ${name}... (this may take a minute)</div>`;
     try {
+      // Auto-start sidecar if not running
+      const running = await this.ensureSidecarRunning();
+      if (!running) {
+        alert('Could not start the inference engine. Check that Python is available.');
+        document.getElementById('gguf-scan-btn')?.click();
+        return;
+      }
       const r = await fetch('/api/local/sidecar/models/load', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5114,6 +5439,59 @@ const App = {
       App.renderProvidersPanel();
     } catch (e) {
       alert('Error unloading model: ' + e.message);
+    }
+  },
+
+  /* ── Media model load/unload/unregister helpers ──── */
+  async loadMediaModel(name) {
+    const list = document.getElementById('media-models-list');
+    if (list) list.innerHTML = `<div style="font-size:11px;color:var(--text-muted);">Loading ${name}... (this may take a minute)</div>`;
+    try {
+      const running = await this.ensureSidecarRunning();
+      if (!running) {
+        alert('Could not start the inference engine. Check that Python is available.');
+        document.getElementById('media-refresh-btn')?.click();
+        return;
+      }
+      const r = await fetch('/api/local/sidecar/media/models/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: name }),
+      });
+      const data = await r.json();
+      if (data.success) {
+        document.getElementById('media-refresh-btn')?.click();
+        // Also refresh GGUF list since text model may have been unloaded
+        document.getElementById('gguf-scan-btn')?.click();
+      } else {
+        alert('Failed to load media model: ' + (data.error || 'Unknown error'));
+        document.getElementById('media-refresh-btn')?.click();
+      }
+    } catch (e) {
+      alert('Error loading media model: ' + e.message);
+    }
+  },
+
+  async unloadMediaModel() {
+    try {
+      await fetch('/api/local/sidecar/media/models/unload', { method: 'POST' });
+      document.getElementById('media-refresh-btn')?.click();
+    } catch (e) {
+      alert('Error unloading media model: ' + e.message);
+    }
+  },
+
+  async unregisterMediaModel(name) {
+    if (!confirm(`Remove "${name}" from the media model registry?\n\n(This only removes the registration — model files are not deleted.)`)) return;
+    try {
+      await fetch('/api/local/sidecar/media/models/unregister', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      document.getElementById('media-refresh-btn')?.click();
+    } catch (e) {
+      alert('Error: ' + e.message);
     }
   },
 
@@ -5669,6 +6047,7 @@ const App = {
         <div class="config-field"><label>Max Iterations</label><input type="number" id="sf-max-iter" value="${existing?.max_iterations || 10}" min="1" max="100" /></div>
         <div class="config-field"><label>Temperature</label><input type="number" id="sf-temp" value="${existing?.temperature ?? ''}" min="0" max="2" step="0.1" placeholder="default" /></div>
         <div class="config-field"><label>Max Tokens</label><input type="number" id="sf-max-tokens" value="${existing?.max_tokens ?? ''}" placeholder="default" /></div>
+        <div class="config-field"><label>Context Length</label><input type="number" id="sf-context-length" value="${existing?.context_length ?? ''}" placeholder="32768" min="512" max="131072" step="1024" title="Context window size for local GGUF models" /></div>
       </div>
       <label>Context Management</label>
       <div class="exec-config">
@@ -5733,6 +6112,7 @@ const App = {
         max_iterations: parseInt(document.getElementById('sf-max-iter').value) || null,
         temperature: parseFloat(document.getElementById('sf-temp').value) || null,
         max_tokens: parseInt(document.getElementById('sf-max-tokens').value) || null,
+        context_length: parseInt(document.getElementById('sf-context-length').value) || null,
         context_budget_pct: parseInt(document.getElementById('sf-context-budget').value) || null,
         compaction_strategy: document.getElementById('sf-compaction-strategy').value || null,
         max_conversation_turns: parseInt(document.getElementById('sf-max-turns').value) || null,
@@ -7491,6 +7871,23 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// Provider icons â€” real brand logos as base64 PNGs
+function providerIcon(providerId, size = 24) {
+  const s = size;
+  const pngIcons = {
+    anthropic: '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',
+    openai: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAQAAADZc7J/AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAD/h4/MvwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB+oDGxMMEBTReksAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDMtMjNUMjM6NTc6MTYrMDA6MDBAmrQSAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAzLTIzVDIzOjU3OjE2KzAwOjAwMccMrgAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0yN1QxOToxMjoxNiswMDowMKItms0AAALESURBVEjH1ZVtaJVlGMd/z9k5Yk2ladjJc6aHdLLccH4QIkm/KGpLWeQbvtTHSAgEZeRbQSEWFAxFfIlUonQpmNhWvk5BEf2gbNMzZqYzT6eBBVof1HS1Xx86sjM9z5ofvb4993P9f8/1v+/num544iMovGx/ksLe2d/Ewus5+RCmMYUSshzlNF3hksKAcj6jknZuUUqKBhoZwV9cpI2//8eSiHFP2GiVMTFuvZrxolfMut2UGGLyPzFiredNihGnetAO11vhUJMusNXjJkIAOXHUSba4Wixzq1nrnSgOslTESn/0k74AJdZ5w/vOEettt8YiA2fYZIcfGBdrbfO5fEAkb+sGsI4aPuUXJMKz7OMAL/I5X3CDL1nM98wnzWDiYd+fbqc1DveSbxh4yG2u9JraZEoc7QYztpi1It9EJI8ymzQ/EM09dfMWi6njXYaxl0X8yjIWkqGYssIVRG10o5jwkq8beNgGR4o40v12+Z2TxWI32+qonhp6KujmDkMAiVFFMdJMBoAMzXQgu1lHF+uJMZcCFro5w0sk+Z1veJuvSfUyep0lbGUJcbKc5eUeXf4efMt9VhFjDYuIMoYqSgFIUkXAbZrpIgD+5GmKCp9DjTc94CTxKd/0nC0udakt3vWQEWf5k6OMetAtBX4mEcvNmjZjnS+IKY+pP7vWbR7JARJW22l1D+DBoREgxPiH9xhMLa+yizLGsoMNXOBDxuSyF/AODTSFNdNw064Q477vVZucaWDE10y7V5ztPX9zk8P66oaPbXeciEkHiRP8yqzbLReXe8EpRkMbWsSEJ2x2ngmfsdyPvOpRZ1gkxj3rqgctTygAU+4062Vbva7u8XkxaoX7PemIR8VBbwQAMSoZz0A6qWYWHWQoYRyXWUHbo+MseLiKXjGAV5hOkluc4gh/FBCEz8f+Dve+7ozHuF6e6PgXg6rMSjD1l4sAAAAASUVORK5CYII=',
+    huggingface: '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',
+    xai: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAQAAADZc7J/AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAD/h4/MvwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB+oDGxMMEBTReksAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDMtMjNUMjM6NTc6MTYrMDA6MDBAmrQSAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAzLTIzVDIzOjU3OjE2KzAwOjAwMccMrgAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0yN1QxOToxMjoxNiswMDowMKItms0AAALcSURBVEjHpZVPaFRXFIe/eZPETExU1BCsjSJBRIwmpAsX1UKNi3ZRaQRJEQSrRmlLakRapShSV1IKuumy0C4KlWJL21XVhRWliyoloLbUP/gvGqNd1JGZySTm62JeZ968eSronc3APd/vnnPP79yX4jmXABnmBy+AN/I6hSB5+0m/CN7AdorcrkvUBqinnQ7m0UiOEa4ywuOq3b1k+OJJZ8+w32PeMO+UOmXOa37j2zaH+/UecNiOSk7V+Gset2jtmvSoL4n17rPo/mhRFTxwq6Nl5L4X/d0L3lcf+qPrbbLOTxz3gV1JOA6YVXXCU77nCludaatdbrHXRjHtXvPqWVuS0u91TNVRP3RmQhfS7jGv6lGD2vNne0rVO66Lty3EPzIXFvd1UgFbnFQLDsSvJ8R3h6erfmc6LtDkL6p+byYBD9xlwawnvKvqGZvjAiscU/O+lYgPWfBvN1jvkKo3XGQsqN/H6kXbogIhvtOsP9sp4nLH1JxrSlGVWVhIAFzmH0hFbR0wyMccZhMXALjDXaCRl0sxlVloAeABk1TjH7CRQX4op1UgC6RojgsUKc1YqhQa4tvoYTN/QikvIU1DJD4iMApAOxlyIV7HeqYxxL8RHObQBkxwL+7D1T5SR11ets1KVxnUGKrPonrPZfE2zvUPVQ+GAi22VhsqHORvVT1pU60TD6k64qu1b1DZzn1m1SnfT7JynxOh+qzEWcAeL6l63nlJAm84ro75rnWJL+Iah1V95Ibkt2hQvV6exAV2Oj3832S3n4WjPumnpisCqXLPZ/ATbezgNGkW0887zOYvrvKQ6XTQSSsA4xzmIPmKWysVDvqr3SIu9bTJ65oDNoj8VoP3+qWLyw7o9ohXwis1fOIu+7lL472BlAA9vMlXjFRdy0JeoYt2MuS5xTDnuBmpuiqDJW52TkU5dvdB0rcpKjDftf9/MGr68nQ0DFzgtKcGPGuV4F3Pi/MfiTbkbdTPMDoAAAAASUVORK5CYII=',
+    ollama: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAQAAADZc7J/AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAAAqo0jMgAAAAlwSFlzAAAAYAAAAGAA8GtCzwAAAAd0SU1FB+oDGxc4FK+f5XkAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDMtMjdUMjM6NTU6NTIrMDA6MDDgWwJBAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAzLTI3VDIzOjU1OjUyKzAwOjAwkQa6/QAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0yN1QyMzo1NjoyMCswMDowMLB+OBEAAAF+SURBVEjHvZW9SgNBFIW//JhtQlIKSURFC2NnI4igCD6Bf72FFhJto29gakFJlUYb8REEQTCJlVYJ2KhYWihmu0SOxUaI2YkZNuip7t6d8+3MvTszAMjRnqpyZStXVe3KwZPSure2dupOae/rwewewkF7ge2SlAvpllmCqxpSg7jpzRMlrnkBRlhgkzEzwA1JpvwxBVodz1Hy7BgJRsARh4ahB+TsAI8s0WQRcd3OePEQV4z7Cf7CHiqlfTX1oLxSP+KCoQ1hP7IOTFFmmQn4EdcNSzAABBRxOKEEXbFfUX9qmkueWSHCKDPAO+t8ApC1m8EqEQAyJHjjjSQZACKs2gEm2QLgFRhmGPEKwHa7Jn3bCBXWOlb4/UNdMGdXg0616Kdw3xFBAOZpRe0BWRK+XNLYxB6AOEWSXfaiedfTYzuDyzk37fNgno0e9l8AtvqbLvwzwB3I/xGmNhCgFuZ0IMAZcnQ3wNUWA5QOiPAuVwDFlFNFDWtrQ2XlFAP4ApTEE1e3g9KiAAAAAElFTkSuQmCC',
+    google: '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',
+  };
+  if (pngIcons[providerId]) {
+    return `<img src="data:image/png;base64,${pngIcons[providerId]}" width="${s}" height="${s}" style="border-radius:4px;" alt="${providerId}">`;
+  }
+  return `<svg width="${s}" height="${s}" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#444"/><text x="16" y="21" text-anchor="middle" fill="#fff" font-family="system-ui" font-weight="bold" font-size="14">${(providerId||'?')[0].toUpperCase()}</text></svg>`;
+}
+
 // Artifact storage (in-memory, per session)
 const _artifacts = {};
 let _artifactCounter = 0;
@@ -7508,7 +7905,7 @@ function formatContent(text) {
       const id = 'artifact-' + (++_artifactCounter);
       _artifacts[id] = { id, type, title, content: content.trim() };
       const placeholder = `__ARTIFACT_${artifactPlaceholders.length}__`;
-      const icon = type === 'html' ? '\u{1F310}' : type === 'code' ? '\u{1F4BB}' : type === 'svg' ? '\u{1F3A8}' : type === 'markdown' ? '\u{1F4C4}' : type === 'image' ? '\u{1F5BC}' : type === 'video' ? '\u{1F3AC}' : type === 'audio' ? '\u{1F50A}' : '\u{1F4E6}';
+      const icon = type === 'app' ? 'APP' : type === 'html' ? 'HTML' : type === 'code' ? 'CODE' : type === 'svg' ? 'SVG' : type === 'markdown' ? 'MD' : type === 'image' ? 'IMG' : type === 'video' ? 'VID' : type === 'audio' ? 'SND' : 'FILE';
       artifactPlaceholders.push(
         `<div class="artifact-card" onclick="App.showArtifact('${id}')">` +
         `<span class="artifact-icon">${icon}</span>` +
@@ -7519,6 +7916,33 @@ function formatContent(text) {
       return placeholder;
     }
   );
+
+  // Collapse <think>...</think> reasoning blocks (DeepSeek R1, QwQ, etc.)
+  const thinkPlaceholders = [];
+  processed = processed.replace(/<think>([\s\S]*?)<\/think>/g, (match, content) => {
+    const placeholder = `__THINK_${thinkPlaceholders.length}__`;
+    const preview = content.trim().split('\n')[0].substring(0, 80);
+    thinkPlaceholders.push(
+      `<details class="think-block" style="margin:8px 0;border:1px solid var(--border);border-radius:6px;padding:0;">` +
+      `<summary style="cursor:pointer;padding:6px 10px;font-size:11px;color:var(--text-muted);user-select:none;">` +
+      `&#8226; Reasoning <span style="opacity:0.5;font-style:italic;">${esc(preview)}...</span></summary>` +
+      `<div style="padding:8px 12px;font-size:12px;color:var(--text-muted);line-height:1.5;white-space:pre-wrap;max-height:300px;overflow-y:auto;">${esc(content.trim())}</div>` +
+      `</details>`
+    );
+    return placeholder;
+  });
+  // Also handle unclosed <think> at end of streaming (still thinking)
+  processed = processed.replace(/<think>([\s\S]*)$/g, (match, content) => {
+    const placeholder = `__THINK_${thinkPlaceholders.length}__`;
+    thinkPlaceholders.push(
+      `<details class="think-block" open style="margin:8px 0;border:1px solid var(--border);border-radius:6px;padding:0;">` +
+      `<summary style="cursor:pointer;padding:6px 10px;font-size:11px;color:var(--text-muted);user-select:none;">` +
+      `&#8226; Thinking...</summary>` +
+      `<div style="padding:8px 12px;font-size:12px;color:var(--text-muted);line-height:1.5;white-space:pre-wrap;max-height:300px;overflow-y:auto;">${esc(content.trim())}</div>` +
+      `</details>`
+    );
+    return placeholder;
+  });
 
   // Extract code blocks before escaping (preserve raw content)
   const codeBlocks = [];
@@ -7617,6 +8041,11 @@ function formatContent(text) {
   // Restore artifact cards
   for (let i = 0; i < artifactPlaceholders.length; i++) {
     h = h.replace(`__ARTIFACT_${i}__`, artifactPlaceholders[i]);
+  }
+
+  // Restore think/reasoning blocks
+  for (let i = 0; i < thinkPlaceholders.length; i++) {
+    h = h.replace(`__THINK_${i}__`, thinkPlaceholders[i]);
   }
 
   return h;

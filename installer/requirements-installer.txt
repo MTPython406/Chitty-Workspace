@@ -1,0 +1,6 @@
+# Bundled installer requirements — GGUF chat inference
+# Kept minimal to reduce installer size (~60-80MB vs ~2GB with torch)
+fastapi
+uvicorn[standard]
+pydantic
+llama-cpp-python

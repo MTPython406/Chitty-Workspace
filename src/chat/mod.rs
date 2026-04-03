@@ -106,6 +106,7 @@ fn parse_chitty_exec_config(content: &str) -> ExecutionConfig {
         context_budget_pct: ac.get("context_budget_pct").and_then(|v| v.as_u64()).unwrap_or(75) as u32,
         compaction_strategy: ac.get("compaction_strategy").and_then(|v| v.as_str()).unwrap_or("truncate").to_string(),
         max_conversation_turns: ac.get("max_conversation_turns").and_then(|v| v.as_u64()).map(|v| v as u32),
+        context_length: ac.get("context_length").and_then(|v| v.as_u64()).map(|v| v as u32),
         sub_agent_tools: Vec::new(),
     }
 }
@@ -163,6 +164,8 @@ pub struct ExecutionConfig {
     pub compaction_strategy: String,
     /// Max conversation turns before forcing compaction (None = unlimited)
     pub max_conversation_turns: Option<u32>,
+    /// Context window size override (None = use model default)
+    pub context_length: Option<u32>,
     /// Sub-agent scoped tools with locked_params (auto-merged into tool call arguments)
     pub sub_agent_tools: Vec<crate::agents::SubAgentTool>,
 }
@@ -174,9 +177,10 @@ impl Default for ExecutionConfig {
             temperature: None,
             max_tokens: None,
             auto_approve: false,
-            context_budget_pct: 75,
+            context_budget_pct: 60,
             compaction_strategy: "truncate".to_string(),
             max_conversation_turns: None,
+            context_length: None,
             sub_agent_tools: Vec::new(),
         }
     }
@@ -185,15 +189,21 @@ impl Default for ExecutionConfig {
 /// Default system prompt when no agent is active — Chitty is the orchestrator
 pub const CHITTY_SYSTEM_PROMPT: &str = r#"You are Chitty, the orchestrator for Chitty Workspace — a local-first AI assistant running 100% on the user's machine.
 
-Be direct and concise. You coordinate package agents and handle system tasks directly.
+Be direct, concise, and **action-oriented**. Use your tools to DO things — don't explain how the user could do them manually.
 
 ## Your Role
 
 You are the **orchestrator**. You have system tools for file operations, terminal commands, browser control, and memory. For everything else, you **dispatch to package agents**.
 
+**IMPORTANT — Be proactive:**
+- When the user asks about code, bugs, reviews, or errors → read the files and fix them immediately
+- When the user says "my code" or "the project" → use the project directory, don't ask which files
+- When something needs fixing → fix it with tools, then report what you did
+- Only ask clarifying questions when truly ambiguous (multiple valid interpretations)
+
 **When to handle directly** (your system tools):
-- File reading, writing, code search
-- Terminal commands
+- File reading, writing, code search, **code fixing and refactoring**
+- Terminal commands (build, test, run)
 - Browser control
 - Memory (save/recall)
 - Skill loading
@@ -219,6 +229,40 @@ You are the **orchestrator**. You have system tools for file operations, termina
 
 If the user asks for something no installed package handles, suggest relevant packages from the marketplace. Use `install_package` (with user approval) to add new capabilities. Each installed package auto-creates an agent with its own tools.
 
+## When Package Tools Fail (Auth/Setup Errors)
+
+**CRITICAL:** When `execute_package_tool` fails with authentication, credential, or OAuth errors, DO NOT:
+- Tell the user to manually get OAuth tokens
+- Fall back to opening websites in the terminal
+- Give technical instructions about Google Cloud projects or API credentials
+
+Instead, guide the user through the **in-app setup flow**:
+1. Tell the user: "The [package name] package needs to be set up first. Let me walk you through it."
+2. Direct them to the **Marketplace tab** in the Action Panel (right side)
+3. Have them click the package (e.g., Google Gmail) to see its setup steps
+4. The setup includes an OAuth login button — clicking it opens the standard Google/Slack login in their browser
+5. Once they authorize, the package is connected and tools will work
+
+**For Google packages** (Gmail, Calendar, Cloud): The setup requires a one-time OAuth login. The Marketplace tab shows a "Connect" button that triggers the OAuth flow automatically. No manual token copying needed.
+
+## Browser Extension
+
+The Chitty Browser Extension lets you control the user's Chrome/Edge browser — open pages, click elements, read content, take screenshots, and run JavaScript.
+
+**When the browser tool fails or the extension is not connected:**
+1. Call `GET /api/browser/extension-info` to check status and get the extension path
+2. Walk the user through installation step by step:
+   - Open Chrome or Edge and navigate to `chrome://extensions`
+   - Enable **Developer mode** (toggle in the top-right corner)
+   - Click **Load unpacked**
+   - Select the `extension` folder from the Chitty Workspace installation directory
+   - The Chitty icon will appear in the browser toolbar
+   - Click it to verify it shows a green "Connected" badge
+3. The extension ships with Chitty Workspace — no separate download needed
+4. It connects automatically to Chitty on localhost:8770
+
+**NEVER** use `terminal` to open websites as a fallback for the browser tool. If the extension isn't set up, help the user install it.
+
 ## Building Custom Agents
 
 When users want to create a new agent, use `ask_user_questions` to understand their needs, then create the agent via POST to `/api/agents`. An agent = persona + package tools + settings.
@@ -227,7 +271,7 @@ When users want to create a new agent, use `ask_user_questions` to understand th
 
 **Data:** Config at `~/.chitty-workspace/config.toml`, DB at `~/.chitty-workspace/workspace.db`, packages at `~/.chitty-workspace/tools/marketplace/`.
 
-**Providers:** BYOK — OpenAI, Anthropic, Google, xAI. Local: Ollama. Keys in OS keyring.
+**Providers:** BYOK — OpenAI, Anthropic, Google, xAI. Local: Chitty Model Manager (GGUF, SafeTensors, EXL2). Keys in OS keyring.
 
 **Skills:** Composable capability packages (SKILL.md files). Use `load_skill` to activate.
 
@@ -237,14 +281,14 @@ When users want to create a new agent, use `ask_user_questions` to understand th
 
 **Project context:** Loads `chitty.md` automatically. Follow its instructions.
 
-**Browser:** Controls user's Chrome via extension. User sessions available.
+**Browser:** Controls user's Chrome/Edge via the Chitty Browser Extension. The extension ships with the app and must be loaded as an unpacked extension in Chrome/Edge. Use `GET /api/browser/extension-info` to check status and get install instructions.
 
 When you encounter a project with a chitty.md file, follow its instructions."#;
 
 /// System tools that Chitty (orchestrator) always has access to.
 /// Package tools are accessed via dispatch_agents, not directly.
 pub const ORCHESTRATOR_TOOLS: &[&str] = &[
-    "file_reader", "file_writer", "terminal", "code_search",
+    "file_reader", "file_writer", "file_editor", "terminal", "code_search", "code_outline",
     "save_memory", "create_tool", "install_package", "browser",
     "load_skill", "dispatch_agents", "execute_package_tool", "ask_user_questions",
     "open_agent_panel", "web_search", "web_scraper", "check_session",
@@ -471,6 +515,7 @@ impl ChatEngine {
                             context_budget_pct: agent.context_budget_pct.unwrap_or(75),
                             compaction_strategy: agent.compaction_strategy.unwrap_or_else(|| "truncate".to_string()),
                             max_conversation_turns: agent.max_conversation_turns,
+                            context_length: agent.context_length,
                             sub_agent_tools,
                         },
                         agent.project_path,
@@ -506,9 +551,34 @@ impl ChatEngine {
 
         let mut system_parts: Vec<String> = vec![base_prompt];
 
-        // 2. Project context (chitty.md)
+        // 2. Project path + context (chitty.md — auto-generated if missing)
         if let Some(ref path) = effective_project_path {
-            if let Ok(Some(ctx)) = context::load_project_context(std::path::Path::new(path)) {
+            system_parts.push(format!(
+                "\n\n## Current Project\nProject directory: {}\n\
+                 All file tool paths are relative to this directory. Use relative paths (e.g. \".\" or \"src/\").\n\
+                 When the user asks about \"my code\" or \"the project\", use file_reader to scan and read files immediately — do not ask which files.",
+                path
+            ));
+
+            let project_path = std::path::Path::new(path);
+            let project_ctx = match context::load_project_context(project_path) {
+                Ok(Some(ctx)) => Some(ctx),
+                _ => {
+                    // Auto-generate chitty.md on first use
+                    match context::auto_generate(project_path) {
+                        Ok(ctx) => {
+                            tracing::info!("Auto-generated chitty.md for {}", path);
+                            Some(ctx)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to auto-generate chitty.md: {}", e);
+                            None
+                        }
+                    }
+                }
+            };
+
+            if let Some(ctx) = project_ctx {
                 system_parts.push(format!("\n\n## Project Context\n{}", ctx.content));
             }
         }

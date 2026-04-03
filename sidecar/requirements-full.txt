@@ -1,4 +1,4 @@
-# Full tier — GGUF + image generation + audio
+# Full tier — GGUF + image generation + video + audio
 fastapi
 uvicorn[standard]
 pydantic
@@ -8,4 +8,6 @@ diffusers
 transformers
 accelerate
 safetensors
+scipy             # Audio processing (TTS models)
+soundfile         # WAV encoding for TTS output
 # openai-whisper  # Phase 3

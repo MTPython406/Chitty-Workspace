@@ -30,6 +30,10 @@ fn unique_filename(prefix: &str, ext: &str) -> String {
 fn get_provider_config(args: &serde_json::Value, capability: &str) -> Result<(String, String), String> {
     // 1. Check if provider is explicitly specified in tool args
     if let Some(p) = args["provider"].as_str() {
+        // Local providers don't need API keys
+        if p == "huggingface" {
+            return Ok(("huggingface".to_string(), String::new()));
+        }
         if let Ok(Some(key)) = crate::config::get_api_key(p) {
             return Ok((p.to_string(), key));
         }
@@ -47,6 +51,11 @@ fn get_provider_config(args: &serde_json::Value, capability: &str) -> Result<(St
             _ => None,
         };
         if let Some(p) = default_provider {
+            // Local providers don't need API keys
+            if p == "huggingface" {
+                info!("Using system default local provider 'huggingface' for {}", capability);
+                return Ok(("huggingface".to_string(), String::new()));
+            }
             if let Ok(Some(key)) = crate::config::get_api_key(p) {
                 info!("Using system default provider '{}' for {}", p, capability);
                 return Ok((p.to_string(), key));
@@ -62,7 +71,7 @@ fn get_provider_config(args: &serde_json::Value, capability: &str) -> Result<(St
         }
     }
 
-    Err(format!("No provider configured for {}. Add an API key in Settings > Providers.", capability))
+    Err(format!("No provider configured for {}. Add an API key in Settings > Providers, or set up a local model via huggingface.", capability))
 }
 
 // ─── Generate Image ─────────────────────────────────────────────────────────
@@ -101,7 +110,7 @@ impl NativeTool for GenerateImageTool {
                     },
                     "provider": {
                         "type": "string",
-                        "enum": ["xai", "openai", "google"],
+                        "enum": ["xai", "openai", "google", "huggingface"],
                         "description": "Provider to use for generation (default: xai)"
                     }
                 },
@@ -216,7 +225,7 @@ impl NativeTool for EditImageTool {
                     },
                     "provider": {
                         "type": "string",
-                        "enum": ["xai", "openai", "google"],
+                        "enum": ["xai", "openai", "google", "huggingface"],
                         "description": "Provider to use (default: xai)"
                     }
                 },
@@ -339,7 +348,7 @@ impl NativeTool for GenerateVideoTool {
                     },
                     "provider": {
                         "type": "string",
-                        "enum": ["xai", "openai", "google"],
+                        "enum": ["xai", "openai", "google", "huggingface"],
                         "description": "Provider to use (default: xai)"
                     }
                 },
@@ -445,7 +454,7 @@ impl NativeTool for TextToSpeechTool {
                     },
                     "provider": {
                         "type": "string",
-                        "enum": ["xai", "openai", "google"],
+                        "enum": ["xai", "openai", "google", "huggingface"],
                         "description": "Provider to use (default: xai)"
                     }
                 },

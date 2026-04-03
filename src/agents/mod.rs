@@ -65,6 +65,9 @@ pub struct Agent {
     /// Max conversation turns before forcing compaction (None = unlimited)
     #[serde(default)]
     pub max_conversation_turns: Option<u32>,
+    /// Context window size override (None = use model default from get_model_context_window)
+    #[serde(default)]
+    pub context_length: Option<u32>,
     /// Link to source marketplace package (None = user-created agent)
     /// Package agents have ID format "pkg-{package_name}"
     #[serde(default)]
@@ -119,8 +122,8 @@ impl AgentsManager {
         let tags_json = serde_json::to_string(&agent.tags)?;
 
         conn.execute(
-            "INSERT INTO agents (id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id, parent_agent_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+            "INSERT INTO agents (id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id, parent_agent_id, context_length)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
@@ -141,6 +144,7 @@ impl AgentsManager {
                 max_conversation_turns = excluded.max_conversation_turns,
                 package_id = excluded.package_id,
                 parent_agent_id = excluded.parent_agent_id,
+                context_length = excluded.context_length,
                 updated_at = datetime('now')",
             rusqlite::params![
                 agent.id,
@@ -163,6 +167,7 @@ impl AgentsManager {
                 agent.max_conversation_turns.map(|v| v as i32),
                 agent.package_id,
                 agent.parent_agent_id,
+                agent.context_length.map(|v| v as i32),
             ],
         )?;
         Ok(())
@@ -171,7 +176,7 @@ impl AgentsManager {
     /// Load an agent by ID
     pub fn load(conn: &Connection, id: &str) -> Result<Option<Agent>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id, parent_agent_id
+            "SELECT id, name, description, persona, skills, project_path, preferred_provider, preferred_model, tags, version, ai_generated, max_iterations, temperature, max_tokens, approval_mode, context_budget_pct, compaction_strategy, max_conversation_turns, package_id, parent_agent_id, context_length
              FROM agents WHERE id = ?1",
         )?;
 
@@ -200,6 +205,7 @@ impl AgentsManager {
                     max_conversation_turns: row.get::<_, Option<i32>>(17)?.map(|v| v as u32),
                     package_id: row.get(18)?,
                     parent_agent_id: row.get(19)?,
+                    context_length: row.get::<_, Option<i32>>(20)?.map(|v| v as u32),
                 })
             })
             .ok();
@@ -285,6 +291,7 @@ impl AgentsManager {
             context_budget_pct: None,
             compaction_strategy: None,
             max_conversation_turns: None,
+            context_length: None,
             package_id: Some(manifest.name.clone()),
             parent_agent_id: None,
         };
@@ -369,6 +376,7 @@ impl AgentsManager {
             context_budget_pct: parent.context_budget_pct,
             compaction_strategy: parent.compaction_strategy.clone(),
             max_conversation_turns: parent.max_conversation_turns,
+            context_length: parent.context_length,
             package_id: parent.package_id.clone(),
             parent_agent_id: Some(parent_id.to_string()),
         };

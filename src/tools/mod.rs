@@ -21,6 +21,7 @@ pub mod runtime;
 pub mod marketplace_client;
 #[cfg(feature = "cdp-browser")]
 pub mod browser_engine;
+pub mod outline;
 
 pub use runtime::ToolRuntime;
 pub use marketplace_client::MarketplaceClient;
@@ -153,8 +154,10 @@ impl ToolRegistry {
 
         registry.register(Box::new(FileReaderTool));
         registry.register(Box::new(FileWriterTool));
+        registry.register(Box::new(FileEditorTool));
         registry.register(Box::new(TerminalTool));
         registry.register(Box::new(CodeSearchTool));
+        registry.register(Box::new(CodeOutlineTool));
         registry.register(Box::new(SaveMemoryTool));
         registry.register(Box::new(CreateToolTool));
         registry.register(Box::new(InstallPackageTool));
@@ -425,6 +428,104 @@ fn validate_path(working_dir: &Path, requested: &str) -> std::result::Result<Pat
 }
 
 // ===========================================================================
+// Directory Tree Helper (used by file_reader when path is a directory)
+// ===========================================================================
+
+/// Skip directories that are usually noise (vendor, build, etc.)
+const SKIP_DIRS: &[&str] = &[
+    "node_modules", ".git", "target", "__pycache__", ".venv", "venv",
+    "dist", "build", ".next", ".cache", ".tox", "egg-info",
+    ".mypy_cache", ".pytest_cache", "site-packages",
+];
+
+fn list_directory_tree(root: &std::path::Path, max_depth: usize) -> ToolResult {
+    use std::fs;
+
+    fn walk(
+        dir: &std::path::Path,
+        prefix: &str,
+        depth: usize,
+        max_depth: usize,
+        lines: &mut Vec<String>,
+        file_count: &mut usize,
+        dir_count: &mut usize,
+    ) {
+        if depth > max_depth || lines.len() > 500 {
+            return;
+        }
+
+        let mut entries: Vec<_> = match fs::read_dir(dir) {
+            Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+            Err(_) => return,
+        };
+
+        // Sort: directories first, then alphabetical
+        entries.sort_by(|a, b| {
+            let a_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let b_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            b_dir.cmp(&a_dir).then_with(|| a.file_name().cmp(&b.file_name()))
+        });
+
+        let total = entries.len();
+        for (i, entry) in entries.iter().enumerate() {
+            let is_last = i == total - 1;
+            let connector = if is_last { "└── " } else { "├── " };
+            let child_prefix = if is_last { "    " } else { "│   " };
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+
+            if is_dir {
+                if SKIP_DIRS.contains(&name.as_str()) {
+                    lines.push(format!("{}{}{}/  [skipped]", prefix, connector, name));
+                    continue;
+                }
+                *dir_count += 1;
+                lines.push(format!("{}{}{}/", prefix, connector, name));
+                walk(
+                    &entry.path(),
+                    &format!("{}{}", prefix, child_prefix),
+                    depth + 1,
+                    max_depth,
+                    lines,
+                    file_count,
+                    dir_count,
+                );
+            } else {
+                *file_count += 1;
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                let size_str = if size > 1_048_576 {
+                    format!("{:.1} MB", size as f64 / 1_048_576.0)
+                } else if size > 1024 {
+                    format!("{:.1} KB", size as f64 / 1024.0)
+                } else {
+                    format!("{} B", size)
+                };
+                lines.push(format!("{}{}{}  ({})", prefix, connector, name, size_str));
+            }
+        }
+    }
+
+    let dir_name = root.file_name().unwrap_or_default().to_string_lossy();
+    let mut lines = vec![format!("{}/", dir_name)];
+    let mut file_count = 0usize;
+    let mut dir_count = 0usize;
+
+    walk(root, "", 0, max_depth, &mut lines, &mut file_count, &mut dir_count);
+
+    lines.push(format!(
+        "\n{} directories, {} files (depth {})",
+        dir_count, file_count, max_depth
+    ));
+
+    if lines.len() > 500 {
+        lines.truncate(500);
+        lines.push("[... truncated at 500 entries. Use depth=1 for shallower listing.]".to_string());
+    }
+
+    ToolResult::ok(lines.join("\n"))
+}
+
+// ===========================================================================
 // Native Tool Implementations
 // ===========================================================================
 
@@ -440,23 +541,36 @@ impl NativeTool for FileReaderTool {
         ToolDefinition {
             name: "file_reader".to_string(),
             display_name: "File Reader".to_string(),
-            description: "Read the contents of a file. Returns the file content as a string with line numbers.".to_string(),
+            description: "Read a file or list directory contents. For files: returns content with line numbers. For directories: returns a tree listing of files and folders.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File path (relative to project directory or absolute)"
+                        "description": "File or directory path (relative to project or absolute)"
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "Max depth for directory listings (default 3, max 5)"
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "First line to read (1-based, inclusive). Use with end_line to read a specific section of a large file."
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Last line to read (1-based, inclusive). Use with start_line to read a specific section of a large file."
                     }
                 },
                 "required": ["path"]
             }),
             instructions: Some(
-                "Read files from the project directory. Returns content with line numbers.\n\
-                 - **Always read a file before modifying it** to understand its current state.\n\
-                 - Supports any text file (source code, configs, markdown, etc.).\n\
-                 - For large files, the output may be truncated. Mention this to the user if it occurs.\n\
-                 - Use relative paths when possible (relative to the project root)."
+                "Read files or list directory contents.\n\
+                 - For files: returns content with line numbers (truncated for large files).\n\
+                 - For directories: returns a tree listing with file sizes.\n\
+                 - **Always read a file before modifying it.**\n\
+                 - For large files: use code_outline first to get function/line map, then read sections with start_line/end_line.\n\
+                 - Use relative paths when possible."
                     .to_string(),
             ),
             category: ToolCategory::Native,
@@ -475,11 +589,41 @@ impl NativeTool for FileReaderTool {
             Err(e) => return ToolResult::err(e),
         };
 
+        // Check if path is a directory — list contents instead of reading
+        if full_path.is_dir() {
+            let max_depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3).min(5) as usize;
+            return list_directory_tree(&full_path, max_depth);
+        }
+
         match tokio::fs::read_to_string(&full_path).await {
             Ok(content) => {
-                // Add line numbers
-                let numbered: String = content
-                    .lines()
+                let all_lines: Vec<&str> = content.lines().collect();
+                let total_lines = all_lines.len();
+
+                // Parse optional start_line / end_line (1-based, inclusive)
+                let start_line = args.get("start_line").and_then(|v| v.as_u64()).map(|n| (n as usize).saturating_sub(1));
+                let end_line   = args.get("end_line").and_then(|v| v.as_u64()).map(|n| (n as usize).min(total_lines));
+
+                // If either range param given, slice to that range only
+                if start_line.is_some() || end_line.is_some() {
+                    let from = start_line.unwrap_or(0);
+                    let to   = end_line.unwrap_or(total_lines);
+                    let slice = &all_lines[from.min(total_lines)..to.min(total_lines)];
+                    let numbered: String = slice
+                        .iter()
+                        .enumerate()
+                        .map(|(i, line)| format!("{:>4}│ {}", from + i + 1, line))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return ToolResult::ok(format!(
+                        "[Lines {}-{} of {}]\n{}",
+                        from + 1, to.min(total_lines), total_lines, numbered
+                    ));
+                }
+
+                // No range — number all lines then apply char budget
+                let numbered: String = all_lines
+                    .iter()
                     .enumerate()
                     .map(|(i, line)| format!("{:>4}│ {}", i + 1, line))
                     .collect::<Vec<_>>()
@@ -487,17 +631,14 @@ impl NativeTool for FileReaderTool {
 
                 let max_chars = 8_000;
                 if numbered.len() > max_chars {
-                    // Show first portion + last portion for context
                     let head = &numbered[..max_chars * 3 / 4];
                     let tail_start = numbered.len().saturating_sub(max_chars / 4);
                     let tail = &numbered[tail_start..];
                     ToolResult::ok(format!(
-                        "{}\n\n... [truncated: showing first {} + last {} of {} total chars, {} lines]\n\n{}",
+                        "{}\n\n... [truncated: file has {} lines / {} chars total. Use start_line/end_line to read specific sections, or code_outline for structure.]\n\n{}",
                         head,
-                        head.len(),
-                        tail.len(),
+                        total_lines,
                         numbered.len(),
-                        content.lines().count(),
                         tail
                     ))
                 } else {
@@ -584,6 +725,160 @@ impl NativeTool for FileWriterTool {
 }
 
 // ---------------------------------------------------------------------------
+// file_editor — targeted search/replace edits (much faster than file_writer for local models)
+// ---------------------------------------------------------------------------
+
+struct FileEditorTool;
+
+#[async_trait]
+impl NativeTool for FileEditorTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "file_editor".to_string(),
+            display_name: "File Editor".to_string(),
+            description: "Make targeted edits to an existing file using search and replace. \
+                          Much more efficient than file_writer for small changes — only specify \
+                          the text to find and its replacement instead of rewriting the entire file."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path (relative to project directory or absolute)"
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": "List of search/replace operations to apply in order",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_text": {
+                                    "type": "string",
+                                    "description": "Exact text to find in the file (must match uniquely)"
+                                },
+                                "new_text": {
+                                    "type": "string",
+                                    "description": "Replacement text"
+                                }
+                            },
+                            "required": ["old_text", "new_text"]
+                        }
+                    }
+                },
+                "required": ["path", "edits"]
+            }),
+            instructions: Some(
+                "Use file_editor for targeted changes to existing files — it is much faster \
+                 than file_writer because you only specify the changed parts.\n\
+                 - **Always read the file first** to get the exact text to match.\n\
+                 - Each `old_text` must match exactly ONE location in the file.\n\
+                 - Include enough surrounding context in `old_text` to make the match unique.\n\
+                 - Use file_writer only for creating NEW files or complete rewrites.\n\
+                 - Prefer file_editor over file_writer whenever making small or medium edits."
+                    .to_string(),
+            ),
+            category: ToolCategory::Native,
+            vendor: None,
+        }
+    }
+
+    async fn execute(&self, args: &serde_json::Value, ctx: &ToolContext) -> ToolResult {
+        let path_str = match args.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return ToolResult::err("Missing required parameter: path"),
+        };
+
+        let edits = match args.get("edits").and_then(|v| v.as_array()) {
+            Some(e) if !e.is_empty() => e,
+            Some(_) => return ToolResult::err("edits array is empty — nothing to do"),
+            None => return ToolResult::err("Missing required parameter: edits"),
+        };
+
+        let full_path = match validate_path(&ctx.working_dir, path_str) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::err(e),
+        };
+
+        // Read existing file
+        let content = match tokio::fs::read_to_string(&full_path).await {
+            Ok(c) => c,
+            Err(e) => return ToolResult::err(format!("Failed to read {}: {}", path_str, e)),
+        };
+
+        // Apply edits atomically — validate all first, then apply
+        let mut modified = content.clone();
+        let mut summaries = Vec::new();
+
+        for (i, edit) in edits.iter().enumerate() {
+            let old_text = match edit.get("old_text").and_then(|v| v.as_str()) {
+                Some(t) => t,
+                None => return ToolResult::err(format!("Edit {}: missing old_text", i + 1)),
+            };
+            let new_text = match edit.get("new_text").and_then(|v| v.as_str()) {
+                Some(t) => t,
+                None => return ToolResult::err(format!("Edit {}: missing new_text", i + 1)),
+            };
+
+            // Count occurrences
+            let count = modified.matches(old_text).count();
+            if count == 0 {
+                let preview = if old_text.len() > 80 {
+                    format!("{}...", &old_text[..77])
+                } else {
+                    old_text.to_string()
+                };
+                return ToolResult::err(format!(
+                    "Edit {}: text not found in {}. Searched for: \"{}\"",
+                    i + 1, path_str, preview
+                ));
+            }
+            if count > 1 {
+                let preview = if old_text.len() > 60 {
+                    format!("{}...", &old_text[..57])
+                } else {
+                    old_text.to_string()
+                };
+                return ToolResult::err(format!(
+                    "Edit {}: \"{}\" matches {} locations in {}. Include more surrounding context to make it unique.",
+                    i + 1, preview, count, path_str
+                ));
+            }
+
+            // Apply the replacement
+            modified = modified.replacen(old_text, new_text, 1);
+
+            // Build a short summary
+            let old_preview = if old_text.len() > 40 {
+                format!("{}...", &old_text[..37])
+            } else {
+                old_text.to_string()
+            };
+            let new_preview = if new_text.len() > 40 {
+                format!("{}...", &new_text[..37])
+            } else {
+                new_text.to_string()
+            };
+            summaries.push(format!("  {}: \"{}\" → \"{}\"", i + 1, old_preview, new_preview));
+        }
+
+        // Write the modified content back
+        match tokio::fs::write(&full_path, &modified).await {
+            Ok(()) => {
+                let summary = format!(
+                    "Applied {} edit(s) to {}:\n{}",
+                    edits.len(),
+                    path_str,
+                    summaries.join("\n")
+                );
+                ToolResult::ok(summary)
+            }
+            Err(e) => ToolResult::err(format!("Failed to write {}: {}", path_str, e)),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // terminal
 // ---------------------------------------------------------------------------
 
@@ -606,6 +901,14 @@ impl NativeTool for TerminalTool {
                     "working_dir": {
                         "type": "string",
                         "description": "Working directory for the command (optional, defaults to project root)"
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "description": "Run the command in the background (for servers, long-running processes). Returns immediately."
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Timeout in seconds (default: 30, max: 300). Only applies to foreground commands."
                     }
                 },
                 "required": ["command"]
@@ -616,7 +919,9 @@ impl NativeTool for TerminalTool {
                  - Use for builds, tests, git operations, package managers, system info, HTTP requests, etc.\n\
                  - Commands run in the project working directory by default.\n\
                  - For HTTP requests: use `Invoke-RestMethod` on Windows (PowerShell), `curl` on Linux/Mac.\n\
-                 - **Prefer short-lived commands.** Long-running processes will timeout after 30 seconds.\n\
+                 - **For servers and long-running processes:** use `background: true` to start detached.\n\
+                   Example: `terminal({\"command\": \"python app.py\", \"background\": true})`\n\
+                 - Foreground commands timeout after 30 seconds by default.\n\
                  - Show the user relevant output. Summarize long output.\n\
                  - Be careful with destructive commands — confirm with the user first."
                     .to_string(),
@@ -632,6 +937,9 @@ impl NativeTool for TerminalTool {
             None => return ToolResult::err("Missing required parameter: command"),
         };
 
+        let background = args.get("background").and_then(|v| v.as_bool()).unwrap_or(false);
+        let timeout_secs = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(30).min(300);
+
         let working_dir = args
             .get("working_dir")
             .and_then(|v| v.as_str())
@@ -644,44 +952,63 @@ impl NativeTool for TerminalTool {
             })
             .unwrap_or_else(|| ctx.working_dir.clone());
 
-        // Use PowerShell on Windows (has curl alias, better tool support),
-        // sh on Linux, zsh on macOS (default shell since Catalina)
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            {
-                let mut cmd = if cfg!(target_os = "windows") {
-                    let mut c = tokio::process::Command::new("powershell");
-                    c.args(&["-NoProfile", "-NonInteractive", "-Command", command]);
-                    c
-                } else if cfg!(target_os = "macos") {
-                    let mut c = tokio::process::Command::new("zsh");
-                    c.args(&["-c", command]);
-                    c
-                } else {
-                    let mut c = tokio::process::Command::new("sh");
-                    c.args(&["-c", command]);
-                    c
-                };
-                cmd.current_dir(&working_dir);
-                // Extend PATH with common tool locations (gcloud, etc.)
-                let mut path_env = std::env::var("PATH").unwrap_or_default();
-                #[cfg(target_os = "windows")]
-                {
-                    let extra_paths = [
-                        r"C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin",
-                        r"C:\Program Files\Google\Cloud SDK\google-cloud-sdk\bin",
-                    ];
-                    for p in &extra_paths {
-                        if std::path::Path::new(p).exists() && !path_env.contains(p) {
-                            path_env = format!("{};{}", p, path_env);
-                        }
-                    }
-                    use std::os::windows::process::CommandExt;
-                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        // Build the command
+        let mut cmd = if cfg!(target_os = "windows") {
+            let mut c = tokio::process::Command::new("powershell");
+            c.args(&["-NoProfile", "-NonInteractive", "-Command", command]);
+            c
+        } else if cfg!(target_os = "macos") {
+            let mut c = tokio::process::Command::new("zsh");
+            c.args(&["-c", command]);
+            c
+        } else {
+            let mut c = tokio::process::Command::new("sh");
+            c.args(&["-c", command]);
+            c
+        };
+        cmd.current_dir(&working_dir);
+
+        // Extend PATH with common tool locations (gcloud, etc.)
+        let mut path_env = std::env::var("PATH").unwrap_or_default();
+        #[cfg(target_os = "windows")]
+        {
+            let extra_paths = [
+                r"C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin",
+                r"C:\Program Files\Google\Cloud SDK\google-cloud-sdk\bin",
+            ];
+            for p in &extra_paths {
+                if std::path::Path::new(p).exists() && !path_env.contains(p) {
+                    path_env = format!("{};{}", p, path_env);
                 }
-                cmd.env("PATH", &path_env);
-                cmd.output()
-            },
+            }
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        cmd.env("PATH", &path_env);
+
+        // Background mode: spawn detached and return immediately
+        if background {
+            match cmd
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(child) => {
+                    let pid = child.id().unwrap_or(0);
+                    return ToolResult::ok(format!(
+                        "Process started in background (PID: {}). Command: {}",
+                        pid, command
+                    ));
+                }
+                Err(e) => return ToolResult::err(format!("Failed to start background process: {}", e)),
+            }
+        }
+
+        // Foreground mode: wait for completion with timeout
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            cmd.output(),
         )
         .await;
 
@@ -733,7 +1060,10 @@ impl NativeTool for TerminalTool {
                 }
             }
             Ok(Err(e)) => ToolResult::err(format!("Failed to run command: {}", e)),
-            Err(_) => ToolResult::err("Command timed out after 30 seconds"),
+            Err(_) => ToolResult::err(format!(
+                "Command timed out after {} seconds. For servers or long-running processes, use background: true",
+                timeout_secs
+            )),
         }
     }
 }
@@ -925,6 +1255,79 @@ fn is_likely_binary(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| binary_exts.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// code_outline — Tree-sitter structural code analysis
+// ---------------------------------------------------------------------------
+
+struct CodeOutlineTool;
+
+#[async_trait]
+impl NativeTool for CodeOutlineTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "code_outline".to_string(),
+            display_name: "Code Outline".to_string(),
+            description: "Get a structural outline of a source file: functions, classes, structs, \
+                imports, and top-level declarations with line numbers. Faster and more compact \
+                than reading the entire file. Use this first to understand code structure, \
+                then file_reader to read specific functions.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to source file (relative to project directory)"
+                    }
+                },
+                "required": ["path"]
+            }),
+            instructions: Some(
+                "Get a structural overview of source code files.\n\
+                 Shows function signatures, class/struct definitions, imports — with line numbers.\n\
+                 Much more compact than reading the full file.\n\
+                 \n\
+                 **Use this tool FIRST** when exploring unfamiliar code:\n\
+                 1. code_outline(\"src/main.rs\") → see all functions and structs\n\
+                 2. file_reader(\"src/main.rs\", start_line=42, end_line=60) → read specific function\n\
+                 \n\
+                 Supported languages: Rust (.rs), Python (.py), JavaScript (.js/.jsx), \
+                 TypeScript (.ts/.tsx), Go (.go)\n\
+                 \n\
+                 For unsupported file types, use file_reader instead."
+                    .to_string(),
+            ),
+            category: ToolCategory::Native,
+            vendor: None,
+        }
+    }
+
+    async fn execute(&self, args: &serde_json::Value, ctx: &ToolContext) -> ToolResult {
+        let path_str = match args.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return ToolResult::err("Missing required parameter: path"),
+        };
+
+        let full_path = if std::path::Path::new(path_str).is_absolute() {
+            std::path::PathBuf::from(path_str)
+        } else {
+            ctx.working_dir.join(path_str)
+        };
+
+        if !full_path.exists() {
+            return ToolResult::err(format!("File not found: {}", path_str));
+        }
+
+        if !full_path.is_file() {
+            return ToolResult::err(format!("Not a file: {} (use file_reader for directories)", path_str));
+        }
+
+        match outline::outline_file(&full_path) {
+            Ok(outline) => ToolResult::ok(outline),
+            Err(e) => ToolResult::err(format!("Outline failed: {}", e)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1457,6 +1860,26 @@ impl NativeTool for BrowserTool {
             "execute_js" => std::time::Duration::from_secs(30),
             _ => std::time::Duration::from_secs(10),
         };
+
+        // Check if extension is connected before sending
+        if !self.bridge.is_connected() {
+            return ToolResult::err(
+                "Browser extension not connected.\n\n\
+                 The Chitty Browser Extension is required for browser control.\n\
+                 \n\
+                 **To install/activate:**\n\
+                 1. Open Chrome and go to: chrome://extensions\n\
+                 2. If not installed: Load the extension from the Chitty Workspace integrations\n\
+                 3. If installed: Make sure it is **enabled** (toggle ON)\n\
+                 4. Click the Chitty extension icon in Chrome toolbar to connect\n\
+                 \n\
+                 **Alternative:** Use the `terminal` tool to open URLs directly:\n\
+                 `terminal({\"command\": \"start http://localhost:8000\"})` (Windows)\n\
+                 `terminal({\"command\": \"open http://localhost:8000\"})` (macOS)\n\
+                 \n\
+                 Once the extension is active, try the browser action again."
+            );
+        }
 
         match self.bridge.send_command(cmd, timeout).await {
             Ok(resp) if resp.success => ToolResult::ok(resp.data),

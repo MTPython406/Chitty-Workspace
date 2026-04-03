@@ -39,16 +39,19 @@ pub fn run(port: u16) -> Result<()> {
     menu.append(&open_item).ok();
     menu.append(&quit_item).ok();
 
+    let version = env!("CARGO_PKG_VERSION");
+    let title = format!("Chitty Workspace v{}", version);
+
     let _tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Chitty Workspace")
+        .with_tooltip(&title)
         .with_icon(create_default_icon())
         .build()
         .expect("Failed to create tray icon");
 
     // ── Main window ────────────────────────────────────────────────
     let window = WindowBuilder::new()
-        .with_title("Chitty Workspace")
+        .with_title(&title)
         .with_inner_size(LogicalSize::new(1200.0, 800.0))
         .with_min_inner_size(LogicalSize::new(600.0, 400.0))
         .build(&event_loop)

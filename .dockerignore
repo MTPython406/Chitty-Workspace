@@ -1,0 +1,8 @@
+target/
+installer/
+.git/
+.github/
+.claude/
+*.msix
+*.pfx
+*.cer

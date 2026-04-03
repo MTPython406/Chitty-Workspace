@@ -1,8 +1,9 @@
 //! HuggingFace inference sidecar module.
 //!
 //! Manages the Python sidecar process (inference_server.py) that runs
-//! GGUF models locally via llama-cpp-python. Provides lifecycle management
-//! (start/stop) and REST API client functions.
+//! GGUF models locally via llama-cpp-python, plus local media generation
+//! (image, video, TTS) via diffusers/transformers. Provides lifecycle
+//! management (start/stop) and REST API client functions.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -329,7 +330,7 @@ pub async fn load_model(
     let body = json!({
         "model": model,
         "gpu_layers": gpu_layers.unwrap_or(-1),
-        "context_length": context_length.unwrap_or(4096),
+        "context_length": context_length.unwrap_or(32768),
     });
 
     info!("Loading HF model: {}", model);
@@ -393,4 +394,298 @@ pub async fn chat(
     let chat_resp: HFChatResponse = resp.json().await
         .context("Failed to parse chat response")?;
     Ok(chat_resp)
+}
+
+// ─── Media Model Types ─────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HFMediaModel {
+    pub name: String,
+    pub path: String,
+    pub model_type: String, // "image", "video", "tts"
+    pub pipeline_class: Option<String>,
+    pub size_bytes: u64,
+    pub size_gb: f64,
+    pub dtype: Option<String>,
+    pub loaded: bool,
+}
+
+// ─── Media Model Management ────────────────────────────
+
+/// List registered media models via GET /media/models.
+pub async fn list_media_models(base_url: &str) -> Result<Vec<HFMediaModel>> {
+    let url = format!("{}/media/models", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .context("Failed to connect to sidecar /media/models")?;
+
+    let body: Value = resp
+        .json()
+        .await
+        .context("Failed to parse /media/models response")?;
+    let models: Vec<HFMediaModel> = serde_json::from_value(
+        body.get("models").cloned().unwrap_or(Value::Array(vec![])),
+    )
+    .unwrap_or_default();
+
+    Ok(models)
+}
+
+/// Register a media model directory via POST /media/models/register.
+pub async fn register_media_model(
+    base_url: &str,
+    path: &str,
+    name: Option<&str>,
+    model_type: Option<&str>,
+    pipeline_class: Option<&str>,
+) -> Result<Value> {
+    let url = format!("{}/media/models/register", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let mut body = json!({ "path": path });
+    if let Some(n) = name {
+        body["name"] = json!(n);
+    }
+    if let Some(t) = model_type {
+        body["model_type"] = json!(t);
+    }
+    if let Some(p) = pipeline_class {
+        body["pipeline_class"] = json!(p);
+    }
+
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to register media model")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Register media model failed ({}): {}", status, error_body);
+    }
+
+    let result: Value = resp.json().await?;
+    Ok(result)
+}
+
+/// Unregister a media model via POST /media/models/unregister.
+pub async fn unregister_media_model(base_url: &str, name: &str) -> Result<Value> {
+    let url = format!("{}/media/models/unregister", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let body = json!({ "name": name });
+
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to unregister media model")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "Unregister media model failed ({}): {}",
+            status,
+            error_body
+        );
+    }
+
+    let result: Value = resp.json().await?;
+    Ok(result)
+}
+
+/// Load a media model into GPU via POST /media/models/load.
+pub async fn load_media_model(
+    base_url: &str,
+    model: &str,
+    dtype: Option<&str>,
+) -> Result<Value> {
+    let url = format!("{}/media/models/load", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
+
+    let body = json!({
+        "model": model,
+        "dtype": dtype.unwrap_or("fp16"),
+    });
+
+    info!("Loading media model: {}", model);
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to load media model")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Load media model failed ({}): {}", status, error_body);
+    }
+
+    let result: Value = resp.json().await?;
+    info!("Media model loaded: {}", model);
+    Ok(result)
+}
+
+/// Unload the current media model via POST /media/models/unload.
+pub async fn unload_media_model(base_url: &str) -> Result<Value> {
+    let url = format!("{}/media/models/unload", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let resp = client
+        .post(&url)
+        .send()
+        .await
+        .context("Failed to unload media model")?;
+
+    let result: Value = resp.json().await?;
+    Ok(result)
+}
+
+// ─── Media Generation ──────────────────────────────────
+
+/// Generate image(s) via POST /media/generate/image.
+pub async fn generate_image_local(
+    base_url: &str,
+    prompt: &str,
+    n: u32,
+    aspect_ratio: &str,
+    steps: u32,
+    guidance_scale: f32,
+    seed: Option<i64>,
+) -> Result<Value> {
+    let url = format!("{}/media/generate/image", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+
+    let mut body = json!({
+        "prompt": prompt,
+        "n": n,
+        "aspect_ratio": aspect_ratio,
+        "steps": steps,
+        "guidance_scale": guidance_scale,
+    });
+    if let Some(s) = seed {
+        body["seed"] = json!(s);
+    }
+
+    info!("Generating image locally: {} images, {}", n, aspect_ratio);
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to generate image")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Image generation failed ({}): {}", status, error_body);
+    }
+
+    let result: Value = resp.json().await?;
+    Ok(result)
+}
+
+/// Generate video via POST /media/generate/video.
+pub async fn generate_video_local(
+    base_url: &str,
+    prompt: &str,
+    num_frames: u32,
+    aspect_ratio: &str,
+    steps: u32,
+    guidance_scale: f32,
+    seed: Option<i64>,
+) -> Result<Value> {
+    let url = format!("{}/media/generate/video", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()?;
+
+    let mut body = json!({
+        "prompt": prompt,
+        "num_frames": num_frames,
+        "aspect_ratio": aspect_ratio,
+        "steps": steps,
+        "guidance_scale": guidance_scale,
+    });
+    if let Some(s) = seed {
+        body["seed"] = json!(s);
+    }
+
+    info!("Generating video locally: {} frames", num_frames);
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to generate video")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Video generation failed ({}): {}", status, error_body);
+    }
+
+    let result: Value = resp.json().await?;
+    Ok(result)
+}
+
+/// Generate speech via POST /media/generate/tts.
+pub async fn text_to_speech_local(
+    base_url: &str,
+    text: &str,
+    voice: Option<&str>,
+    speed: f32,
+    format: &str,
+) -> Result<Value> {
+    let url = format!("{}/media/generate/tts", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
+
+    let mut body = json!({
+        "text": text,
+        "speed": speed,
+        "format": format,
+    });
+    if let Some(v) = voice {
+        body["voice"] = json!(v);
+    }
+
+    info!("Generating TTS locally: {} chars", text.len());
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to generate TTS")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("TTS generation failed ({}): {}", status, error_body);
+    }
+
+    let result: Value = resp.json().await?;
+    Ok(result)
 }
