@@ -2072,15 +2072,7 @@ const App = {
       const data = await resp.json();
       this.state.userModels = data.models || [];
     } catch (e) { console.error('loadUserModels:', e); }
-    // Also load Ollama models for the unified dropdown
-    try {
-      const or = await fetch('/api/local/ollama/models');
-      if (or.ok) {
-        const od = await or.json();
-        this._ollamaModels = od.models || [];
-      }
-    } catch (_) { this._ollamaModels = []; }
-    // Load GGUF models — always scan filesystem, merge with sidecar status
+    // Load local GGUF models — always scan filesystem, merge with sidecar status
     this._sidecarModels = [];
     try {
       // 1. Filesystem scan — always works, gives us the model list
@@ -4021,27 +4013,17 @@ const App = {
   },
 
   modelOptionsHTML() {
-    // Build options grouped by provider from userModels + Ollama
+    // Build options grouped by provider from userModels + local sidecar
     const allModels = [...(this.state.userModels || [])];
 
-    // Add Ollama models if available
-    if (this._ollamaModels && this._ollamaModels.length) {
-      for (const m of this._ollamaModels) {
-        const name = m.name || m.model;
-        if (!allModels.find(x => (x.model_id || x.id) === name)) {
-          allModels.push({ model_id: name, display_name: name, provider_id: 'ollama' });
-        }
-      }
-    }
-
-    // Add HuggingFace sidecar models if available
+    // Add local sidecar models if available
     if (this._sidecarModels && this._sidecarModels.length) {
       for (const m of this._sidecarModels) {
         const name = m.name || m.model;
         const sizeLabel = m.size_gb ? ` (${m.size_gb.toFixed(1)}GB)` : '';
         const loadedLabel = m.loaded ? ' \u2713' : '';
         if (!allModels.find(x => (x.model_id || x.id) === name)) {
-          allModels.push({ model_id: name, display_name: name + sizeLabel + loadedLabel, provider_id: 'huggingface' });
+          allModels.push({ model_id: name, display_name: name + sizeLabel + loadedLabel, provider_id: 'local' });
         }
       }
     }
@@ -4050,7 +4032,7 @@ const App = {
 
     // Group by provider
     const groups = {};
-    const providerNames = { anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI', google: 'Google AI', ollama: 'Local Models', huggingface: 'Local Models (GGUF)' };
+    const providerNames = { anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI', google: 'Google AI', local: 'Local Models', huggingface: 'Local Models' };
     for (const m of allModels) {
       const pid = m.provider_id || 'other';
       if (!groups[pid]) groups[pid] = [];
@@ -4058,7 +4040,7 @@ const App = {
     }
 
     // Render optgroups — cloud providers first, then local
-    const order = ['anthropic', 'openai', 'xai', 'google', 'ollama', 'huggingface', 'other'];
+    const order = ['anthropic', 'openai', 'xai', 'google', 'local', 'huggingface', 'other'];
     let html = '';
     for (const pid of order) {
       if (!groups[pid] || !groups[pid].length) continue;
@@ -4102,7 +4084,7 @@ const App = {
   },
 
   updateUnloadButtons() {
-    const isLocal = this.state.selectedProvider === 'huggingface';
+    const isLocal = this.state.selectedProvider === 'local' || this.state.selectedProvider === 'huggingface';
     const hasLoaded = (this._sidecarModels || []).some(m => m.loaded);
     document.querySelectorAll('.panel-unload-btn').forEach(btn => {
       btn.style.display = (isLocal || hasLoaded) ? '' : 'none';
@@ -4199,15 +4181,10 @@ const App = {
 
           <div class="onboard-section-label">Run locally \u2014 free &amp; private</div>
           <div class="onboard-providers">
-            <div class="onboard-provider-card" onclick="App.openProviderSetup('ollama')">
-              <div class="onboard-provider-icon">${providerIcon('ollama', 28)}</div>
+            <div class="onboard-provider-card" onclick="App.openProviderSetup('local')">
+              <div class="onboard-provider-icon">${providerIcon('local', 28)}</div>
               <div class="onboard-provider-name">Local Models</div>
-              <div class="onboard-provider-sub">Gemma 4, Llama 3, DeepSeek, Qwen</div>
-            </div>
-            <div class="onboard-provider-card" onclick="App.openProviderSetup('huggingface')">
-              <div class="onboard-provider-icon">${providerIcon('huggingface', 28)}</div>
-              <div class="onboard-provider-name">GGUF Models</div>
-              <div class="onboard-provider-sub">Download and run any GGUF model</div>
+              <div class="onboard-provider-sub">Run GGUF models on your GPU</div>
             </div>
           </div>
 
@@ -4790,7 +4767,7 @@ const App = {
       // Sync all panel model selects
       document.querySelectorAll('.panel-model-select').forEach(s => { if (s !== modelSel) s.value = modelSel.value; });
       // Auto-load local GGUF model when selected
-      if (opt && opt.dataset.provider === 'huggingface') {
+      if (opt && (opt.dataset.provider === 'local' || opt.dataset.provider === 'huggingface')) {
         const modelName = modelSel.value;
         const sidecarModel = (this._sidecarModels || []).find(m => m.name === modelName);
         if (sidecarModel && !sidecarModel.loaded) {
@@ -4887,30 +4864,12 @@ const App = {
     await this.loadProviders();
     await this.loadAllUserModels();
 
-    // Check Ollama status + models
-    let ollamaStatus = { running: false, models: [] };
-    try {
-      const r = await fetch('/api/local/ollama/status');
-      if (r.ok) {
-        const s = await r.json();
-        ollamaStatus.running = s.running;
-        ollamaStatus.version = s.version;
-      }
-      if (ollamaStatus.running) {
-        const mr = await fetch('/api/local/ollama/models');
-        if (mr.ok) {
-          const md = await mr.json();
-          ollamaStatus.models = md.models || [];
-        }
-      }
-    } catch (_) {}
-
     let html = '';
 
     /* ─── Cloud Providers ─── */
     html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">Cloud Providers</div>';
 
-    for (const p of this.state.providers.filter(p => p.provider_id !== 'ollama' && p.provider_id !== 'huggingface')) {
+    for (const p of this.state.providers.filter(p => p.provider_id !== 'local' && p.provider_id !== 'huggingface' && p.provider_id !== 'ollama')) {
       const modelCount = this.state.userModels.filter(m => m.provider_id === p.provider_id).length;
       html += `<div class="provider-card" data-pid="${esc(p.provider_id)}">
         <div class="provider-card-header">
@@ -4943,72 +4902,32 @@ const App = {
     /* ─── Local Models ─── */
     html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:20px 0 10px;">Local Models</div>';
 
-    /* Ollama */
-    const ollamaModels = ollamaStatus.models || [];
-    html += `<div class="provider-card local-provider">
-      <div class="provider-card-header">
-        <div class="provider-card-info">
-          <span class="provider-card-status ${ollamaStatus.running ? 'ok' : ''}">${ollamaStatus.running ? '✓' : '○'}</span>
-          <span class="provider-card-icon">${providerIcon('ollama', 18)}</span>
-          <span class="provider-card-name">Ollama</span>
-        </div>
-        <div class="provider-card-meta">${ollamaStatus.running ? ollamaModels.length + ' model' + (ollamaModels.length !== 1 ? 's' : '') + ' loaded' : 'Not running'}</div>
-      </div>`;
-
-    if (ollamaStatus.running) {
-      html += '<div class="local-models-list">';
-      if (ollamaModels.length === 0) {
-        html += '<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">No models installed. Run <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">ollama pull llama3</code> to get started.</div>';
-      }
-      for (const m of ollamaModels) {
-        const size = m.size ? (m.size / (1024*1024*1024)).toFixed(1) + ' GB' : '';
-        html += `<div class="local-model-item">
-          <div class="local-model-info">
-            <div class="local-model-name">${esc(m.name || m.model)}</div>
-            <div class="local-model-meta">${size}${m.details?.quantization_level ? ' • ' + esc(m.details.quantization_level) : ''}${m.details?.parameter_size ? ' • ' + esc(m.details.parameter_size) : ''}</div>
-          </div>
-        </div>`;
-      }
-      html += '</div>';
-      html += `<div class="provider-card-actions" style="margin-top:8px;">
-        <button class="provider-card-btn" id="ollama-refresh-btn">↻ Refresh</button>
-        <button class="provider-card-btn" id="ollama-pull-btn">+ Pull Model</button>
-      </div>`;
-      html += `<div id="ollama-pull-form" style="display:none;margin-top:8px;">
-        <div style="display:flex;gap:4px;">
-          <input type="text" id="ollama-pull-input" class="provider-card-key-input" placeholder="Model name (e.g. llama3, mistral, phi3)" />
-          <button class="provider-card-btn" id="ollama-pull-go">Pull</button>
-        </div>
-        <div id="ollama-pull-status" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
-      </div>`;
-    } else {
-      html += `<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">
-        Ollama is not running. <a href="#" style="color:var(--accent);" onclick="event.preventDefault();fetch('/api/providers/ollama/start',{method:'POST'}).then(()=>setTimeout(()=>App.renderProvidersPanel(),2000));">Start Ollama</a>
-        or install from <a href="https://ollama.ai" target="_blank" style="color:var(--accent);">ollama.ai</a>
-      </div>`;
-    }
-    html += '</div>';
-
-    /* HuggingFace / GGUF */
+    /* Chitty Model Manager — GGUF */
     html += `<div class="provider-card local-provider">
       <div class="provider-card-header">
         <div class="provider-card-info">
           <span class="provider-card-status" id="sidecar-status-dot">○</span>
-          <span class="provider-card-icon">${providerIcon('huggingface', 18)}</span>
-          <span class="provider-card-name">Local Models (GGUF)</span>
+          <span class="provider-card-icon">${providerIcon('local', 18)}</span>
+          <span class="provider-card-name">Local Models</span>
         </div>
         <div class="provider-card-meta" id="sidecar-status-text">Checking...</div>
       </div>
-      <div style="font-size:11px;color:var(--text-muted);padding:8px 0;line-height:1.6;">
-        Load GGUF model files locally via the Python inference sidecar.<br>
-        Models scanned from <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">C:\\LLM Models</code>
-        and <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">~/.chitty-workspace/models/</code>
+      <div style="font-size:11px;color:var(--text-muted);padding:4px 0 8px;line-height:1.6;">
+        Run GGUF models locally on your GPU. Download models from <a href="https://huggingface.co/models?library=gguf" target="_blank" style="color:var(--accent);">HuggingFace</a> and place them in a scan directory below.
+      </div>
+      <div id="model-dirs-section" style="margin-bottom:8px;">
+        <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px;">Scan Directories</div>
+        <div id="model-dirs-list" style="font-size:11px;"></div>
+        <div style="display:flex;gap:4px;margin-top:4px;">
+          <input type="text" id="model-dir-input" class="provider-card-key-input" placeholder="C:\\path\\to\\models" style="flex:1;" />
+          <button class="provider-card-btn" id="model-dir-add-btn">+ Add</button>
+        </div>
       </div>
       <div class="provider-card-actions" style="flex-wrap:wrap;gap:6px;">
-        <button class="provider-card-btn" id="gguf-scan-btn">🔍 Scan Models</button>
-        <button class="provider-card-btn" id="gguf-sidecar-btn" style="display:none;">⚡ Starting...</button>
-        <button class="provider-card-btn" id="gguf-stop-btn" style="display:none;">⏹ Stop Sidecar</button>
-        <button class="provider-card-btn" id="gguf-browse-btn">📂 Browse File</button>
+        <button class="provider-card-btn" id="gguf-scan-btn">Scan Models</button>
+        <button class="provider-card-btn" id="gguf-sidecar-btn" style="display:none;">Starting...</button>
+        <button class="provider-card-btn" id="gguf-stop-btn" style="display:none;">Stop Sidecar</button>
+        <button class="provider-card-btn" id="gguf-browse-btn">Browse File</button>
       </div>
       <div id="gguf-models-list" style="margin-top:8px;"></div>
     </div>`;
@@ -5025,13 +4944,31 @@ const App = {
       </div>
       <div style="font-size:11px;color:var(--text-muted);padding:8px 0;line-height:1.6;">
         Register local diffusion models (Flux, SDXL, CogVideoX, Bark, etc.) for image, video, and speech generation.<br>
-        Set <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">image_provider: huggingface</code> in System Defaults to use locally.
+        Set <code style="background:var(--bg-card);padding:2px 4px;border-radius:3px;">image_provider: local</code> in System Defaults to use locally.
       </div>
       <div class="provider-card-actions" style="flex-wrap:wrap;gap:6px;">
         <button class="provider-card-btn" id="media-refresh-btn">🔄 Refresh</button>
         <button class="provider-card-btn" id="media-register-btn">📂 Register Model</button>
       </div>
       <div id="media-models-list" style="margin-top:8px;"></div>
+    </div>`;
+
+    /* Fine-Tuning Workbench card */
+    html += `<div class="provider-card local-provider">
+      <div class="provider-card-header">
+        <div class="provider-card-info">
+          <span class="provider-card-status" id="training-status-dot">○</span>
+          <span class="provider-card-icon">&#9881;</span>
+          <span class="provider-card-name">Fine-Tuning</span>
+        </div>
+        <div class="provider-card-meta" id="training-status-text">LoRA / QLoRA</div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);padding:4px 0 8px;line-height:1.6;">
+        Fine-tune HuggingFace models with LoRA/QLoRA on your GPU. Upload a dataset, pick a base model, train, and merge the adapter.
+      </div>
+      <div class="provider-card-actions">
+        <button class="provider-card-btn" id="training-open-btn">Open Workbench</button>
+      </div>
     </div>`;
 
     /* ─── Runtime Monitoring ─── */
@@ -5104,28 +5041,40 @@ const App = {
         await this.renderProviderModelsInline(btn.dataset.pid, panel);
       });
     });
-    // Ollama refresh
-    document.getElementById('ollama-refresh-btn')?.addEventListener('click', () => this.renderProvidersPanel());
-    // Ollama pull
-    document.getElementById('ollama-pull-btn')?.addEventListener('click', () => {
-      const form = document.getElementById('ollama-pull-form');
-      if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
-    });
-    document.getElementById('ollama-pull-go')?.addEventListener('click', async () => {
-      const input = document.getElementById('ollama-pull-input');
-      const status = document.getElementById('ollama-pull-status');
-      const name = input?.value.trim();
-      if (!name) return;
-      status.textContent = 'Pulling ' + name + '...';
+    // Model directories management
+    (async () => {
       try {
-        const r = await fetch('/api/providers/ollama/pull', {
+        const r = await fetch('/api/local/models/dirs');
+        const data = await r.json();
+        const dirs = data.directories || [];
+        const dirsList = document.getElementById('model-dirs-list');
+        if (dirsList) {
+          dirsList.innerHTML = dirs.map(d => {
+            const safeDir = d.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;background:var(--bg-card);border-radius:4px;margin-bottom:2px;">
+              <span style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${safeDir}">${safeDir}</span>
+            </div>`;
+          }).join('') || '<div style="font-size:11px;color:var(--text-muted);">No directories configured.</div>';
+        }
+      } catch (_) {}
+    })();
+    document.getElementById('model-dir-add-btn')?.addEventListener('click', async () => {
+      const input = document.getElementById('model-dir-input');
+      const dir = input?.value.trim();
+      if (!dir) return;
+      try {
+        const r = await fetch('/api/local/models/dirs', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: name }),
+          body: JSON.stringify({ directory: dir }),
         });
         const data = await r.json();
-        status.textContent = data.error ? 'Error: ' + data.error : 'Pull started — refresh to check progress.';
-        if (!data.error) setTimeout(() => this.renderProvidersPanel(), 3000);
-      } catch (e) { status.textContent = 'Error: ' + e.message; }
+        if (data.success) {
+          input.value = '';
+          this.renderProvidersPanel();
+        } else {
+          alert('Failed: ' + (data.error || 'Unknown error'));
+        }
+      } catch (e) { alert('Error: ' + e.message); }
     });
     // GGUF scan
     /* ─── Sidecar status check ─── */
@@ -5172,23 +5121,45 @@ const App = {
           models = data.models || [];
         }
         if (!models.length) {
-          list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);">No GGUF files found.</div>';
+          list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);">No GGUF files found. Download GGUF models and place them in a scan directory above.</div>';
         } else {
+          // Fetch GPU stats for VRAM indicators
+          let gpuFree = null;
+          try {
+            const gr = await fetch('/api/local/gpu');
+            const gs = await gr.json();
+            if (gs.available && gs.vram_free_mb) gpuFree = gs.vram_free_mb;
+          } catch (_) {}
           list.innerHTML = models.map(m => {
             const safeName = (m.name || '').replaceAll('&','&amp;').replaceAll("'","&#39;").replaceAll('"','&quot;');
+            const safePath = (m.path || '').replaceAll('&','&amp;').replaceAll("'","&#39;").replaceAll('"','&quot;');
             const sizeGb = m.size_gb ? m.size_gb.toFixed(1) : (m.size_bytes ? (m.size_bytes / (1024*1024*1024)).toFixed(1) : '?');
+            const sizeBytes = m.size_bytes || (m.size_gb ? m.size_gb * 1024*1024*1024 : 0);
+            const estimatedMb = Math.ceil(sizeBytes * 1.1 / (1024*1024));
             const quant = m.quantization ? ` · ${m.quantization}` : '';
             const loaded = m.loaded ? ' · <span style="color:var(--success);font-weight:600;">LOADED</span>' : '';
+            // VRAM fit indicator
+            let vramBadge = '';
+            if (gpuFree !== null && !m.loaded) {
+              if (estimatedMb <= gpuFree) {
+                vramBadge = '<span style="color:#22c55e;font-size:9px;margin-left:4px;" title="Fits in VRAM">&#9679;</span>';
+              } else if (estimatedMb <= gpuFree * 1.3) {
+                vramBadge = '<span style="color:#eab308;font-size:9px;margin-left:4px;" title="Tight VRAM fit">&#9679;</span>';
+              } else {
+                vramBadge = '<span style="color:#ef4444;font-size:9px;margin-left:4px;" title="May not fit in VRAM">&#9679;</span>';
+              }
+            }
             const capColors = { text:'#6b7280', tools:'#3b82f6', code:'#a855f7', vision:'#f59e0b', reasoning:'#ef4444', audio:'#10b981', tts:'#ec4899', image:'#f97316' };
             const capBadges = (m.capabilities || ['text']).map(c => `<span style="display:inline-block;padding:0 4px;margin-right:2px;border-radius:3px;font-size:9px;font-weight:600;background:${capColors[c]||'#6b7280'}22;color:${capColors[c]||'#6b7280'};">${c}</span>`).join('');
             return `<div class="local-model-item" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--bg-card);border-radius:6px;margin-bottom:4px;">
-              <div>
-                <div style="font-size:12px;font-weight:500;">${safeName}</div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:12px;font-weight:500;">${safeName}${vramBadge}</div>
                 <div style="font-size:10px;color:var(--text-muted);">${sizeGb} GB${quant}${loaded}</div>
                 <div style="margin-top:2px;">${capBadges}</div>
               </div>
-              <div style="display:flex;gap:4px;">
+              <div style="display:flex;gap:4px;flex-shrink:0;">
                 ${!m.loaded ? `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App.loadGgufModel('${safeName}')">Load</button>` : `<button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App.unloadGgufModel()">Unload</button>`}
+                <button class="provider-card-btn" style="font-size:10px;padding:2px 8px;color:var(--danger);" onclick="App.deleteLocalModel('${safePath}','${safeName}')">Del</button>
               </div>
             </div>`;
           }).join('');
@@ -5344,6 +5315,25 @@ const App = {
     // Auto-refresh media models on panel load
     setTimeout(() => document.getElementById('media-refresh-btn')?.click(), 500);
 
+    /* ─── Training workbench ─── */
+    document.getElementById('training-open-btn')?.addEventListener('click', () => this.openTrainingWorkbench());
+    // Check training status on panel load
+    (async () => {
+      try {
+        const r = await fetch('/api/local/training/status');
+        const s = await r.json();
+        const dot = document.getElementById('training-status-dot');
+        const txt = document.getElementById('training-status-text');
+        if (s.status === 'training' || s.status === 'loading' || s.status === 'loading_model' || s.status === 'loading_dataset' || s.status === 'applying_lora' || s.status === 'starting') {
+          if (dot) { dot.textContent = '●'; dot.style.color = '#f59e0b'; }
+          if (txt) txt.textContent = `Training · Step ${s.step || 0}/${s.total_steps || '?'}`;
+        } else if (s.status === 'completed') {
+          if (dot) { dot.textContent = '●'; dot.style.color = 'var(--success)'; }
+          if (txt) txt.textContent = 'Last job completed';
+        }
+      } catch (_) {}
+    })();
+
     /* ─── Monitor refresh ─── */
     document.getElementById('monitor-refresh-btn')?.addEventListener('click', async () => {
       try {
@@ -5355,28 +5345,456 @@ const App = {
             ? `${(data.vram_used_mb/1024).toFixed(1)}/${(data.vram_total_mb/1024).toFixed(1)} GB`
             : '—';
           document.getElementById('monitor-ram').textContent = '—';
-          // Check active model — sidecar first, then Ollama
+          // Check active model via sidecar
           let activeModel = 'None';
           try {
             const sr = await fetch('/api/local/sidecar/status');
             const ss = await sr.json();
             if (ss.loaded_model) activeModel = ss.loaded_model;
           } catch (_) {}
-          if (activeModel === 'None') {
-            try {
-              const or = await fetch('/api/local/ollama/running');
-              const os = await or.json();
-              if (os.models && os.models.length) {
-                activeModel = os.models.map(m => m.name || m.model).join(', ');
-              }
-            } catch (_) {}
-          }
+          // Sidecar is the only local provider now
           document.getElementById('monitor-model').textContent = activeModel;
         }
       } catch (_) {}
     });
     // Auto-refresh on panel load
     document.getElementById('monitor-refresh-btn')?.click();
+  },
+
+  /* ── Training Workbench (LoRA/QLoRA) ──── */
+  openTrainingWorkbench() {
+    const e = esc;
+    let html = `
+    <div style="display:flex;flex-direction:column;height:100%;font-size:12px;">
+      <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);padding:0 0 8px;">
+        <button class="provider-card-btn train-tab-btn active" data-tab="datasets" style="font-size:11px;">Datasets</button>
+        <button class="provider-card-btn train-tab-btn" data-tab="train" style="font-size:11px;">Train</button>
+        <button class="provider-card-btn train-tab-btn" data-tab="adapters" style="font-size:11px;">Adapters</button>
+      </div>
+
+      <!-- Datasets Tab -->
+      <div class="train-tab-content" id="train-tab-datasets" style="flex:1;overflow-y:auto;padding:10px 0;">
+        <div style="border:2px dashed var(--border);border-radius:8px;padding:20px;text-align:center;margin-bottom:10px;cursor:pointer;" id="dataset-drop-zone">
+          <div style="font-size:13px;font-weight:500;margin-bottom:4px;">Drop dataset file here</div>
+          <div style="font-size:10px;color:var(--text-muted);">JSONL (Alpaca/Chat) or CSV</div>
+          <button class="provider-card-btn" style="margin-top:8px;font-size:11px;" id="dataset-browse-btn">Browse File</button>
+        </div>
+        <div id="dataset-list" style="font-size:11px;color:var(--text-muted);">Loading datasets...</div>
+      </div>
+
+      <!-- Train Tab -->
+      <div class="train-tab-content" id="train-tab-train" style="flex:1;overflow-y:auto;padding:10px 0;display:none;">
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;display:block;margin-bottom:3px;">Base Model (HuggingFace ID)</label>
+          <input type="text" id="train-base-model" class="provider-card-key-input" placeholder="e.g. meta-llama/Llama-3.1-8B-Instruct" style="width:100%;" />
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;display:block;margin-bottom:3px;">Dataset</label>
+          <select id="train-dataset" class="provider-card-key-input" style="width:100%;"><option value="">Loading...</option></select>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;display:block;margin-bottom:3px;">Quantization</label>
+          <select id="train-quant" class="provider-card-key-input" style="width:100%;">
+            <option value="4bit" selected>4-bit QLoRA (recommended)</option>
+            <option value="8bit">8-bit LoRA</option>
+            <option value="none">None (full precision)</option>
+          </select>
+        </div>
+        <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;margin:12px 0 6px;">LoRA Parameters</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Rank (r)</label><input type="number" id="train-lora-r" value="16" min="1" max="256" class="provider-card-key-input" style="width:100%;" /></div>
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Alpha</label><input type="number" id="train-lora-alpha" value="32" min="1" max="512" class="provider-card-key-input" style="width:100%;" /></div>
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Dropout</label><input type="number" id="train-lora-dropout" value="0.05" step="0.01" min="0" max="0.5" class="provider-card-key-input" style="width:100%;" /></div>
+        </div>
+        <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;margin:12px 0 6px;">Training Parameters</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Learning Rate</label><input type="number" id="train-lr" value="0.0002" step="0.0001" min="0" class="provider-card-key-input" style="width:100%;" /></div>
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Epochs</label><input type="number" id="train-epochs" value="3" min="1" max="100" class="provider-card-key-input" style="width:100%;" /></div>
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Batch Size</label><input type="number" id="train-batch" value="4" min="1" max="64" class="provider-card-key-input" style="width:100%;" /></div>
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Grad Accum</label><input type="number" id="train-grad-accum" value="4" min="1" max="128" class="provider-card-key-input" style="width:100%;" /></div>
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Max Seq Length</label><input type="number" id="train-max-seq" value="512" min="32" max="8192" class="provider-card-key-input" style="width:100%;" /></div>
+          <div><label style="font-size:10px;color:var(--text-muted);display:block;">Warmup Ratio</label><input type="number" id="train-warmup" value="0.03" step="0.01" min="0" max="0.5" class="provider-card-key-input" style="width:100%;" /></div>
+        </div>
+        <button class="provider-card-btn" id="train-start-btn" style="width:100%;padding:8px;font-size:12px;font-weight:600;background:var(--accent);color:#fff;border:none;border-radius:6px;">Start Training</button>
+
+        <!-- Progress section (hidden until training starts) -->
+        <div id="train-progress" style="display:none;margin-top:14px;padding:10px;background:var(--bg-card);border-radius:8px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+            <span style="font-weight:600;" id="train-progress-label">Training...</span>
+            <span style="color:var(--text-muted);" id="train-progress-eta">ETA: --</span>
+          </div>
+          <div style="width:100%;height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:8px;">
+            <div id="train-progress-bar" style="height:100%;width:0%;background:var(--accent);border-radius:3px;transition:width 0.3s;"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:10px;">
+            <div>Step: <span id="train-step">0</span>/<span id="train-total-steps">?</span></div>
+            <div>Epoch: <span id="train-epoch">0</span></div>
+            <div>Loss: <span id="train-loss">--</span></div>
+          </div>
+          <canvas id="train-loss-chart" width="280" height="80" style="width:100%;height:80px;margin-top:8px;border-radius:4px;background:#1a1a2e;"></canvas>
+          <button class="provider-card-btn" id="train-stop-btn" style="width:100%;margin-top:8px;color:var(--danger);">Stop Training</button>
+        </div>
+      </div>
+
+      <!-- Adapters Tab -->
+      <div class="train-tab-content" id="train-tab-adapters" style="flex:1;overflow-y:auto;padding:10px 0;display:none;">
+        <div id="adapter-list" style="font-size:11px;color:var(--text-muted);">Loading adapters...</div>
+      </div>
+    </div>`;
+
+    this.openDynamicView('&#9881;', 'Fine-Tuning Workbench', html);
+
+    // Tab switching
+    document.querySelectorAll('.train-tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.train-tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.train-tab-content').forEach(c => c.style.display = 'none');
+        btn.classList.add('active');
+        document.getElementById('train-tab-' + btn.dataset.tab).style.display = '';
+      });
+    });
+
+    // Load datasets list
+    this._refreshTrainingDatasets();
+    this._refreshAdapters();
+
+    // Dataset upload via browse
+    document.getElementById('dataset-browse-btn')?.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.jsonl,.csv,.json';
+      input.onchange = (ev) => {
+        const file = ev.target.files[0];
+        if (file) this._uploadTrainingDataset(file);
+      };
+      input.click();
+    });
+
+    // Dataset drag & drop
+    const dropZone = document.getElementById('dataset-drop-zone');
+    if (dropZone) {
+      dropZone.addEventListener('dragover', (ev) => { ev.preventDefault(); dropZone.style.borderColor = 'var(--accent)'; });
+      dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = 'var(--border)'; });
+      dropZone.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        dropZone.style.borderColor = 'var(--border)';
+        const file = ev.dataTransfer.files[0];
+        if (file) this._uploadTrainingDataset(file);
+      });
+    }
+
+    // Start training
+    document.getElementById('train-start-btn')?.addEventListener('click', () => this._startTraining());
+
+    // Stop training
+    document.getElementById('train-stop-btn')?.addEventListener('click', async () => {
+      await fetch('/api/local/training/stop', { method: 'POST' });
+    });
+
+    // Check if training is already running
+    this._checkTrainingProgress();
+
+    // Populate dataset dropdown on train tab
+    this._populateDatasetDropdown();
+  },
+
+  async _uploadTrainingDataset(file) {
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const base64 = btoa(new Uint8Array(ev.target.result).reduce((s, b) => s + String.fromCharCode(b), ''));
+      try {
+        const r = await fetch('/api/local/training/datasets/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: file.name, data_base64: base64 }),
+        });
+        const data = await r.json();
+        if (data.success) {
+          this.activityLog('info', `Dataset uploaded: ${file.name} (${data.row_count} rows)`);
+          this._refreshTrainingDatasets();
+          this._populateDatasetDropdown();
+        } else {
+          alert('Upload failed: ' + (data.error || 'Unknown error'));
+        }
+      } catch (e) { alert('Upload error: ' + e.message); }
+    };
+    reader.readAsArrayBuffer(file);
+  },
+
+  async _refreshTrainingDatasets() {
+    const list = document.getElementById('dataset-list');
+    if (!list) return;
+    try {
+      const r = await fetch('/api/local/training/datasets');
+      const data = await r.json();
+      const datasets = data.datasets || [];
+      if (!datasets.length) {
+        list.innerHTML = '<div style="color:var(--text-muted);">No datasets yet. Upload a JSONL or CSV file above.</div>';
+        return;
+      }
+      list.innerHTML = datasets.map(d => {
+        const safeName = (d.name||'').replaceAll('&','&amp;').replaceAll("'",'&#39;').replaceAll('"','&quot;');
+        const sizeKb = d.size_bytes ? (d.size_bytes / 1024).toFixed(0) : '?';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--bg-card);border-radius:6px;margin-bottom:4px;">
+          <div>
+            <div style="font-size:12px;font-weight:500;">${safeName}</div>
+            <div style="font-size:10px;color:var(--text-muted);">${d.format || '?'} · ${d.row_count || '?'} rows · ${sizeKb} KB</div>
+          </div>
+          <button class="provider-card-btn" style="font-size:10px;padding:2px 8px;color:var(--danger);" onclick="App._deleteTrainingDataset('${safeName}')">Del</button>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      list.innerHTML = `<div style="color:var(--danger);">Failed to load: ${e.message}</div>`;
+    }
+  },
+
+  async _deleteTrainingDataset(name) {
+    if (!confirm(`Delete dataset "${name}"?`)) return;
+    await fetch('/api/local/training/datasets/' + encodeURIComponent(name), { method: 'DELETE' });
+    this._refreshTrainingDatasets();
+    this._populateDatasetDropdown();
+  },
+
+  async _populateDatasetDropdown() {
+    const sel = document.getElementById('train-dataset');
+    if (!sel) return;
+    try {
+      const r = await fetch('/api/local/training/datasets');
+      const data = await r.json();
+      const datasets = data.datasets || [];
+      sel.innerHTML = datasets.length
+        ? datasets.map(d => `<option value="${(d.name||'').replaceAll('"','&quot;')}">${(d.name||'')} (${d.row_count} rows)</option>`).join('')
+        : '<option value="">No datasets — upload one first</option>';
+    } catch (_) {
+      sel.innerHTML = '<option value="">Sidecar not running</option>';
+    }
+  },
+
+  async _startTraining() {
+    const baseModel = document.getElementById('train-base-model')?.value.trim();
+    const dataset = document.getElementById('train-dataset')?.value;
+    if (!baseModel) { alert('Enter a base model (HuggingFace model ID)'); return; }
+    if (!dataset) { alert('Select a dataset first'); return; }
+
+    const config = {
+      base_model: baseModel,
+      dataset: dataset,
+      quantization: document.getElementById('train-quant')?.value || '4bit',
+      lora_r: parseInt(document.getElementById('train-lora-r')?.value) || 16,
+      lora_alpha: parseInt(document.getElementById('train-lora-alpha')?.value) || 32,
+      lora_dropout: parseFloat(document.getElementById('train-lora-dropout')?.value) || 0.05,
+      learning_rate: parseFloat(document.getElementById('train-lr')?.value) || 2e-4,
+      num_epochs: parseInt(document.getElementById('train-epochs')?.value) || 3,
+      batch_size: parseInt(document.getElementById('train-batch')?.value) || 4,
+      gradient_accumulation_steps: parseInt(document.getElementById('train-grad-accum')?.value) || 4,
+      max_seq_length: parseInt(document.getElementById('train-max-seq')?.value) || 512,
+      warmup_ratio: parseFloat(document.getElementById('train-warmup')?.value) || 0.03,
+    };
+
+    const btn = document.getElementById('train-start-btn');
+    btn.disabled = true;
+    btn.textContent = 'Starting...';
+
+    try {
+      const r = await fetch('/api/local/training/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      const data = await r.json();
+      if (data.success) {
+        this.activityLog('info', `Training started: ${baseModel} (job: ${data.job_id})`);
+        this._trainingLossData = [];
+        this._startTrainingPoll();
+      } else {
+        alert('Failed to start training: ' + (data.error || 'Unknown error'));
+        btn.disabled = false;
+        btn.textContent = 'Start Training';
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = 'Start Training';
+    }
+  },
+
+  _trainingPollInterval: null,
+  _trainingLossData: [],
+
+  _startTrainingPoll() {
+    const prog = document.getElementById('train-progress');
+    if (prog) prog.style.display = '';
+    const btn = document.getElementById('train-start-btn');
+    if (btn) btn.style.display = 'none';
+
+    if (this._trainingPollInterval) clearInterval(this._trainingPollInterval);
+    this._trainingPollInterval = setInterval(() => this._pollTrainingStatus(), 2000);
+    this._pollTrainingStatus();
+  },
+
+  async _pollTrainingStatus() {
+    try {
+      const r = await fetch('/api/local/training/status');
+      const s = await r.json();
+
+      const step = s.step || 0;
+      const total = s.total_steps || 1;
+      const pct = Math.min(100, (step / total) * 100);
+
+      const bar = document.getElementById('train-progress-bar');
+      if (bar) bar.style.width = pct + '%';
+      const stepEl = document.getElementById('train-step');
+      if (stepEl) stepEl.textContent = step;
+      const totalEl = document.getElementById('train-total-steps');
+      if (totalEl) totalEl.textContent = total;
+      const epochEl = document.getElementById('train-epoch');
+      if (epochEl) epochEl.textContent = s.epoch || 0;
+      const lossEl = document.getElementById('train-loss');
+      if (lossEl && s.loss != null) lossEl.textContent = s.loss;
+      const etaEl = document.getElementById('train-progress-eta');
+      if (etaEl && s.eta_seconds != null) {
+        const mins = Math.floor(s.eta_seconds / 60);
+        const secs = s.eta_seconds % 60;
+        etaEl.textContent = `ETA: ${mins}m ${secs}s`;
+      }
+      const label = document.getElementById('train-progress-label');
+      if (label) {
+        const statusText = { starting: 'Starting...', loading: 'Loading...', loading_model: 'Loading model...', loading_dataset: 'Loading dataset...', applying_lora: 'Applying LoRA...', training: 'Training...' };
+        label.textContent = statusText[s.status] || s.status || 'Training...';
+      }
+
+      // Append loss to chart data
+      if (s.loss != null && s.status === 'training') {
+        this._trainingLossData.push({ step, loss: s.loss });
+        this._drawLossChart();
+      }
+
+      // Check for completion
+      if (s.status === 'completed' || s.status === 'failed' || s.status === 'cancelled') {
+        clearInterval(this._trainingPollInterval);
+        this._trainingPollInterval = null;
+        if (label) label.textContent = s.status === 'completed' ? 'Training Complete!' : s.status === 'cancelled' ? 'Cancelled' : 'Failed: ' + (s.error || '');
+        if (bar) bar.style.background = s.status === 'completed' ? 'var(--success)' : 'var(--danger)';
+        const stopBtn = document.getElementById('train-stop-btn');
+        if (stopBtn) stopBtn.style.display = 'none';
+        const startBtn = document.getElementById('train-start-btn');
+        if (startBtn) { startBtn.style.display = ''; startBtn.disabled = false; startBtn.textContent = 'Start Training'; }
+        if (s.status === 'completed') {
+          this.activityLog('info', `Training completed! Final loss: ${s.final_loss || s.loss}`);
+          this._refreshAdapters();
+        }
+      }
+    } catch (_) {}
+  },
+
+  _drawLossChart() {
+    const canvas = document.getElementById('train-loss-chart');
+    if (!canvas || !this._trainingLossData.length) return;
+    const ctx = canvas.getContext('2d');
+    const data = this._trainingLossData;
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const losses = data.map(d => d.loss);
+    const maxLoss = Math.max(...losses) * 1.1;
+    const minLoss = Math.min(...losses) * 0.9;
+    const range = maxLoss - minLoss || 1;
+
+    // Draw line
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = (i / Math.max(1, data.length - 1)) * w;
+      const y = h - ((data[i].loss - minLoss) / range) * (h - 10) - 5;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Labels
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '9px system-ui';
+    ctx.fillText(maxLoss.toFixed(2), 2, 10);
+    ctx.fillText(minLoss.toFixed(2), 2, h - 2);
+  },
+
+  async _checkTrainingProgress() {
+    try {
+      const r = await fetch('/api/local/training/status');
+      const s = await r.json();
+      if (s.status === 'training' || s.status === 'loading' || s.status === 'loading_model' || s.status === 'loading_dataset' || s.status === 'applying_lora' || s.status === 'starting') {
+        // Switch to train tab
+        document.querySelectorAll('.train-tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.train-tab-content').forEach(c => c.style.display = 'none');
+        const trainTab = document.querySelector('.train-tab-btn[data-tab="train"]');
+        if (trainTab) trainTab.classList.add('active');
+        const trainContent = document.getElementById('train-tab-train');
+        if (trainContent) trainContent.style.display = '';
+        this._trainingLossData = [];
+        this._startTrainingPoll();
+      }
+    } catch (_) {}
+  },
+
+  async _refreshAdapters() {
+    const list = document.getElementById('adapter-list');
+    if (!list) return;
+    try {
+      const r = await fetch('/api/local/training/adapters');
+      const data = await r.json();
+      const adapters = data.adapters || [];
+      if (!adapters.length) {
+        list.innerHTML = '<div style="color:var(--text-muted);">No adapters yet. Complete a training job to create one.</div>';
+        return;
+      }
+      list.innerHTML = adapters.map(a => {
+        const safeId = (a.job_id||'').replaceAll('&','&amp;').replaceAll("'",'&#39;').replaceAll('"','&quot;');
+        const sizeMb = a.size_mb ? a.size_mb + ' MB' : '?';
+        const loss = a.final_loss != null ? `Loss: ${a.final_loss}` : '';
+        const duration = a.duration_seconds ? `${Math.floor(a.duration_seconds/60)}m` : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:var(--bg-card);border-radius:6px;margin-bottom:4px;">
+          <div>
+            <div style="font-size:12px;font-weight:500;">${safeId}</div>
+            <div style="font-size:10px;color:var(--text-muted);">${a.base_model || '?'}</div>
+            <div style="font-size:10px;color:var(--text-muted);">${sizeMb} · ${loss} · ${duration} · r=${a.lora_r||'?'}</div>
+            <div style="font-size:9px;color:var(--text-muted);">${a.started_at || ''}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <button class="provider-card-btn" style="font-size:10px;padding:2px 8px;" onclick="App._mergeAdapter('${safeId}')">Merge</button>
+            <button class="provider-card-btn" style="font-size:10px;padding:2px 8px;color:var(--danger);" onclick="App._deleteAdapter('${safeId}')">Del</button>
+          </div>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      list.innerHTML = `<div style="color:var(--danger);">Failed: ${e.message}</div>`;
+    }
+  },
+
+  async _mergeAdapter(jobId) {
+    const outputName = prompt('Output model name (leave empty for auto):');
+    if (outputName === null) return;
+    this.activityLog('info', `Merging adapter ${jobId}... (this may take a while)`);
+    try {
+      const r = await fetch('/api/local/training/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, output_name: outputName || null }),
+      });
+      const data = await r.json();
+      if (data.success) {
+        this.activityLog('info', `Merge complete! Saved to: ${data.output_path}`);
+        alert('Merged model saved to:\n' + data.output_path);
+      } else {
+        alert('Merge failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch (e) { alert('Error: ' + e.message); }
+  },
+
+  async _deleteAdapter(jobId) {
+    if (!confirm(`Delete adapter "${jobId}" and all its files?`)) return;
+    await fetch('/api/local/training/adapters/' + encodeURIComponent(jobId), { method: 'DELETE' });
+    this._refreshAdapters();
   },
 
   /* ── Ensure sidecar is running (auto-start if needed) ──── */
@@ -5439,6 +5857,27 @@ const App = {
       App.renderProvidersPanel();
     } catch (e) {
       alert('Error unloading model: ' + e.message);
+    }
+  },
+
+  async deleteLocalModel(path, name) {
+    if (!confirm(`Delete "${name}" from disk?\n\nThis permanently removes the GGUF file. This cannot be undone.`)) return;
+    try {
+      const r = await fetch('/api/local/models/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      const data = await r.json();
+      if (data.success) {
+        this.activityLog('info', `Deleted model: ${name}`);
+        document.getElementById('gguf-scan-btn')?.click();
+        await this.loadAllUserModels();
+      } else {
+        alert('Failed to delete: ' + (data.error || 'Unknown error'));
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
     }
   },
 
@@ -7879,7 +8318,7 @@ function providerIcon(providerId, size = 24) {
     openai: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAQAAADZc7J/AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAD/h4/MvwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB+oDGxMMEBTReksAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDMtMjNUMjM6NTc6MTYrMDA6MDBAmrQSAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAzLTIzVDIzOjU3OjE2KzAwOjAwMccMrgAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0yN1QxOToxMjoxNiswMDowMKItms0AAALESURBVEjH1ZVtaJVlGMd/z9k5Yk2ladjJc6aHdLLccH4QIkm/KGpLWeQbvtTHSAgEZeRbQSEWFAxFfIlUonQpmNhWvk5BEf2gbNMzZqYzT6eBBVof1HS1Xx86sjM9z5ofvb4993P9f8/1v+/num544iMovGx/ksLe2d/Ewus5+RCmMYUSshzlNF3hksKAcj6jknZuUUqKBhoZwV9cpI2//8eSiHFP2GiVMTFuvZrxolfMut2UGGLyPzFiredNihGnetAO11vhUJMusNXjJkIAOXHUSba4Wixzq1nrnSgOslTESn/0k74AJdZ5w/vOEettt8YiA2fYZIcfGBdrbfO5fEAkb+sGsI4aPuUXJMKz7OMAL/I5X3CDL1nM98wnzWDiYd+fbqc1DveSbxh4yG2u9JraZEoc7QYztpi1It9EJI8ymzQ/EM09dfMWi6njXYaxl0X8yjIWkqGYssIVRG10o5jwkq8beNgGR4o40v12+Z2TxWI32+qonhp6KujmDkMAiVFFMdJMBoAMzXQgu1lHF+uJMZcCFro5w0sk+Z1veJuvSfUyep0lbGUJcbKc5eUeXf4efMt9VhFjDYuIMoYqSgFIUkXAbZrpIgD+5GmKCp9DjTc94CTxKd/0nC0udakt3vWQEWf5k6OMetAtBX4mEcvNmjZjnS+IKY+pP7vWbR7JARJW22l1D+DBoREgxPiH9xhMLa+yizLGsoMNXOBDxuSyF/AODTSFNdNw064Q477vVZucaWDE10y7V5ztPX9zk8P66oaPbXeciEkHiRP8yqzbLReXe8EpRkMbWsSEJ2x2ngmfsdyPvOpRZ1gkxj3rqgctTygAU+4062Vbva7u8XkxaoX7PemIR8VBbwQAMSoZz0A6qWYWHWQoYRyXWUHbo+MseLiKXjGAV5hOkluc4gh/FBCEz8f+Dve+7ozHuF6e6PgXg6rMSjD1l4sAAAAASUVORK5CYII=',
     huggingface: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAJcEhZcwAALEsAACxLAaU9lqkAAAAHdElNRQfqAxsTDBAU0XpLAAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTAzLTIzVDIzOjU3OjE2KzAwOjAwQJq0EgAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wMy0yM1QyMzo1NzoxNiswMDowMDHHDK4AAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDMtMjdUMTk6MTI6MTYrMDA6MDCiLZrNAAAJhElEQVRYw8WXe2xT1x3HP+de+9px4jgJeZCEYEggpSmQshTGyAoSGwx1E+oQG9MqhNDY2LRW0CLRaRRVILq1rIOVaWylrYRAVC1pSKHQbrwqaGA0gZKAQxcg5P2yY5zYjl/X9tkfNwlNoZs2TdqRru7V8e/3/f7O73kM/+cl/hPhlpYWiouLOXDgAMFgkGg0iq7r5OfnY7PZaG1tpaCggKeeeup/Z0BjYyPV1dVMmTIFl8vF6dOnOXz4MMXFxZjNZgB0Xae1tZU1a9ZQUVFBRUUFHo+HgoICVq9e/d+5RtM0du3axZkzZwC4efMmUkqklHzsCpn7QnKCT5eTfDFZ1D8sJ5y/NmAe/b21tRWAmpoadu/ezfDw8FfymB602d3dzd69e2lra+PZZ59FSsmmne8r256b/rCV+NKFTm+lCPYXowfSEQK0jEB2ycTWeEJeiCTFyXc++OSGlDIBsGbNGrZt20Z7eztOp/Pfn3xwcJCNGzcCcHcwgJQSX0hOjUf8ryY7PuyUF5+W8oN5Ur5XJGVVtpRVOVJWO6U88U0p656Xyd7a7ngssts3nCiRUhKNxgDYvHkzdXV1/94D+/bt48qVK0gpAQjrfMsRaviduLFnDn3HICUE6SmQooGqGUrxKISboOcyou1Ager88UbHw79cHNanbk7RzH+TUlJSUkJmZibz5s0bZ8i4JNyzZw92u521a9cipSSs84S1/+RfxGe/KkJ+DvkZBrEA5ANSWQLBCPQOga0SOffVnkj6nF+kmDm2fv16Hn/8cTRNY9WqVfcb4Ha7aWlpYf78+QD4Izxq950/LC79fDq2TsjPBEWMJ37QEkA8CV1eEF9DVr55J2ApXZWeolwGSCQSXLhwgUWLFgGgjOpVVVVx4sQJABpu+9JSY+0viGs7pmNph/wsEOIBPvsS8ahnVAWKskG/grj22+JUJbDV1dyeDrBlyxb6+/vH1MYMcDqd7NixA4CHJmd8W22veoJA7Qi5AR4KK3T2m9Dj4j7ywYBCj8dEctRDqoBJmdBXg9pz8jslxc5lAK+88gqFhYX3G9DY2IiUkoN/bda0cNsq2t9LIdsKZhUERGOC37+TydqXJvLOGfs4cu+Qyq9fz2Hdy3mcu2ozUCVg1cAh4c7bFi3pX/X+h+esUkrOnz8/luQKQG1tLc3NzQAsqXxokuJrmE+4GdJtEI+DZ4jwoE5TqwWTCr0DJpLJewYMBRVCEYF/WOV2lwbhKAwMQTwBmWngq0Px35r7jQULJgM0NDSwd+/ee2VosVhoamoCIFWjRAw25aFFwZwOUR2CERwZJp77kY+s9Dj5ExIoo75LgjMvzmsb3DS1WXBO1CFi6GC3gcUMwosYas61FVVMA266XC6WLFlyz4Du7m5u3LhhbEh9IqEeK5pixN5ihsJshKowLys8cmoJyXsVoZokDodkweywsZdIBVuKET4DFELdFlWQD9DU1DQWAhOAyWQiHB4BJ2ElERUoX0jrESCZgGO1aZhNkspZYRxpSZIS+gZMnL1i42FnjIqyiFGuijq+QhIRBFhHt5IjMTQBOByOMdmkVIOYUpMkkgqJpKGsGFkvFPhHu0bVx3ZKnTGmFcaI6oIbbRb6Bkz8Zr3nXjkaYCMPYE6TSUlwlEdVDQNNjY2NWCyWMZfEpNmTml4SoU23EfIYNZ1nh1gcVFhUbuH4xTSSty30tVhQRyJSPDVGeXEEBkIGqWaC/oCRiLoC9pJoLIE3FZBS4vF4cLlcmD799FNcLhevvfYaXf1DOfk2/zqGu1MIJ8CmgUmBlgHjDTyWA88vtzLzQzuZARVVQMdEndAPfORKP3QHjCPGkzBhpCSHk+C7bk2f8NjTHl/69ZzMtPZnnnmGd999F3Hs2DGWL1+OlJJoLPETi2v7G9x8WSAAkwrOTOgchDSLYcRAEEpyoM8KXWYwS5gag4wY3PRAbhroCQjGoCgD2n2GFyQw4wX0mVteMJuUl4QQHDp0CNPg4OAXWlqiiFC3QAOKJsDdELgDkJMGvpARCq8ATwCcCkyJjZUi3QEjV2ya4fqcNOOdZoGsFOj0wnAXyGSREKoCJL1eL0pXVxder5c/HfpYU6PuGQRaICGhLwCpFmP6ReNgM0MsAQUOw7CBkCQBJICBYWOvwGHI2MwjOhqkmiV9AUlCQuAWSsw7vbb+8zQpJR0dHZh6e3vJysqixDnRLGQ8h5gP0q1GF/RHjGTKTDHCMVpSeXbo8wvsFmOvPwAT08FuGekNVsPtQxEYjgmyU8EvIOJDyHi2Iz3VCvh7e3tRIpEIAG0d3QlQwgjViOFwzCBP08bmwVh5ZaQYbz1hnBjAYR0/Fc2qoauZIBQzZIUCQokODfnjY8No9J52ue7viaTZ7iXjEaP9agpoqgEgxD1gISCsg65DJAbRmPEd1u+X00wGhlkxMDNnIk2pdz3u3hhAXl4eppycHADe/MNWvX9g8PWcR7c9ptwsLKPjPZA9kDoMNosBBsag8eiQ+ggMjhw5bRJ034ZYFFJGwhKLQyhqlKAoBOfPSD60vmMoxB+//70lwdFrmohGo6xcuZJp06axe/du5XZbz8zCvMyfauE731XcF524Lyr4m0G/a7RlSz44V5CYtPyaTOj9CIFQ1Ay182gFHTUK0T7DKG0C2Esht1Imcyt7dNvUk/0DQ/uck/Lqly1blnS5XHL//v2I6upqJk+ezNy5c9m8ebPYuXOnnFZaptUc+6h4UmH+ghRTfL6a8JeKeDALUKTZ4Y6K9LOuz2+9/dHZOo+iCCrnzkz/esWsH1qlf5mI+wtACGlK8yVM9tuRuKmut89du+X5524dqT4cWblypaiqqpKXLl3izp07hrf27dtHQ0MDCxYswO12U1FR8cUrj/nPb72dcerc5fwzn3xWsPeNgw4wOvCXHuXVPW/YT52/kn/6/OWCtw4cziwsmqqNguTm5or6+npyc3Opr69n//79jFvHjx9HSsmOHTuorKwE4OzZs6xYsWI0t8fWhg0bkFJSVlZGeXk5AFu3br1PbvHixeLIkSMAzJkzhxdffBEpJadOnRo3KMetgwcPsnr1anbt2oXX6+X69eu0tLTgdruRUpKXl0d5eTmVlZUcPXqUWbNmMXv2bM6dO8fVq1fp7OxESkl2djbFxcWUlZUxY8YM1q1bx9GjR3nyySfH8f3LP6fbt29n06ZN1NTUEAwGMZvNlJaWomkaCxcuJBqNjsleunSJ/v5+BgYGUFWVpUuXkp+fb5CIr6b5JzFeQKY/aGCcAAAAAElFTkSuQmCC',
     xai: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAQAAADZc7J/AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAD/h4/MvwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB+oDGxMMEBTReksAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDMtMjNUMjM6NTc6MTYrMDA6MDBAmrQSAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAzLTIzVDIzOjU3OjE2KzAwOjAwMccMrgAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0yN1QxOToxMjoxNiswMDowMKItms0AAALcSURBVEjHpZVPaFRXFIe/eZPETExU1BCsjSJBRIwmpAsX1UKNi3ZRaQRJEQSrRmlLakRapShSV1IKuumy0C4KlWJL21XVhRWliyoloLbUP/gvGqNd1JGZySTm62JeZ968eSronc3APd/vnnPP79yX4jmXABnmBy+AN/I6hSB5+0m/CN7AdorcrkvUBqinnQ7m0UiOEa4ywuOq3b1k+OJJZ8+w32PeMO+UOmXOa37j2zaH+/UecNiOSk7V+Gset2jtmvSoL4n17rPo/mhRFTxwq6Nl5L4X/d0L3lcf+qPrbbLOTxz3gV1JOA6YVXXCU77nCludaatdbrHXRjHtXvPqWVuS0u91TNVRP3RmQhfS7jGv6lGD2vNne0rVO66Lty3EPzIXFvd1UgFbnFQLDsSvJ8R3h6erfmc6LtDkL6p+byYBD9xlwawnvKvqGZvjAiscU/O+lYgPWfBvN1jvkKo3XGQsqN/H6kXbogIhvtOsP9sp4nLH1JxrSlGVWVhIAFzmH0hFbR0wyMccZhMXALjDXaCRl0sxlVloAeABk1TjH7CRQX4op1UgC6RojgsUKc1YqhQa4tvoYTN/QikvIU1DJD4iMApAOxlyIV7HeqYxxL8RHObQBkxwL+7D1T5SR11ets1KVxnUGKrPonrPZfE2zvUPVQ+GAi22VhsqHORvVT1pU60TD6k64qu1b1DZzn1m1SnfT7JynxOh+qzEWcAeL6l63nlJAm84ro75rnWJL+Iah1V95Ibkt2hQvV6exAV2Oj3832S3n4WjPumnpisCqXLPZ/ATbezgNGkW0887zOYvrvKQ6XTQSSsA4xzmIPmKWysVDvqr3SIu9bTJ65oDNoj8VoP3+qWLyw7o9ohXwis1fOIu+7lL472BlAA9vMlXjFRdy0JeoYt2MuS5xTDnuBmpuiqDJW52TkU5dvdB0rcpKjDftf9/MGr68nQ0DFzgtKcGPGuV4F3Pi/MfiTbkbdTPMDoAAAAASUVORK5CYII=',
-    ollama: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAQAAADZc7J/AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAAAqo0jMgAAAAlwSFlzAAAAYAAAAGAA8GtCzwAAAAd0SU1FB+oDGxc4FK+f5XkAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDMtMjdUMjM6NTU6NTIrMDA6MDDgWwJBAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAzLTI3VDIzOjU1OjUyKzAwOjAwkQa6/QAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0yN1QyMzo1NjoyMCswMDowMLB+OBEAAAF+SURBVEjHvZW9SgNBFIW//JhtQlIKSURFC2NnI4igCD6Bf72FFhJto29gakFJlUYb8REEQTCJlVYJ2KhYWihmu0SOxUaI2YkZNuip7t6d8+3MvTszAMjRnqpyZStXVe3KwZPSure2dupOae/rwewewkF7ge2SlAvpllmCqxpSg7jpzRMlrnkBRlhgkzEzwA1JpvwxBVodz1Hy7BgJRsARh4ahB+TsAI8s0WQRcd3OePEQV4z7Cf7CHiqlfTX1oLxSP+KCoQ1hP7IOTFFmmQn4EdcNSzAABBRxOKEEXbFfUX9qmkueWSHCKDPAO+t8ApC1m8EqEQAyJHjjjSQZACKs2gEm2QLgFRhmGPEKwHa7Jn3bCBXWOlb4/UNdMGdXg0616Kdw3xFBAOZpRe0BWRK+XNLYxB6AOEWSXfaiedfTYzuDyzk37fNgno0e9l8AtvqbLvwzwB3I/xGmNhCgFuZ0IMAZcnQ3wNUWA5QOiPAuVwDFlFNFDWtrQ2XlFAP4ApTEE1e3g9KiAAAAAElFTkSuQmCC',
+    local: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAQAAADZc7J/AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAAAqo0jMgAAAAlwSFlzAAAAYAAAAGAA8GtCzwAAAAd0SU1FB+oDGxc4FK+f5XkAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDMtMjdUMjM6NTU6NTIrMDA6MDDgWwJBAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAzLTI3VDIzOjU1OjUyKzAwOjAwkQa6/QAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0yN1QyMzo1NjoyMCswMDowMLB+OBEAAAF+SURBVEjHvZW9SgNBFIW//JhtQlIKSURFC2NnI4igCD6Bf72FFhJto29gakFJlUYb8REEQTCJlVYJ2KhYWihmu0SOxUaI2YkZNuip7t6d8+3MvTszAMjRnqpyZStXVe3KwZPSure2dupOae/rwewewkF7ge2SlAvpllmCqxpSg7jpzRMlrnkBRlhgkzEzwA1JpvwxBVodz1Hy7BgJRsARh4ahB+TsAI8s0WQRcd3OePEQV4z7Cf7CHiqlfTX1oLxSP+KCoQ1hP7IOTFFmmQn4EdcNSzAABBRxOKEEXbFfUX9qmkueWSHCKDPAO+t8ApC1m8EqEQAyJHjjjSQZACKs2gEm2QLgFRhmGPEKwHa7Jn3bCBXWOlb4/UNdMGdXg0616Kdw3xFBAOZpRe0BWRK+XNLYxB6AOEWSXfaiedfTYzuDyzk37fNgno0e9l8AtvqbLvwzwB3I/xGmNhCgFuZ0IMAZcnQ3wNUWA5QOiPAuVwDFlFNFDWtrQ2XlFAP4ApTEE1e3g9KiAAAAAElFTkSuQmCC',
     google: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgEAYAAAAj6qa3AAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAAAAAAAAPlDu38AAAAJcEhZcwAAAGAAAABgAPBrQs8AAAAHdElNRQfqAxsXOBSvn+V5AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTAzLTI3VDIzOjU1OjUyKzAwOjAw4FsCQQAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wMy0yN1QyMzo1NTo1MiswMDowMJEGuv0AAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDMtMjdUMjM6NTY6MjArMDA6MDCwfjgRAAAFfklEQVRo3t2ZbUhUWRjH/+fOizSjNV0dTEfLdEyafBnNLI2MItPSQKP6UKxGW1aCGrT1wS9FQRJsgkZZQi2xbGxhIGwt1Er2xjSK2aQyRJqmTjZqTuNLk3N15uyH4abkius2c6ftgeHO4V7O8/z+55znnHsfgi9MXaGuUFf4+Fh8Lb7WvQcPkgvkAs7u3k1raA39KTqaaImWRMrl+EaNGqiBtn38SLJJNvm5tZVW0kry+2+/sXpWv6C4qqq9qL2ovchu558n/B/WxtpYm0qFkzhJ/rpzh1whV8iPcXHeBnKbMCW0hP5pMOAwDtPorCyLzCKzyN6+JZ9H3GQxfVhSX/+9gc8kBCthJQv1a9YQ9ip7NWC4qIgcI8cQXl7u7QAFE6KH9ji7CwtFskZZo8xcUYEJTOCVSiVUAEoly6rVwPz5crlSCYyO2myDg8IJQPRETxQsy9A22oZfNRrhXLssPj4qKjMTSE5esWL7dqG9A/QmvYni6GiGhJJQKHx9hXLs5+ca8cTEyMj0dCA+PiwsNRUIClq4MCxMOAF4bkYwh8T1y8pKSTlyBJg3j2FEIsDHB6AU2LkzObmgAGAYQhjBogIEc5WQEBWVlQVoNCpVYiIglVLqcABiMaUcB4SH+/svXQps3Lh8+dat35EAISFKpUYDZGauWrV//3RwkYjS8fHJdk6OVpudDWg0QUFCZCaPCRAYyLIREUBu7qZNp04BcrlIJJHMDC4WAxwH+PgQ4nAABQUpKXl5QGioQhEU9D8SgB/xffvS00tLgQULpFKZbHbwybbrvkIhlUokwIkTGzYcOACo1SzriU2a+Pv7+wcEUPq1HcXGRkSkpQE5OSkpxcWATMYwDDN38KntqVeOGx8fHQXKynS66mqgsdFs7ujwogA+PhKJXA6kpSUl5ecDq1dHRmZkzL7G5wouFgNT74tElNrtwL17HR0GA3DxosHw5AlgtzscExMCCLBs2ZIl69YBGRlJSYcOAUqlXB4Q4HnwL698/11dQ0P9/cClS62tDQ2AXm829/a6UYCQkEWLtFogNTUhITcXUKsDA2NjAYnEBewtcL5fkYjSqSPf3Dw4ODAAVFUZjS9eAE1NAwNm88wCzJoEGYYQQgCpFBCJvl1w3hwOSp1OgFJK/828nvMSiIpSqVauBLZtc82IkBCFIjjYe+Bms802OgqUlzc3NzUBDx/29nZ3u3EJzGQiEcOIxUBWVlzcjh1ARoZGs3kzIJFMAnkS/P59k6m7Gzh71mDQ64GREY7juLlSuHEbjIkJDo6JAQoK1q7NywP8/MTiqdvg14JznNPpcAClpc+e6fXA3bs9PZ2dXxu1GwXgLTycZRcvBkpK1q/fu9d1oBGL/zu41cpxdjtw/LhO9+AB0NpqsQwMuCtaD5wEOzoslu5u4PTpurrLl4GxMY4bHp47OD+li4sfP66tdT+4xwTgravLau3rA86d0+lu3QIIcTjGxmYHHxtzHWiOHtXp6uqAtrahoQ8fPBWlAG+Dz5/39XV2AteutbQ8ejR7cjt/3pXNPTXiggvAW3V1W5vBABiN79+bTNPB6+v7+t69A2pqOjtfvRIqKgEFcDpdB5OyMoNBp5tsT2b3pqanT11fh4Q0Me2hPbCOjgr1bfD166EhqxWorTWZ3rwBRkbGxzkO6O//9MlmE5DcF75QDQ+LSSSJxA9GIwDgj6QkofzfuNHe/vIlMDHhdDqdAoLzFoMY5BuNhG1gG5QRhYVkC9lChyoqvBCKV4wvjDB80fBz7ew7N57TVRusqppeHK1EJWm9fZucIWfIVq3W2wG7G3xacfSfH5dKXYLk55NdZBfzy549fCVF6ELKnEH5pF5MilHd0kLLablz8/Xr/Ii7npp8bfobS1BbU4xta0oAAAAASUVORK5CYII=',
   };
   if (pngIcons[providerId]) {
@@ -7896,6 +8335,17 @@ let _artifactCounter = 0;
 const _sessionMedia = [];
 
 function formatContent(text) {
+  if (!text) return '';
+
+  // Strip GGUF model tool call text that leaks into chat (Gemma 4, Qwen, Llama, etc.)
+  // These get parsed by the Rust engine but the raw text shows up during streaming
+  text = text.replace(/<\|?tool_call\|?>\s*call:\w+\{.*?\}\s*(?:<\|?\/?tool_call\|?>)/gs, '');
+  text = text.replace(/<\|?tool_response\|?>/g, '');
+  text = text.replace(/<\|?channel\|?>\s*thought\s*/gi, '');
+  text = text.replace(/<channel\|>/g, '');
+  // Also strip XML-style tool calls: <tool_call><function=name>...</function></tool_call>
+  text = text.replace(/(?:<tool_call>\s*)?<function=\w+>.*?<\/function>\s*(?:<\/tool_call>)?/gs, '');
+  text = text.trim();
   if (!text) return '';
 
   // Extract <artifact> blocks BEFORE escaping (they contain raw HTML/code)

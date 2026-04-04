@@ -650,6 +650,159 @@ pub async fn generate_video_local(
     Ok(result)
 }
 
+// ─── Speech-to-Text (Whisper) ────────────────────────────
+
+/// Transcribe audio via POST /media/generate/stt.
+pub async fn speech_to_text_local(
+    base_url: &str,
+    audio_base64: &str,
+    model: Option<&str>,
+    language: Option<&str>,
+    task: &str,
+) -> Result<Value> {
+    let url = format!("{}/media/generate/stt", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+
+    let mut body = json!({
+        "audio_base64": audio_base64,
+        "task": task,
+    });
+    if let Some(m) = model {
+        body["model"] = json!(m);
+    }
+    if let Some(l) = language {
+        body["language"] = json!(l);
+    }
+
+    info!("Transcribing audio locally (task: {})", task);
+    let resp = client.post(&url).json(&body).send().await
+        .context("Failed to transcribe audio")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("STT failed ({}): {}", status, error_body);
+    }
+
+    let result: Value = resp.json().await?;
+    Ok(result)
+}
+
+// ─── Training (LoRA/QLoRA) ───────────────────────────────
+
+/// Start a LoRA training job via POST /training/start.
+pub async fn start_training(base_url: &str, config: Value) -> Result<Value> {
+    let url = format!("{}/training/start", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let resp = client.post(&url).json(&config).send().await
+        .context("Failed to start training")?;
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Start training failed ({}): {}", s, b);
+    }
+    Ok(resp.json().await?)
+}
+
+/// Get training progress via GET /training/status.
+pub async fn training_status(base_url: &str) -> Result<Value> {
+    let url = format!("{}/training/status", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    Ok(client.get(&url).send().await?.json().await?)
+}
+
+/// Stop training via POST /training/stop.
+pub async fn stop_training(base_url: &str) -> Result<Value> {
+    let url = format!("{}/training/stop", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    Ok(client.post(&url).send().await?.json().await?)
+}
+
+/// List training jobs via GET /training/jobs.
+pub async fn list_training_jobs(base_url: &str) -> Result<Value> {
+    let url = format!("{}/training/jobs", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    Ok(client.get(&url).send().await?.json().await?)
+}
+
+/// Upload a training dataset via POST /training/datasets/upload.
+pub async fn upload_training_dataset(base_url: &str, body: Value) -> Result<Value> {
+    let url = format!("{}/training/datasets/upload", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
+    let resp = client.post(&url).json(&body).send().await
+        .context("Failed to upload dataset")?;
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Upload dataset failed ({}): {}", s, b);
+    }
+    Ok(resp.json().await?)
+}
+
+/// List training datasets via GET /training/datasets.
+pub async fn list_training_datasets(base_url: &str) -> Result<Value> {
+    let url = format!("{}/training/datasets", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    Ok(client.get(&url).send().await?.json().await?)
+}
+
+/// Delete a training dataset via DELETE /training/datasets/{name}.
+pub async fn delete_training_dataset(base_url: &str, name: &str) -> Result<Value> {
+    let url = format!("{}/training/datasets/{}", base_url, name);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    Ok(client.delete(&url).send().await?.json().await?)
+}
+
+/// Merge a LoRA adapter via POST /training/merge.
+pub async fn merge_adapter(base_url: &str, body: Value) -> Result<Value> {
+    let url = format!("{}/training/merge", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()?;
+    let resp = client.post(&url).json(&body).send().await
+        .context("Failed to merge adapter")?;
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Merge adapter failed ({}): {}", s, b);
+    }
+    Ok(resp.json().await?)
+}
+
+/// List adapters via GET /training/adapters.
+pub async fn list_adapters(base_url: &str) -> Result<Value> {
+    let url = format!("{}/training/adapters", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    Ok(client.get(&url).send().await?.json().await?)
+}
+
+/// Delete an adapter via DELETE /training/adapters/{job_id}.
+pub async fn delete_adapter(base_url: &str, job_id: &str) -> Result<Value> {
+    let url = format!("{}/training/adapters/{}", base_url, job_id);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    Ok(client.delete(&url).send().await?.json().await?)
+}
+
 /// Generate speech via POST /media/generate/tts.
 pub async fn text_to_speech_local(
     base_url: &str,

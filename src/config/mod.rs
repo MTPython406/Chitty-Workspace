@@ -10,6 +10,9 @@ use std::path::PathBuf;
 const KEYRING_SERVICE: &str = "chitty-workspace";
 
 /// Application configuration
+///
+/// `deny_unknown_fields` is NOT set so that old configs with removed sections
+/// (e.g. [ollama]) are silently ignored during deserialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Default provider for new chats
@@ -20,13 +23,15 @@ pub struct AppConfig {
     pub project_dirs: Vec<String>,
     /// UI preferences
     pub ui: UiConfig,
-    /// Ollama settings
-    pub ollama: OllamaConfig,
-    /// HuggingFace sidecar settings
-    pub huggingface: HuggingFaceConfig,
+    /// Local model sidecar settings (backward compat: reads [huggingface] too)
+    #[serde(alias = "huggingface")]
+    pub local: LocalModelConfig,
     /// System-wide defaults for each capability (chat, image, video, tts, stt)
     #[serde(default)]
     pub defaults: SystemDefaults,
+    /// Legacy field — ignored, kept for backward compat with old config files
+    #[serde(default, skip_serializing)]
+    pub ollama: Option<toml::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,16 +42,14 @@ pub struct UiConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OllamaConfig {
-    pub enabled: bool,
-    pub base_url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HuggingFaceConfig {
+pub struct LocalModelConfig {
     pub enabled: bool,
     pub sidecar_port: u16,
+    /// Primary models directory (e.g. "C:\\LLM Models")
     pub models_dir: Option<String>,
+    /// Additional directories to scan for GGUF files
+    #[serde(default)]
+    pub extra_model_dirs: Vec<String>,
 }
 
 /// System-wide defaults for each capability type.
@@ -84,29 +87,33 @@ impl Default for AppConfig {
                 window_width: 1200,
                 window_height: 800,
             },
-            ollama: OllamaConfig {
-                enabled: true,
-                base_url: "http://localhost:11434".to_string(),
-            },
-            huggingface: HuggingFaceConfig {
+            local: LocalModelConfig {
                 enabled: true,
                 sidecar_port: 8766,
                 models_dir: Some("C:\\LLM Models".to_string()),
+                extra_model_dirs: Vec::new(),
             },
             defaults: SystemDefaults::default(),
+            ollama: None,
         }
     }
 }
 
 impl AppConfig {
     /// Load config from disk, or create default if missing.
+    /// Automatically migrates old configs (removes legacy [ollama] section).
     pub fn load(data_dir: &PathBuf) -> Result<Self> {
         let path = data_dir.join("config.toml");
         if path.exists() {
             let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("Failed to read config: {:?}", path))?;
-            let config: AppConfig =
+            let mut config: AppConfig =
                 toml::from_str(&content).with_context(|| "Failed to parse config.toml")?;
+            // Migrate: if old [ollama] section was present, strip it and re-save
+            if config.ollama.is_some() {
+                config.ollama = None;
+                let _ = config.save(data_dir);
+            }
             Ok(config)
         } else {
             let config = Self::default();

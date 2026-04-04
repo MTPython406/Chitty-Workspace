@@ -3,7 +3,7 @@
 //! Parses Server-Sent Events from any OpenAI-compatible `/v1/chat/completions`
 //! endpoint and emits StreamChunk events via mpsc channel.
 //!
-//! Used by: XaiProvider, OpenAI (via Xai), OllamaProvider, LocalProvider
+//! Used by: XaiProvider, OpenAI (via Xai), LocalSidecarProvider
 
 use crate::providers::{StreamChunk, ToolCall, ChatMessage};
 

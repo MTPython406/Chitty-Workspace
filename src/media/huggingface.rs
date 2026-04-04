@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use super::{
     AudioResponse, ImageEditRequest, ImageRequest, ImageResponse, GeneratedImage,
-    MediaAdaptor, MediaCapabilities, TtsRequest, VideoRequest, VideoResponse,
+    MediaAdaptor, MediaCapabilities, SttRequest, SttResponse, TtsRequest, VideoRequest, VideoResponse,
 };
 
 pub struct HuggingFaceMediaAdaptor {
@@ -25,7 +25,7 @@ impl HuggingFaceMediaAdaptor {
         let port = match crate::storage::default_data_dir() {
             data_dir => {
                 crate::config::AppConfig::load(&data_dir)
-                    .map(|c| c.huggingface.sidecar_port)
+                    .map(|c| c.local.sidecar_port)
                     .unwrap_or(8766)
             }
         };
@@ -47,7 +47,7 @@ impl MediaAdaptor for HuggingFaceMediaAdaptor {
             image_editing: false, // Not yet — needs img2img pipeline
             video_generation: true,
             text_to_speech: true,
-            speech_to_text: false,
+            speech_to_text: true,
             realtime_audio: false,
         }
     }
@@ -197,6 +197,36 @@ impl MediaAdaptor for HuggingFaceMediaAdaptor {
             audio_data,
             format: format.to_string(),
             duration_estimate,
+            provider: "huggingface".to_string(),
+        })
+    }
+
+    async fn speech_to_text(&self, req: SttRequest) -> Result<SttResponse> {
+        let result = crate::huggingface::speech_to_text_local(
+            &self.base_url,
+            &req.audio_base64,
+            req.model.as_deref(),
+            req.language.as_deref(),
+            &req.task,
+        )
+        .await
+        .context("Local speech-to-text failed")?;
+
+        let text = result
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let model = result
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("whisper")
+            .to_string();
+
+        Ok(SttResponse {
+            text,
+            model,
             provider: "huggingface".to_string(),
         })
     }

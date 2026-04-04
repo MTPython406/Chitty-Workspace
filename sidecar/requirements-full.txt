@@ -10,4 +10,10 @@ accelerate
 safetensors
 scipy             # Audio processing (TTS models)
 soundfile         # WAV encoding for TTS output
-# openai-whisper  # Phase 3
+# ── LoRA/QLoRA fine-tuning ──
+peft>=0.12.0
+bitsandbytes>=0.43.0
+datasets>=2.18.0
+trl>=0.8.0
+# Whisper STT is loaded on-demand via transformers pipeline (no extra package needed)
+# The transformers package above provides the Whisper model support

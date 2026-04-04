@@ -49,7 +49,7 @@ impl LocalSidecarProvider {
 #[async_trait::async_trait]
 impl Provider for LocalSidecarProvider {
     fn id(&self) -> ProviderId {
-        ProviderId::Huggingface
+        ProviderId::Local
     }
 
     async fn list_models(&self) -> Result<Vec<Model>> {
@@ -73,7 +73,7 @@ impl Provider for LocalSidecarProvider {
                 let name = m.get("name")?.as_str()?.to_string();
                 Some(Model {
                     id: name.clone(),
-                    provider: ProviderId::Huggingface,
+                    provider: ProviderId::Local,
                     display_name: name,
                     context_window: None,
                     supports_tools: true, // llama-cpp-python supports tool calling for Qwen, Llama, etc.

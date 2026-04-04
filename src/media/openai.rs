@@ -12,7 +12,7 @@ use tracing::{debug, info};
 
 use super::{
     AudioResponse, GeneratedImage, ImageEditRequest, ImageRequest, ImageResponse,
-    MediaAdaptor, MediaCapabilities, TtsRequest, VideoRequest, VideoResponse,
+    MediaAdaptor, MediaCapabilities, SttRequest, SttResponse, TtsRequest, VideoRequest, VideoResponse,
 };
 
 pub struct OpenaiMediaAdaptor {
@@ -294,5 +294,10 @@ impl MediaAdaptor for OpenaiMediaAdaptor {
             duration_estimate: Some(duration_estimate),
             provider: "openai".to_string(),
         })
+    }
+
+    async fn speech_to_text(&self, _req: SttRequest) -> Result<SttResponse> {
+        // TODO: Implement via OpenAI Whisper API (POST /v1/audio/transcriptions)
+        anyhow::bail!("OpenAI speech-to-text not yet implemented. Use a local Whisper model instead.")
     }
 }

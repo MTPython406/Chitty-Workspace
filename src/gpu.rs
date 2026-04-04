@@ -81,6 +81,18 @@ pub async fn get_gpu_stats() -> GpuStats {
     }
 }
 
+/// Estimate VRAM needed to load a GGUF model.
+///
+/// Returns (estimated_mb, free_mb, fits).
+/// Heuristic: GGUF VRAM ≈ file_size * 1.1 (10% overhead for KV cache at default context).
+pub async fn estimate_vram(file_size_bytes: u64) -> (u64, Option<u64>, bool) {
+    let estimated_mb = ((file_size_bytes as f64 * 1.1) / (1024.0 * 1024.0)).ceil() as u64;
+    let stats = get_gpu_stats().await;
+    let free_mb = stats.vram_free_mb;
+    let fits = free_mb.map(|f| estimated_mb <= f).unwrap_or(false);
+    (estimated_mb, free_mb, fits)
+}
+
 /// Parse nvidia-smi CSV output into GpuStats.
 ///
 /// Expected format: "NVIDIA GeForce RTX 5090, 32768, 1234, 31534, 45, 52, 120.50"

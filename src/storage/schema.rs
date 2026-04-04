@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 13;
+const SCHEMA_VERSION: i32 = 14;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -59,6 +59,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if current < 13 {
         migrate_v13(conn)?;
+    }
+    if current < 14 {
+        migrate_v14(conn)?;
     }
 
     conn.execute(
@@ -183,7 +186,7 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
         -- ============================================================
         CREATE TABLE IF NOT EXISTS provider_configs (
             id              TEXT PRIMARY KEY,
-            provider_id     TEXT NOT NULL UNIQUE,   -- openai, anthropic, google, xai, ollama, huggingface
+            provider_id     TEXT NOT NULL UNIQUE,   -- openai, anthropic, google, xai, local
             display_name    TEXT NOT NULL,
             base_url        TEXT,
             enabled         INTEGER NOT NULL DEFAULT 1,
@@ -198,8 +201,7 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
             ('prov-anthropic',   'anthropic',   'Anthropic',    'https://api.anthropic.com',          0),
             ('prov-google',      'google',      'Google AI',    'https://generativelanguage.googleapis.com', 0),
             ('prov-xai',         'xai',         'xAI',          'https://api.x.ai/v1',                0),
-            ('prov-ollama',      'ollama',      'Ollama',       'http://localhost:11434',              1),
-            ('prov-huggingface', 'huggingface', 'HuggingFace',  'http://localhost:8766',              0);
+            ('prov-local',       'local',       'Local Models', 'http://localhost:8766',               1);
         ",
     )?;
 
@@ -578,5 +580,23 @@ fn migrate_v13(conn: &Connection) -> Result<()> {
     }
 
     tracing::info!("Database migrated to v13 (agent context_length)");
+    Ok(())
+}
+
+/// V14: Remove legacy Ollama/HuggingFace providers, add unified Local provider
+fn migrate_v14(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- Remove legacy providers
+        DELETE FROM provider_configs WHERE provider_id = 'ollama';
+        DELETE FROM provider_configs WHERE provider_id = 'huggingface';
+
+        -- Insert the unified Local provider (if not already present)
+        INSERT OR IGNORE INTO provider_configs (id, provider_id, display_name, base_url, enabled)
+            VALUES ('prov-local', 'local', 'Local Models', 'http://localhost:8766', 1);
+        ",
+    )?;
+
+    tracing::info!("Database migrated to v14 (removed Ollama/HuggingFace, added Local provider)");
     Ok(())
 }

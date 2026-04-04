@@ -51,3 +51,4 @@ installer/get-pip.py
 
 # Local model files
 *.gguf
+*.pfx

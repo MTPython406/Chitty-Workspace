@@ -10,12 +10,12 @@ This document inventories the feature sets that currently exist across the Chitt
 | Chat Workspace | The main multi-panel workspace where users open chat panels, pick agents/models, set project context, and talk to the assistant. |
 | Agents and Skills | User-defined or AI-generated agents combine persona, skills, model preferences, approval settings, and project scope. |
 | Tools and Automation | Native, custom, integration, marketplace, and browser-driven tools let the assistant search code, read/write files, use the terminal, browse, and load skills. |
-| Providers and Models | Chitty supports cloud BYOK providers and local runtimes, with model discovery, saved defaults, and secure API key storage. |
+| Providers and Models | Chitty supports cloud BYOK providers and a built-in local engine for GGUF inference, image/video/TTS generation, speech-to-text (Whisper), and LoRA fine-tuning. |
 | Marketplace and Connections | Installable packages expand the system with tools, optional setup steps, and background connections such as event listeners. |
 | Memory and Context | Persistent memory, project context files, token usage, and context-budget controls help the assistant retain useful information while staying within model limits. |
 | Scheduling and Background Services | The app can store recurring scheduled tasks and runs server-side background loops for schedules and package connections. |
 | Browser Extension | The browser extension reports connection status and enables browser automation commands against a real Chrome or Edge session. |
-| CLI and Local Services | Command-line entry points support starting the app, inspecting configuration, listing agents, and running limited tests; a HuggingFace sidecar enables local inference. |
+| CLI and Local Services | Command-line entry points support starting the app, inspecting configuration, listing agents, and running limited tests; the built-in sidecar enables local inference, media generation, and training. |
 
 ## Detailed Feature List
 
@@ -47,7 +47,12 @@ This document inventories the feature sets that currently exist across the Chitt
 | Tools and Automation | Browser automation tool | Sends browser commands through the browser bridge so an agent can navigate, click, type, read, execute JavaScript, and capture state. | Install the browser extension, keep Chitty running, then ask the assistant to perform browser work. Approve browser actions when prompted. |
 | Tools and Automation | Google productivity tools | Includes native Gmail read/send, Calendar list, and Drive search tool registrations. | Connect or configure the required Google authentication path, then ask the assistant to read mail, send mail, inspect calendars, or search Drive. |
 | Providers and Models | BYOK cloud providers | Supports OpenAI, Anthropic, Google AI, and xAI using user-supplied API keys. | Open **Settings** or the **Providers** panel, save the provider API key, discover models if needed, then choose the provider/model in chat. |
-| Providers and Models | Local runtimes | Supports Ollama and HuggingFace-based local model serving. | Enable/configure the local runtime, ensure the local service is available, and then select its model in the app. |
+| Providers and Models | Local model engine | Runs GGUF models locally via the built-in Python sidecar (llama.cpp). No external services needed. | Place GGUF files in a scan directory, open Settings > Providers > Local Models, scan, and load a model. Select it in the model dropdown to chat. |
+| Providers and Models | Local image generation | Generates images locally using Flux, SDXL, SD3, and more via diffusers. | Register a local diffusion model, load it, then ask the assistant to generate an image. Set `image_provider: local` in System Defaults. |
+| Providers and Models | Local video generation | Generates videos locally using CogVideoX, Wan, LTX-Video, AnimateDiff, Mochi. | Register a local video model, load it, then ask the assistant to generate a video. |
+| Providers and Models | Local text-to-speech | Converts text to speech locally using Bark, XTTS, SpeechT5, Parler. | Register a local TTS model, load it, then ask the assistant to generate speech. |
+| Providers and Models | Local speech-to-text (Whisper) | Transcribes audio to text using Whisper models. Auto-downloads on first use. | Send audio to the STT endpoint or use the speech-to-text tool. Supports transcription and translation. |
+| Providers and Models | LoRA/QLoRA fine-tuning | Fine-tune HuggingFace models with LoRA/QLoRA directly in the app. Upload datasets, configure training, monitor live progress. | Open Settings > Providers > Fine-Tuning > Open Workbench. Upload a JSONL/CSV dataset, enter a HuggingFace model ID, configure LoRA parameters, and start training. |
 | Providers and Models | Secure key storage | Stores API keys in the OS keyring rather than plain-text config files. | Save a provider key from the UI; Chitty stores it through the platform keyring automatically. |
 | Providers and Models | Model discovery and user model library | Lets users discover models from providers, add them to their local list, remove them, and set defaults. | Use the provider controls to discover models, then add desired models and optionally mark one as the default for that provider. |
 | Marketplace and Connections | Bundled marketplace packages | Seeds bundled marketplace packages such as web tools, social media, Slack, Google Gmail, Google Calendar, and Google Cloud into the local marketplace directory. | Open **Marketplace**, inspect the available packages, install or enable the package you need, then use its tools from chat. |
@@ -68,7 +73,7 @@ This document inventories the feature sets that currently exist across the Chitt
 | CLI and Local Services | `agents` command | Lists installed agents from the local database. | Run `chitty-workspace agents`. |
 | CLI and Local Services | `test` command | Sends a headless test prompt using a selected provider and optional model. | Run `chitty-workspace test "your prompt" --provider xai --model <model>` after configuring a supported key. |
 | CLI and Local Services | `test-agent-builder` command | Runs the agent builder flow from the command line for experimentation. | Run `chitty-workspace test-agent-builder "Describe the agent you want"`. |
-| CLI and Local Services | HuggingFace inference sidecar | Provides a Python sidecar process for local inference support when HuggingFace local models are enabled. | Install the sidecar requirements, start/configure the sidecar environment, and point Chitty at the configured sidecar port if using HuggingFace local models. |
+| CLI and Local Services | Local inference sidecar | Provides a Python sidecar process for local model inference (GGUF text, image/video/TTS generation, speech-to-text, and LoRA training). | The sidecar auto-starts when you select a local model. Install `pip install -r sidecar/requirements-full.txt` for full capabilities including training. |
 
 ## Notes on Current Implementation Status
 

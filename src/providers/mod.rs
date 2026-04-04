@@ -1,12 +1,11 @@
 //! LLM Provider abstraction layer
 //!
 //! Supports BYOK cloud providers (OpenAI, Anthropic, Google, xAI)
-//! and local runtimes (Ollama, HuggingFace sidecar).
+//! and local runtime (sidecar for GGUF models).
 
 pub mod adaptors;
 pub mod cloud;
 pub mod local_sidecar;
-pub mod ollama;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -19,8 +18,9 @@ pub enum ProviderId {
     Anthropic,
     Google,
     Xai,
-    Ollama,
-    Huggingface,
+    /// Local GGUF models via sidecar (backward compat: "huggingface")
+    #[serde(alias = "huggingface")]
+    Local,
 }
 
 impl std::fmt::Display for ProviderId {
@@ -30,8 +30,7 @@ impl std::fmt::Display for ProviderId {
             Self::Anthropic => write!(f, "anthropic"),
             Self::Google => write!(f, "google"),
             Self::Xai => write!(f, "xai"),
-            Self::Ollama => write!(f, "ollama"),
-            Self::Huggingface => write!(f, "huggingface"),
+            Self::Local => write!(f, "local"),
         }
     }
 }
@@ -45,8 +44,7 @@ impl std::str::FromStr for ProviderId {
             "anthropic" => Ok(Self::Anthropic),
             "google" => Ok(Self::Google),
             "xai" => Ok(Self::Xai),
-            "ollama" => Ok(Self::Ollama),
-            "huggingface" => Ok(Self::Huggingface),
+            "local" | "huggingface" => Ok(Self::Local),
             _ => Err(anyhow::anyhow!("Unknown provider: {}", s)),
         }
     }

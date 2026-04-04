@@ -2,7 +2,7 @@
 //!
 //! Provides a provider-agnostic `MediaAdaptor` trait that normalizes
 //! image generation, video generation, TTS, and image editing across
-//! all supported providers (xAI, OpenAI, Google, Ollama, HuggingFace).
+//! all supported providers (xAI, OpenAI, Google, local sidecar).
 //!
 //! Core native tools in `src/tools/media.rs` use this framework.
 //! Marketplace packages can build rich UIs (editors, composers, builders)
@@ -11,7 +11,6 @@
 pub mod xai;
 pub mod openai;
 pub mod google;
-pub mod ollama;
 pub mod huggingface;
 
 use anyhow::Result;
@@ -120,6 +119,38 @@ pub struct VideoResponse {
     pub provider: String,
 }
 
+/// Speech-to-text request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SttRequest {
+    /// Base64-encoded audio data
+    pub audio_base64: String,
+    /// Whisper model ID (default: openai/whisper-large-v3-turbo)
+    pub model: Option<String>,
+    /// Language code (auto-detected if omitted)
+    pub language: Option<String>,
+    /// "transcribe" or "translate" (translate to English)
+    pub task: String,
+}
+
+impl Default for SttRequest {
+    fn default() -> Self {
+        Self {
+            audio_base64: String::new(),
+            model: None,
+            language: None,
+            task: "transcribe".to_string(),
+        }
+    }
+}
+
+/// Speech-to-text response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SttResponse {
+    pub text: String,
+    pub model: String,
+    pub provider: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioResponse {
     /// Raw audio bytes
@@ -152,6 +183,9 @@ pub trait MediaAdaptor: Send + Sync {
 
     /// Convert text to speech audio
     async fn text_to_speech(&self, req: TtsRequest) -> Result<AudioResponse>;
+
+    /// Transcribe audio to text (speech-to-text)
+    async fn speech_to_text(&self, req: SttRequest) -> Result<SttResponse>;
 
     /// What capabilities does this provider support?
     fn capabilities(&self) -> MediaCapabilities;
@@ -186,10 +220,7 @@ pub fn create_media_adaptor(
             api_key.to_string(),
             base_url.map(|s| s.to_string()),
         ))),
-        "ollama" => Ok(Box::new(ollama::OllamaMediaAdaptor::new(
-            base_url.map(|s| s.to_string()),
-        ))),
-        "huggingface" => Ok(Box::new(huggingface::HuggingFaceMediaAdaptor::new())),
+        "local" | "huggingface" => Ok(Box::new(huggingface::HuggingFaceMediaAdaptor::new())),
         _ => anyhow::bail!("No media adaptor for provider: {}", provider),
     }
 }

@@ -34,7 +34,8 @@ Chitty Workspace is a standalone desktop AI assistant that runs entirely on your
 **Key highlights:**
 
 - **100% Local** — All data stays on your machine. API keys stored in your OS keyring, never in plain text.
-- **Bring Your Own Key** — Use OpenAI, Anthropic, Google, xAI, or run models locally with Ollama.
+- **Bring Your Own Key** — Use OpenAI, Anthropic, Google, xAI, or run models locally on your GPU.
+- **Local AI Engine** — Run GGUF models, generate images/video/speech, transcribe audio, and fine-tune with LoRA — all on your hardware.
 - **Marketplace Packages** — Extend capabilities with one-click installs: Google Cloud, Gmail, Calendar, Slack, and more.
 - **Browser Automation** — Control your real Chrome/Edge browser via the Chitty Browser Extension.
 - **Agent System** — Create specialized agents with custom instructions, scoped tools, and scheduled execution.
@@ -110,11 +111,14 @@ chitty-workspace agents
 │  ├── Custom agents │  ├── Anthropic               │
 │  └── Agent Builder │  ├── Google AI               │
 │                    │  ├── xAI                      │
-│  Tools             │  ├── Ollama (local)           │
-│  ├── Native        │  └── HuggingFace (sidecar)   │
-│  ├── Custom        │                               │
-│  ├── Marketplace   │  Scheduler                    │
-│  └── Browser ext.  │  └── Cron-based agent tasks   │
+│  Tools             │  └── Local (sidecar)          │
+│  ├── Native        │                               │
+│  ├── Custom        │  Local Engine                  │
+│  ├── Marketplace   │  ├── GGUF inference           │
+│  └── Browser ext.  │  ├── Image / Video / TTS      │
+│                    │  ├── Speech-to-Text (Whisper)  │
+│  Scheduler         │  └── LoRA/QLoRA fine-tuning   │
+│  └── Cron tasks    │                               │
 ├──────────────────────────────────────────────────┤
 │  SQLite (local)    │  OS Keyring (API keys)        │
 └──────────────────────────────────────────────────┘
@@ -122,16 +126,29 @@ chitty-workspace agents
 
 ## Providers
 
-Bring your own keys. Chitty supports:
+Bring your own keys for cloud, or run models entirely on your hardware.
 
-| Provider | Type | Models |
-|----------|------|--------|
-| **OpenAI** | Cloud (BYOK) | GPT-4o, GPT-4o-mini, o1, o3 |
-| **Anthropic** | Cloud (BYOK) | Claude Opus, Sonnet, Haiku |
-| **Google AI** | Cloud (BYOK) | Gemini 2.5 Flash, Pro |
-| **xAI** | Cloud (BYOK) | Grok 3, Grok 3 Mini |
-| **Ollama** | Local | Llama, Qwen, Mistral, Phi, etc. |
-| **HuggingFace** | Local (sidecar) | Any GGUF model |
+### Cloud Providers (BYOK)
+
+| Provider | Models |
+|----------|--------|
+| **OpenAI** | GPT-4o, GPT-4o-mini, o1, o3 |
+| **Anthropic** | Claude Opus, Sonnet, Haiku |
+| **Google AI** | Gemini 2.5 Flash, Pro |
+| **xAI** | Grok 3, Grok 3 Mini |
+
+### Local Engine (Zero Dependencies)
+
+Chitty includes a built-in Python sidecar for running models locally on your GPU. No Ollama or external services needed.
+
+| Capability | Supported Models |
+|-----------|-----------------|
+| **Text Inference** | Any GGUF model (Llama, Qwen, Mistral, DeepSeek, Phi, etc.) via llama.cpp |
+| **Image Generation** | Flux, SDXL, Stable Diffusion 3, SD 1.5, Kandinsky, PixArt |
+| **Video Generation** | CogVideoX, Wan, LTX-Video, AnimateDiff, Mochi |
+| **Text-to-Speech** | Bark, XTTS, SpeechT5, Parler |
+| **Speech-to-Text** | Whisper (large-v3-turbo, auto-downloads on first use) |
+| **Fine-Tuning** | LoRA/QLoRA via transformers + peft + trl (4-bit training fits 7B-14B on 24GB+ GPUs) |
 
 ## Marketplace Packages
 
@@ -188,7 +205,10 @@ Everything stays on your machine:
 ├── tools/
 │   ├── marketplace/         # Installed marketplace packages
 │   └── custom/              # User-created tools
-└── models/                  # Local GGUF model files
+├── models/                  # Local GGUF model files
+├── datasets/                # Training datasets (JSONL, CSV)
+├── adapters/                # LoRA adapters from training jobs
+└── media/                   # Generated images, videos, audio
 ```
 
 ## Local API

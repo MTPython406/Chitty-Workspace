@@ -52,8 +52,8 @@ enum Commands {
         /// Message to send to the LLM
         #[arg(default_value = "Hello, what can you do?")]
         message: String,
-        /// Provider to use (ollama, huggingface, xai, anthropic, openai)
-        #[arg(short, long, default_value = "ollama")]
+        /// Provider to use (local, xai, anthropic, openai)
+        #[arg(short, long, default_value = "local")]
         provider: String,
         /// Model to use
         #[arg(short, long)]
@@ -66,8 +66,8 @@ enum Commands {
     Chat {
         /// Message to send
         message: String,
-        /// Provider to use (ollama, huggingface, xai, anthropic, openai)
-        #[arg(short, long, default_value = "ollama")]
+        /// Provider to use (local, xai, anthropic, openai)
+        #[arg(short, long, default_value = "local")]
         provider: String,
         /// Model to use
         #[arg(short, long)]
@@ -516,15 +516,10 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> anyhow::R
 }
 
 /// Create an LLM provider from a provider name string.
-/// Local providers (ollama, huggingface) don't need API keys.
+/// Local providers don't need API keys.
 fn create_cli_provider(provider: &str) -> anyhow::Result<Box<dyn providers::Provider>> {
     match provider {
-        "ollama" => {
-            Ok(Box::new(providers::ollama::OllamaProvider::new(
-                "http://localhost:11434".to_string(),
-            )))
-        }
-        "huggingface" => {
+        "local" | "huggingface" => {
             Ok(Box::new(providers::local_sidecar::LocalSidecarProvider::new(
                 "http://localhost:8766".to_string(),
             )))
@@ -542,7 +537,7 @@ fn create_cli_provider(provider: &str) -> anyhow::Result<Box<dyn providers::Prov
                 _ => unreachable!(),
             }
         }
-        other => anyhow::bail!("Unknown provider: {}. Use: ollama, huggingface, xai, anthropic, openai", other),
+        other => anyhow::bail!("Unknown provider: {}. Use: local, xai, anthropic, openai", other),
     }
 }
 

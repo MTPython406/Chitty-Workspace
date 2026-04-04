@@ -9,7 +9,7 @@ use tracing::{debug, info};
 
 use super::{
     AudioResponse, GeneratedImage, ImageEditRequest, ImageRequest, ImageResponse,
-    MediaAdaptor, MediaCapabilities, TtsRequest, VideoRequest, VideoResponse,
+    MediaAdaptor, MediaCapabilities, SttRequest, SttResponse, TtsRequest, VideoRequest, VideoResponse,
 };
 
 pub struct GoogleMediaAdaptor {
@@ -317,5 +317,10 @@ impl MediaAdaptor for GoogleMediaAdaptor {
         }
 
         anyhow::bail!("Google returned no audio data")
+    }
+
+    async fn speech_to_text(&self, _req: SttRequest) -> Result<SttResponse> {
+        // TODO: Implement via Google Cloud Speech-to-Text API
+        anyhow::bail!("Google speech-to-text not yet implemented. Use a local Whisper model instead.")
     }
 }

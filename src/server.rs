@@ -30,7 +30,6 @@ use crate::chat::ChatEngine;
 use crate::config;
 use crate::providers::adaptors::xai::XaiProvider;
 use crate::providers::cloud::AnthropicProvider;
-use crate::providers::ollama::OllamaProvider;
 use crate::providers::{ChatMessage, Provider, ProviderId, StreamChunk, ToolCall};
 use crate::agents::{Agent, AgentsManager};
 use crate::storage::Database;
@@ -343,16 +342,16 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/marketplace/registry/packages", get(registry_list_packages))
         .route("/api/marketplace/registry/search", get(registry_search))
         .route("/api/marketplace/registry/install", post(registry_install_package))
-        // Local models — GPU, Ollama, sidecar management
+        // Local models — GPU, sidecar management
         .route("/api/local/gpu", get(local_gpu_handler))
         .route("/api/local/status", get(local_status_handler))
-        .route("/api/local/ollama/status", get(ollama_status_handler))
-        .route("/api/local/ollama/models", get(ollama_models_handler))
-        .route("/api/local/ollama/running", get(ollama_running_handler))
-        .route("/api/local/ollama/pull", post(ollama_pull_handler))
-        .route("/api/local/ollama/unload", post(ollama_unload_handler))
-        .route("/api/local/ollama/models/:name", delete(ollama_delete_model_handler))
-        // HuggingFace sidecar management
+        // Model management — directories, delete, VRAM
+        .route("/api/local/models/dirs", get(model_dirs_list_handler))
+        .route("/api/local/models/dirs", post(model_dirs_add_handler))
+        .route("/api/local/models/dirs", delete(model_dirs_remove_handler))
+        .route("/api/local/models/delete", post(model_delete_handler))
+        .route("/api/local/models/vram-check", get(model_vram_check_handler))
+        // Sidecar management
         .route("/api/local/sidecar/status", get(sidecar_status_handler))
         .route("/api/local/sidecar/start", post(sidecar_start_handler))
         .route("/api/local/sidecar/stop", post(sidecar_stop_handler))
@@ -367,6 +366,20 @@ pub async fn start(db: Database, tool_registry: Arc<ToolRegistry>, tool_runtime:
         .route("/api/local/sidecar/media/models/unregister", post(sidecar_media_unregister_handler))
         .route("/api/local/sidecar/media/models/load", post(sidecar_media_load_handler))
         .route("/api/local/sidecar/media/models/unload", post(sidecar_media_unload_handler))
+        // Speech-to-Text (Whisper)
+        .route("/api/local/sidecar/stt", post(sidecar_stt_handler))
+        .route("/api/local/sidecar/stt/unload", post(sidecar_stt_unload_handler))
+        // Training (LoRA/QLoRA fine-tuning)
+        .route("/api/local/training/start", post(training_start_handler))
+        .route("/api/local/training/status", get(training_status_handler))
+        .route("/api/local/training/stop", post(training_stop_handler))
+        .route("/api/local/training/jobs", get(training_jobs_handler))
+        .route("/api/local/training/datasets", get(training_datasets_list_handler))
+        .route("/api/local/training/datasets/upload", post(training_datasets_upload_handler))
+        .route("/api/local/training/datasets/:name", delete(training_datasets_delete_handler))
+        .route("/api/local/training/merge", post(training_merge_handler))
+        .route("/api/local/training/adapters", get(training_adapters_list_handler))
+        .route("/api/local/training/adapters/:job_id", delete(training_adapters_delete_handler))
         // Direct GGUF scanning (no sidecar needed)
         .route("/api/local/gguf/scan", get(gguf_scan_local_handler))
         // Media serving (generated images, videos, audio from ~/.chitty-workspace/media/)
@@ -559,6 +572,58 @@ fn parse_tool_calls_from_text(text: &str) -> Option<(Vec<crate::providers::ToolC
     if !calls.is_empty() {
         cleaned = bare_re.replace_all(&cleaned, "").to_string();
         return Some((calls, cleaned));
+    }
+
+    // Pattern 4: Gemma 4 format — <|tool_call>call:name{key:<|"|>value<|"|>}<tool_call|>
+    // Also matches <|tool_call|>call:name{...}<tool_call|> and similar variations
+    let gemma4_re = regex::Regex::new(
+        r#"(?s)<\|?tool_call\|?>\s*call:(\w+)\{(.*?)\}\s*(?:<\|?/?tool_call\|?>)"#
+    ).ok()?;
+    for cap in gemma4_re.captures_iter(text) {
+        let func_name = cap[1].to_string();
+        let params_raw = cap[2].to_string();
+        // Clean Gemma 4 quote delimiters: <|"|> → "
+        let params_clean = params_raw
+            .replace("<|\"|>", "\"")
+            .replace("<|'|>", "'");
+        // Parse key:value pairs
+        let mut args = serde_json::Map::new();
+        // Try JSON parse first: add quotes around unquoted keys
+        let json_attempt = regex::Regex::new(r"(\w+)\s*:")
+            .map(|re| re.replace_all(&params_clean, "\"$1\":").to_string())
+            .unwrap_or(params_clean.clone());
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&format!("{{{}}}", json_attempt)) {
+            if let Some(obj) = parsed.as_object() {
+                args = obj.clone();
+            }
+        } else {
+            // Fallback: simple key:value extraction
+            let kv_re = regex::Regex::new(r#"(\w+)\s*:\s*(?:"([^"]*?)"|([^,}]+))"#).ok()?;
+            for pcap in kv_re.captures_iter(&params_clean) {
+                let key = pcap[1].to_string();
+                let val = pcap.get(2).or(pcap.get(3)).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                args.insert(key, serde_json::Value::String(val));
+            }
+        }
+        if !func_name.is_empty() {
+            calls.push(ToolCall {
+                id: format!("call_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..12].to_string()),
+                name: func_name,
+                arguments: serde_json::Value::Object(args),
+            });
+        }
+    }
+    if !calls.is_empty() {
+        // Clean everything from the tool call onwards (model adds fake response text after)
+        cleaned = gemma4_re.replace_all(&cleaned, "").to_string();
+        // Also strip any fake <|tool_response> hallucination
+        if let Some(idx) = cleaned.find("<|tool_response>") {
+            cleaned = cleaned[..idx].to_string();
+        }
+        if let Some(idx) = cleaned.find("<tool_response>") {
+            cleaned = cleaned[..idx].to_string();
+        }
+        return Some((calls, cleaned.trim().to_string()));
     }
 
     None
@@ -1353,7 +1418,7 @@ struct AskRequest {
     /// The user's question or prompt
     #[serde(alias = "question")]
     message: String,
-    /// Provider ID (e.g., "ollama", "openai"). Defaults to "ollama"
+    /// Provider ID (e.g., "local", "openai"). Defaults to "local"
     #[serde(default = "default_provider")]
     provider: String,
     /// Model name. Defaults to "gpt-oss:20b"
@@ -1373,7 +1438,7 @@ struct AskRequest {
     auto_approve: bool,
 }
 
-fn default_provider() -> String { "ollama".to_string() }
+fn default_provider() -> String { "local".to_string() }
 fn default_model() -> String { "gpt-oss:20b".to_string() }
 fn default_max_iter() -> u32 { 10 }
 
@@ -1396,7 +1461,7 @@ struct AskToolCall {
 /// Simple synchronous ask endpoint for external applications.
 ///
 /// POST /api/ask
-/// Request: { "message": "...", "provider": "ollama", "model": "gpt-oss:20b" }
+/// Request: { "message": "...", "provider": "local", "model": "qwen2.5-7b" }
 /// Response: { "reply": "...", "conversation_id": "...", "tool_calls": [...] }
 ///
 /// Unlike /api/chat (SSE streaming), this returns a single JSON response
@@ -1617,7 +1682,7 @@ async fn v1_create_session(
         ).into_response(),
     };
 
-    let provider = agent.preferred_provider.clone().unwrap_or_else(|| "ollama".to_string());
+    let provider = agent.preferred_provider.clone().unwrap_or_else(|| "local".to_string());
     let model = agent.preferred_model.clone().unwrap_or_else(|| "gpt-oss:20b".to_string());
     let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -2074,11 +2139,7 @@ async fn create_provider(
         .await?;
 
     match provider_id {
-        ProviderId::Ollama => {
-            let url = base_url.unwrap_or_else(|| "http://localhost:11434".to_string());
-            Ok(Box::new(OllamaProvider::new(url)))
-        }
-        ProviderId::Huggingface => {
+        ProviderId::Local => {
             let url = base_url.unwrap_or_else(|| "http://localhost:8766".to_string());
             Ok(Box::new(crate::providers::local_sidecar::LocalSidecarProvider::new(url)))
         }
@@ -3644,28 +3705,25 @@ async fn discover_models_handler(
     State(state): State<Arc<AppState>>,
     Path(provider_id): Path<String>,
 ) -> impl IntoResponse {
-    // ── Ollama: local provider, no API key needed ──
-    if provider_id == "ollama" {
+    // ── Local: sidecar provider, no API key needed ──
+    if provider_id == "local" || provider_id == "huggingface" {
         let data_dir = crate::storage::default_data_dir();
         let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-        let ollama = OllamaProvider::new(config.ollama.base_url.clone());
-        match ollama.list_ollama_models().await {
+        let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+        match crate::huggingface::list_models(&base_url).await {
             Ok(models) => {
                 let discovered: Vec<serde_json::Value> = models
                     .iter()
                     .map(|m| {
-                        let supports_tools = OllamaProvider::model_supports_tools_static(&m.name, &m.details);
                         serde_json::json!({
                             "id": m.name,
                             "display_name": m.name,
-                            "context_window": null,
-                            "supports_tools": supports_tools,
+                            "context_window": 32768,
+                            "supports_tools": true,
                             "supports_streaming": true,
                             "supports_vision": false,
-                            "size": m.size,
-                            "family": m.details.as_ref().and_then(|d| d.family.clone()),
-                            "parameter_size": m.details.as_ref().and_then(|d| d.parameter_size.clone()),
-                            "quantization": m.details.as_ref().and_then(|d| d.quantization_level.clone()),
+                            "size": m.size_bytes,
+                            "quantization": m.quantization,
                         })
                     })
                     .collect();
@@ -3674,7 +3732,7 @@ async fn discover_models_handler(
             Err(e) => {
                 return (
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("Cannot connect to Ollama: {}", e)})),
+                    Json(serde_json::json!({"error": format!("Cannot connect to sidecar: {}", e)})),
                 )
                     .into_response();
             }
@@ -4366,8 +4424,7 @@ fn get_model_context_window(provider_id: &str, model_id: &str) -> u32 {
             }
         }
         "google" => 1_000_000, // gemini models
-        "ollama" => 131_072,   // Ollama models typically support 32K-128K; use generous default
-        "huggingface" => 32_768, // GGUF sidecar default context (matches our n_ctx=32768)
+        "local" | "huggingface" => 32_768, // GGUF sidecar default context (matches our n_ctx=32768)
         _ => 128_000,          // safe fallback
     }
 }
@@ -6380,7 +6437,7 @@ async fn registry_install_package(
 }
 
 // ---------------------------------------------------------------------------
-// Local models — GPU, Ollama, sidecar
+// Local models — GPU, sidecar
 // ---------------------------------------------------------------------------
 
 /// GET /api/local/gpu — GPU statistics
@@ -6389,143 +6446,154 @@ async fn local_gpu_handler() -> impl IntoResponse {
     Json(serde_json::json!(stats))
 }
 
-/// GET /api/local/status — Combined local status (GPU + Ollama)
+/// GET /api/local/status — Combined local status (GPU + sidecar)
 async fn local_status_handler(
     State(_state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let gpu = crate::gpu::get_gpu_stats().await;
 
-    // Check Ollama status
+    // Check sidecar status
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
-    let ollama_status = ollama.check_status().await;
-
-    let ollama_model_count = if ollama_status.running {
-        ollama.list_ollama_models().await.map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    let sidecar_status = crate::huggingface::check_status(&base_url).await;
 
     Json(serde_json::json!({
         "gpu": gpu,
-        "ollama": {
-            "available": ollama_status.running,
-            "version": ollama_status.version,
-            "model_count": ollama_model_count,
-            "error": ollama_status.error,
-        },
         "sidecar": {
-            "running": false,
-            "loaded_model": null,
+            "running": sidecar_status.running,
+            "loaded_model": sidecar_status.loaded_model,
+            "models_registered": sidecar_status.models_registered,
+            "vram_free_mb": sidecar_status.vram_free_mb,
         }
     }))
 }
 
-/// GET /api/local/ollama/status
-async fn ollama_status_handler() -> impl IntoResponse {
+// ---------------------------------------------------------------------------
+// Model Management handlers
+// ---------------------------------------------------------------------------
+
+/// GET /api/local/models/dirs — List scan directories
+async fn model_dirs_list_handler() -> impl IntoResponse {
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
-    let status = ollama.check_status().await;
-    Json(serde_json::json!(status))
-}
 
-/// GET /api/local/ollama/models
-async fn ollama_models_handler() -> impl IntoResponse {
-    let data_dir = crate::storage::default_data_dir();
-    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
-
-    match ollama.list_ollama_models().await {
-        Ok(models) => Json(serde_json::json!({ "models": models })),
-        Err(e) => Json(serde_json::json!({ "error": e.to_string(), "models": [] })),
+    let mut dirs: Vec<String> = vec![data_dir.join("models").display().to_string()];
+    if let Some(ref dir) = config.local.models_dir {
+        dirs.push(dir.clone());
     }
-}
-
-/// GET /api/local/ollama/running
-async fn ollama_running_handler() -> impl IntoResponse {
-    let data_dir = crate::storage::default_data_dir();
-    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
-
-    match ollama.running_models().await {
-        Ok(models) => Json(serde_json::json!({ "models": models })),
-        Err(e) => Json(serde_json::json!({ "error": e.to_string(), "models": [] })),
+    for dir in &config.local.extra_model_dirs {
+        dirs.push(dir.clone());
     }
+
+    Json(serde_json::json!({ "directories": dirs }))
 }
 
-/// POST /api/local/ollama/pull — Pull/download a model (streaming progress)
-async fn ollama_pull_handler(
+/// POST /api/local/models/dirs — Add a scan directory
+async fn model_dirs_add_handler(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let model_name = match body.get("name").and_then(|n| n.as_str()) {
-        Some(n) => n.to_string(),
-        None => {
-            return Json(serde_json::json!({ "success": false, "error": "Missing 'name'" }))
-        }
+    let dir = match body.get("directory").and_then(|d| d.as_str()) {
+        Some(d) => d.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'directory'" })),
     };
 
     let data_dir = crate::storage::default_data_dir();
-    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+    let mut config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
 
-    match ollama.pull_model(&model_name).await {
-        Ok(result) => Json(serde_json::json!({
-            "success": true,
-            "result": result,
-        })),
-        Err(e) => Json(serde_json::json!({
-            "success": false,
-            "error": e.to_string(),
-        })),
+    if !config.local.extra_model_dirs.contains(&dir) {
+        config.local.extra_model_dirs.push(dir.clone());
+        if let Err(e) = config.save(&data_dir) {
+            return Json(serde_json::json!({ "success": false, "error": e.to_string() }));
+        }
     }
+
+    Json(serde_json::json!({ "success": true, "directory": dir }))
 }
 
-/// POST /api/local/ollama/unload — Unload a model from VRAM
-async fn ollama_unload_handler(
+/// DELETE /api/local/models/dirs — Remove a scan directory
+async fn model_dirs_remove_handler(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let model_name = match body.get("name").and_then(|n| n.as_str()) {
-        Some(n) => n.to_string(),
-        None => {
-            return Json(serde_json::json!({ "success": false, "error": "Missing 'name'" }))
-        }
+    let dir = match body.get("directory").and_then(|d| d.as_str()) {
+        Some(d) => d.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'directory'" })),
     };
 
     let data_dir = crate::storage::default_data_dir();
-    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+    let mut config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
 
-    match ollama.unload_model(&model_name).await {
-        Ok(()) => Json(serde_json::json!({ "success": true })),
+    config.local.extra_model_dirs.retain(|d| d != &dir);
+    if let Err(e) = config.save(&data_dir) {
+        return Json(serde_json::json!({ "success": false, "error": e.to_string() }));
+    }
+
+    Json(serde_json::json!({ "success": true }))
+}
+
+/// POST /api/local/models/delete — Delete a GGUF file from disk
+async fn model_delete_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let path = match body.get("path").and_then(|p| p.as_str()) {
+        Some(p) => p.to_string(),
+        None => return Json(serde_json::json!({ "success": false, "error": "Missing 'path'" })),
+    };
+
+    let file_path = std::path::Path::new(&path);
+    if !file_path.exists() {
+        return Json(serde_json::json!({ "success": false, "error": "File not found" }));
+    }
+    if file_path.extension().and_then(|e| e.to_str()) != Some("gguf") {
+        return Json(serde_json::json!({ "success": false, "error": "Not a GGUF file" }));
+    }
+
+    // Try to unregister from sidecar first (ignore errors if sidecar isn't running)
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    let name = file_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let _ = crate::huggingface::unload_model(&base_url).await;
+
+    // Delete the file
+    match std::fs::remove_file(&path) {
+        Ok(()) => {
+            tracing::info!("Deleted model file: {}", path);
+            // Re-scan sidecar if running
+            let _ = crate::huggingface::scan_models(&base_url).await;
+            Json(serde_json::json!({ "success": true, "deleted": name }))
+        }
         Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
     }
 }
 
-/// DELETE /api/local/ollama/models/:name — Delete a model
-async fn ollama_delete_model_handler(
-    axum::extract::Path(name): axum::extract::Path<String>,
+/// GET /api/local/models/vram-check — Estimate VRAM needed for a model
+async fn model_vram_check_handler(
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let data_dir = crate::storage::default_data_dir();
-    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let ollama = OllamaProvider::new(config.ollama.base_url.clone());
+    let size_bytes: u64 = params
+        .get("size_bytes")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
-    match ollama.delete_model(&name).await {
-        Ok(()) => Json(serde_json::json!({ "success": true })),
-        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
-    }
+    let (estimated_mb, free_mb, fits) = crate::gpu::estimate_vram(size_bytes).await;
+
+    Json(serde_json::json!({
+        "estimated_vram_mb": estimated_mb,
+        "free_vram_mb": free_mb,
+        "fits": fits,
+    }))
 }
 
 // ---------------------------------------------------------------------------
-// HuggingFace Sidecar handlers
+// Sidecar handlers
 // ---------------------------------------------------------------------------
 
 /// GET /api/local/sidecar/status
 async fn sidecar_status_handler() -> impl IntoResponse {
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     let status = crate::huggingface::check_status(&base_url).await;
 
@@ -6573,7 +6641,10 @@ async fn sidecar_start_handler() -> impl IntoResponse {
 
     // Collect model directories
     let mut extra_dirs: Vec<String> = Vec::new();
-    if let Some(ref dir) = config.huggingface.models_dir {
+    if let Some(ref dir) = config.local.models_dir {
+        extra_dirs.push(dir.clone());
+    }
+    for dir in &config.local.extra_model_dirs {
         extra_dirs.push(dir.clone());
     }
 
@@ -6581,7 +6652,7 @@ async fn sidecar_start_handler() -> impl IntoResponse {
     match crate::huggingface::start_sidecar(
         &python,
         &script,
-        config.huggingface.sidecar_port,
+        config.local.sidecar_port,
         &extra_dirs,
     )
     .await
@@ -6591,7 +6662,7 @@ async fn sidecar_start_handler() -> impl IntoResponse {
             // store it in AppState for clean shutdown. For now, it runs detached.
             Json(serde_json::json!({
                 "success": true,
-                "port": config.huggingface.sidecar_port,
+                "port": config.local.sidecar_port,
                 "python": python.display().to_string(),
             }))
         }
@@ -6606,7 +6677,7 @@ async fn sidecar_start_handler() -> impl IntoResponse {
 async fn sidecar_stop_handler() -> impl IntoResponse {
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let port = config.huggingface.sidecar_port;
+    let port = config.local.sidecar_port;
 
     // Kill process on the sidecar port
     #[cfg(target_os = "windows")]
@@ -6631,7 +6702,7 @@ async fn sidecar_stop_handler() -> impl IntoResponse {
 async fn sidecar_models_handler() -> impl IntoResponse {
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::list_models(&base_url).await {
         Ok(models) => Json(serde_json::json!({ "models": models })),
@@ -6643,7 +6714,7 @@ async fn sidecar_models_handler() -> impl IntoResponse {
 async fn sidecar_scan_handler() -> impl IntoResponse {
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::scan_models(&base_url).await {
         Ok(result) => Json(result),
@@ -6663,7 +6734,7 @@ async fn sidecar_register_handler(
 
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::register_model(&base_url, &path, name).await {
         Ok(result) => Json(result),
@@ -6684,7 +6755,7 @@ async fn sidecar_load_handler(
 
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::load_model(&base_url, &model, gpu_layers, context_length).await {
         Ok(result) => Json(result),
@@ -6696,7 +6767,7 @@ async fn sidecar_load_handler(
 async fn sidecar_unload_handler() -> impl IntoResponse {
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::unload_model(&base_url).await {
         Ok(result) => Json(result),
@@ -6710,7 +6781,7 @@ async fn sidecar_unload_handler() -> impl IntoResponse {
 async fn sidecar_media_models_handler() -> impl IntoResponse {
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::list_media_models(&base_url).await {
         Ok(models) => Json(serde_json::json!({ "models": models })),
@@ -6732,7 +6803,7 @@ async fn sidecar_media_register_handler(
 
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::register_media_model(&base_url, &path, name, model_type, pipeline_class).await {
         Ok(result) => Json(result),
@@ -6751,7 +6822,7 @@ async fn sidecar_media_unregister_handler(
 
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::unregister_media_model(&base_url, &name).await {
         Ok(result) => Json(result),
@@ -6771,7 +6842,7 @@ async fn sidecar_media_load_handler(
 
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::load_media_model(&base_url, &model, dtype).await {
         Ok(result) => Json(result),
@@ -6783,9 +6854,177 @@ async fn sidecar_media_load_handler(
 async fn sidecar_media_unload_handler() -> impl IntoResponse {
     let data_dir = crate::storage::default_data_dir();
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
-    let base_url = format!("http://127.0.0.1:{}", config.huggingface.sidecar_port);
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
 
     match crate::huggingface::unload_media_model(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Speech-to-Text (Whisper) handlers
+// ---------------------------------------------------------------------------
+
+/// POST /api/local/sidecar/stt — Transcribe audio to text
+async fn sidecar_stt_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+
+    let audio_base64 = body.get("audio_base64").and_then(|v| v.as_str()).unwrap_or_default();
+    let model = body.get("model").and_then(|v| v.as_str());
+    let language = body.get("language").and_then(|v| v.as_str());
+    let task = body.get("task").and_then(|v| v.as_str()).unwrap_or("transcribe");
+
+    match crate::huggingface::speech_to_text_local(&base_url, audio_base64, model, language, task).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/sidecar/stt/unload — Unload Whisper model
+async fn sidecar_stt_unload_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+
+    let url = format!("{}/media/stt/unload", base_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+
+    match client.post(&url).send().await {
+        Ok(resp) => {
+            let result: serde_json::Value = resp.json().await.unwrap_or_default();
+            Json(result)
+        }
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Training (LoRA/QLoRA) handlers
+// ---------------------------------------------------------------------------
+
+/// POST /api/local/training/start
+async fn training_start_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::start_training(&base_url, body).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// GET /api/local/training/status
+async fn training_status_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::training_status(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "status": "unknown", "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/training/stop
+async fn training_stop_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::stop_training(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// GET /api/local/training/jobs
+async fn training_jobs_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::list_training_jobs(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "jobs": [], "error": e.to_string() })),
+    }
+}
+
+/// GET /api/local/training/datasets
+async fn training_datasets_list_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::list_training_datasets(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "datasets": [], "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/training/datasets/upload
+async fn training_datasets_upload_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::upload_training_dataset(&base_url, body).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// DELETE /api/local/training/datasets/:name
+async fn training_datasets_delete_handler(
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::delete_training_dataset(&base_url, &name).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// POST /api/local/training/merge
+async fn training_merge_handler(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::merge_adapter(&base_url, body).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+/// GET /api/local/training/adapters
+async fn training_adapters_list_handler() -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::list_adapters(&base_url).await {
+        Ok(result) => Json(result),
+        Err(e) => Json(serde_json::json!({ "adapters": [], "error": e.to_string() })),
+    }
+}
+
+/// DELETE /api/local/training/adapters/:job_id
+async fn training_adapters_delete_handler(
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+    let data_dir = crate::storage::default_data_dir();
+    let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", config.local.sidecar_port);
+    match crate::huggingface::delete_adapter(&base_url, &job_id).await {
         Ok(result) => Json(result),
         Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
     }
@@ -6798,7 +7037,10 @@ async fn gguf_scan_local_handler() -> impl IntoResponse {
     let config = crate::config::AppConfig::load(&data_dir).unwrap_or_default();
 
     let mut dirs_to_scan: Vec<std::path::PathBuf> = vec![data_dir.join("models")];
-    if let Some(ref dir) = config.huggingface.models_dir {
+    if let Some(ref dir) = config.local.models_dir {
+        dirs_to_scan.push(std::path::PathBuf::from(dir));
+    }
+    for dir in &config.local.extra_model_dirs {
         dirs_to_scan.push(std::path::PathBuf::from(dir));
     }
 
@@ -7479,22 +7721,15 @@ async fn media_capabilities_handler() -> Json<serde_json::Value> {
                     "tts_voices": ["Kore", "Charon", "Fenrir", "Aoede"]
                 }
             },
-            "ollama": {
-                "image_generation": false,
-                "image_editing": false,
-                "video_generation": false,
-                "text_to_speech": false,
-                "speech_to_text": false
-            },
-            "huggingface": {
+            "local": {
                 "image_generation": true,
                 "image_editing": false,
                 "video_generation": true,
                 "text_to_speech": true,
-                "speech_to_text": false,
+                "speech_to_text": true,
                 "local": true,
                 "models": {
-                    "note": "User-registered local models (Flux, SDXL, SD3, CogVideoX, Wan, Bark, SpeechT5, etc.)"
+                    "note": "User-registered local models (Flux, SDXL, SD3, CogVideoX, Wan, Bark, SpeechT5, Whisper, etc.)"
                 }
             }
         }

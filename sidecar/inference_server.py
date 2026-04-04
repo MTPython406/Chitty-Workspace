@@ -327,7 +327,7 @@ def _detect_capabilities(filename: str) -> List[str]:
     tool_models = [
         "qwen2.5", "qwen3", "llama-3.1", "llama-3.2", "llama-3.3",
         "mistral", "functionary", "hermes", "nexusraven",
-        "gorilla", "gemma-2", "phi-3", "phi-4", "command-r",
+        "gorilla", "gemma-2", "gemma-4", "phi-3", "phi-4", "command-r",
     ]
     if any(m in lower for m in tool_models):
         caps.append("tools")
@@ -451,6 +451,45 @@ def _parse_tool_calls_from_text(content: str):
             # Remove the JSON from content
             cleaned = re.sub(bare_json_pattern, '', cleaned)
 
+    # Pattern 4: Gemma 4 format — various pipe-delimited tool call formats:
+    #   <|tool_call>call:terminal{command:<|"|>ls -F<|"|>}<tool_call|>
+    #   <|tool_call|>call:name{key:<|"|>value<|"|>}<tool_call|>
+    # The model also appends <|tool_response>...<channel>thought junk after.
+    if not tool_calls:
+        # Match: <|tool_call> or <|tool_call|> ... call:NAME{PARAMS} ... <tool_call|> or end
+        gemma4_pattern = r'<\|?tool_call\|?>\s*call:(\w+)\{(.*?)\}\s*(?:<\|?/?tool_call\|?>)'
+        gemma4_matches = re.findall(gemma4_pattern, content, re.DOTALL)
+        for func_name, params_str in gemma4_matches:
+            args = {}
+            # Clean Gemma 4 quote delimiters: <|"|> → "
+            params_clean = params_str.replace('<|"|>', '"').replace("<|'|>", "'")
+            # Try JSON parse first: {command:"ls -F"} → {"command":"ls -F"}
+            try:
+                # Add quotes around unquoted keys for JSON parsing
+                import re as _re
+                json_attempt = _re.sub(r'(\w+)\s*:', r'"\1":', params_clean)
+                args = json.loads('{' + json_attempt + '}')
+            except (json.JSONDecodeError, ValueError):
+                # Fall back to key:value parsing
+                # Match key:<|"|>value<|"|> or key:"value" or key:value
+                kv_pattern = r'(\w+)\s*:\s*(?:"([^"]*?)"|([^,}]+))'
+                for match in re.finditer(kv_pattern, params_clean):
+                    key = match.group(1)
+                    value = match.group(2) if match.group(2) is not None else match.group(3)
+                    args[key] = value.strip()
+            if func_name:
+                tool_calls.append({
+                    "id": f"call_{uuid.uuid4().hex[:12]}",
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "arguments": json.dumps(args),
+                    },
+                })
+        if tool_calls:
+            # Clean everything from the tool call onwards (model adds fake response text)
+            cleaned = re.sub(r'<\|?tool_call\|?>.*', '', cleaned, flags=re.DOTALL).strip()
+
     if tool_calls:
         return tool_calls, cleaned
     return None, content
@@ -498,28 +537,22 @@ class InferenceEngine:
                      f"(gpu_layers={gpu_layers}, ctx={context_length})")
         start = time.time()
 
-        # Check GPU support — fall back to CPU if CUDA not available
+        # Use requested GPU layers — let llama.cpp handle GPU detection internally.
+        # Note: llama_supports_gpu_offload() only reports compile-time CUDA support
+        # of the Python bindings, but GGUF loading may still use GPU via other backends.
         actual_gpu_layers = gpu_layers
+        logger.info(f"Using n_gpu_layers={actual_gpu_layers}")
+
         try:
-            if hasattr(self._llama_cpp.llama_cpp, 'llama_supports_gpu_offload'):
-                gpu_ok = self._llama_cpp.llama_cpp.llama_supports_gpu_offload()
-                if not gpu_ok:
-                    logger.warning("GPU offload not supported — falling back to CPU mode")
-                    actual_gpu_layers = 0
-                else:
-                    logger.info("GPU offload supported — using GPU acceleration")
-        except Exception as e:
-            logger.warning(f"GPU check failed ({e}) — falling back to CPU mode")
-            actual_gpu_layers = 0
-
-        logger.info(f"Using n_gpu_layers={actual_gpu_layers} (requested={gpu_layers})")
-
-        self.llm = self._llama_cpp.Llama(
-            model_path=model_path,
-            n_ctx=context_length,
-            n_gpu_layers=actual_gpu_layers,
-            verbose=False,
-        )
+            self.llm = self._llama_cpp.Llama(
+                model_path=model_path,
+                n_ctx=context_length,
+                n_gpu_layers=actual_gpu_layers,
+                verbose=False,
+            )
+        except Exception as load_err:
+            logger.error(f"Llama load failed: {type(load_err).__name__}: {load_err}")
+            raise ValueError(f"Failed to load model from file: {model_path}") from load_err
 
         elapsed = time.time() - start
         self.loaded_model = model_name
@@ -642,6 +675,11 @@ from media_engine import MediaModelRegistry, MediaEngine, ASPECT_RESOLUTIONS, VI
 media_registry: Optional[MediaModelRegistry] = None
 media_engine = MediaEngine()
 
+# Training engine (LoRA/QLoRA fine-tuning)
+from training_engine import TrainingEngine, DatasetManager
+training_engine = TrainingEngine()
+dataset_manager = DatasetManager()
+
 
 @app.get("/health")
 async def health():
@@ -654,6 +692,7 @@ async def health():
         "loaded_media_type": media_engine.loaded_type,
         "media_models_registered": len(media_registry.models) if media_registry else 0,
         "vram_free_mb": get_gpu_free_vram_mb(),
+        "training_active": training_engine.is_running(),
     }
 
 
@@ -978,6 +1017,247 @@ async def generate_tts(request: MediaTTSRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Speech-to-Text (Whisper)
+# ---------------------------------------------------------------------------
+
+# Module-level cache for the Whisper pipeline
+_whisper_pipeline = None
+_whisper_model_id = None
+
+
+@app.post("/media/generate/stt")
+async def speech_to_text(request: SpeechToTextRequest):
+    """Transcribe audio to text using Whisper."""
+    global _whisper_pipeline, _whisper_model_id
+
+    try:
+        audio_bytes = base64.b64decode(request.audio_base64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 audio data")
+
+    try:
+        import torch
+        from transformers import pipeline
+
+        model_id = request.model or "openai/whisper-large-v3-turbo"
+
+        # Load or reuse the pipeline
+        if _whisper_pipeline is None or _whisper_model_id != model_id:
+            # Unload text/media models to free VRAM
+            if engine.loaded_model:
+                logger.info(f"Unloading text model '{engine.loaded_model}' for STT")
+                engine.unload()
+            if media_engine.loaded_model:
+                logger.info(f"Unloading media model '{media_engine.loaded_model}' for STT")
+                media_engine.unload()
+
+            logger.info(f"Loading Whisper model: {model_id}")
+            _whisper_pipeline = pipeline(
+                "automatic-speech-recognition",
+                model=model_id,
+                torch_dtype=torch.float16,
+                device="cuda" if torch.cuda.is_available() else "cpu",
+            )
+            _whisper_model_id = model_id
+            logger.info(f"Whisper model loaded: {model_id}")
+
+        # Write audio to temp file (pipeline expects file path or array)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(audio_bytes)
+            temp_path = f.name
+
+        try:
+            generate_kwargs = {}
+            if request.language:
+                generate_kwargs["language"] = request.language
+            if request.task == "translate":
+                generate_kwargs["task"] = "translate"
+
+            result = _whisper_pipeline(
+                temp_path,
+                return_timestamps=True,
+                generate_kwargs=generate_kwargs if generate_kwargs else None,
+            )
+        finally:
+            os.unlink(temp_path)
+
+        text = result.get("text", "")
+        chunks = result.get("chunks", [])
+
+        return {
+            "text": text.strip(),
+            "chunks": chunks,
+            "model": model_id,
+            "provider": "local",
+        }
+    except Exception as e:
+        logger.error(f"STT failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/media/stt/unload")
+async def unload_stt():
+    """Unload the Whisper model to free VRAM."""
+    global _whisper_pipeline, _whisper_model_id
+    if _whisper_pipeline is not None:
+        del _whisper_pipeline
+        _whisper_pipeline = None
+        _whisper_model_id = None
+        gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        return {"success": True, "message": "Whisper model unloaded"}
+    return {"success": True, "message": "No Whisper model was loaded"}
+
+
+# ---------------------------------------------------------------------------
+# Training endpoints (LoRA/QLoRA fine-tuning)
+# ---------------------------------------------------------------------------
+
+class SpeechToTextRequest(BaseModel):
+    audio_base64: str = Field(..., description="Base64-encoded audio data (WAV, MP3, FLAC, etc.)")
+    model: str = Field("openai/whisper-large-v3-turbo", description="Whisper model ID")
+    language: Optional[str] = Field(None, description="Language code (e.g. 'en', 'es'). Auto-detected if omitted.")
+    task: str = Field("transcribe", description="'transcribe' or 'translate' (translate to English)")
+
+
+class StartTrainingRequest(BaseModel):
+    base_model: str = Field(..., description="HuggingFace model ID or local path")
+    dataset: str = Field(..., description="Dataset filename from /training/datasets")
+    lora_r: int = Field(16, ge=1, le=256)
+    lora_alpha: int = Field(32, ge=1, le=512)
+    lora_dropout: float = Field(0.05, ge=0.0, le=0.5)
+    target_modules: Optional[List[str]] = None
+    learning_rate: float = Field(2e-4, gt=0, le=1.0)
+    num_epochs: int = Field(3, ge=1, le=100)
+    batch_size: int = Field(4, ge=1, le=64)
+    gradient_accumulation_steps: int = Field(4, ge=1, le=128)
+    max_seq_length: int = Field(512, ge=32, le=8192)
+    warmup_ratio: float = Field(0.03, ge=0.0, le=0.5)
+    quantization: str = Field("4bit", description="4bit, 8bit, or none")
+    output_name: Optional[str] = None
+
+class MergeAdapterRequest(BaseModel):
+    job_id: str
+    output_name: Optional[str] = None
+
+class DatasetUploadRequest(BaseModel):
+    filename: str
+    data_base64: str
+
+
+@app.post("/training/start")
+async def start_training(request: StartTrainingRequest):
+    """Start a LoRA/QLoRA training job in the background."""
+    if training_engine.is_running():
+        raise HTTPException(status_code=409, detail="A training job is already running")
+
+    # Validate dataset exists
+    datasets = dataset_manager.list_datasets()
+    ds_match = next((d for d in datasets if d["name"] == request.dataset), None)
+    if not ds_match:
+        raise HTTPException(status_code=404, detail=f"Dataset '{request.dataset}' not found")
+
+    # Unload inference and media models to free VRAM
+    if engine.loaded_model:
+        logger.info(f"Unloading text model '{engine.loaded_model}' for training")
+        engine.unload()
+    if media_engine.loaded_model:
+        logger.info(f"Unloading media model '{media_engine.loaded_model}' for training")
+        media_engine.unload()
+
+    config = request.model_dump()
+    config["dataset_path"] = ds_match["path"]
+
+    result = training_engine.start_training(config)
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to start training"))
+    return result
+
+
+@app.get("/training/status")
+async def training_status():
+    """Get current training progress."""
+    return training_engine.get_progress()
+
+
+@app.post("/training/stop")
+async def stop_training():
+    """Cancel the running training job."""
+    return training_engine.stop_training()
+
+
+@app.get("/training/jobs")
+async def list_training_jobs():
+    """List all training jobs (current + completed)."""
+    return {"jobs": training_engine.list_jobs()}
+
+
+@app.post("/training/datasets/upload")
+async def upload_dataset(request: DatasetUploadRequest):
+    """Upload a dataset file (base64-encoded)."""
+    try:
+        content = base64.b64decode(request.data_base64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 data")
+    return dataset_manager.upload(request.filename, content)
+
+
+@app.get("/training/datasets")
+async def list_datasets():
+    """List available training datasets."""
+    return {"datasets": dataset_manager.list_datasets()}
+
+
+@app.delete("/training/datasets/{name}")
+async def delete_dataset(name: str):
+    """Delete a training dataset."""
+    if dataset_manager.delete(name):
+        return {"success": True}
+    raise HTTPException(status_code=404, detail="Dataset not found")
+
+
+@app.post("/training/merge")
+async def merge_adapter(request: MergeAdapterRequest):
+    """Merge a LoRA adapter into the base model."""
+    if training_engine.is_running():
+        raise HTTPException(status_code=409, detail="Cannot merge while training is running")
+
+    # Unload models to free VRAM for merge
+    if engine.loaded_model:
+        engine.unload()
+    if media_engine.loaded_model:
+        media_engine.unload()
+
+    result = training_engine.merge_adapter(request.job_id, request.output_name)
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("error", "Merge failed"))
+    return result
+
+
+@app.get("/training/adapters")
+async def list_adapters():
+    """List saved LoRA adapters."""
+    return {"adapters": training_engine.list_adapters()}
+
+
+@app.delete("/training/adapters/{job_id}")
+async def delete_adapter(job_id: str):
+    """Delete a saved adapter."""
+    result = training_engine.delete_adapter(job_id)
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=result.get("error", "Not found"))
+    return result
+
+
+# ---------------------------------------------------------------------------
+
+
 def torch_oom_error():
     """Return the torch OOM exception class, or a dummy if torch not available."""
     try:
@@ -991,6 +1271,8 @@ def torch_oom_error():
 @app.post("/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """OpenAI-compatible chat completion endpoint with streaming support."""
+    if training_engine.is_running():
+        raise HTTPException(status_code=503, detail="Inference unavailable during training. Stop training first.")
     # Auto-load if model specified and not loaded
     if engine.loaded_model != request.model:
         model_info = registry.get(request.model)

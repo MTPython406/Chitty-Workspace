@@ -51,7 +51,7 @@ ChittyWorkspace/
 │   ├── providers/
 │   │   ├── mod.rs           # Provider trait, types (ChatMessage, ToolCall, StreamChunk)
 │   │   ├── cloud.rs         # BYOK cloud providers (OpenAI, Anthropic, Google, xAI)
-│   │   └── ollama.rs        # Ollama local model provider
+│   │   └── local_sidecar.rs # Local model provider (GGUF via sidecar)
 │   ├── agents/
 │   │   └── mod.rs           # Agent CRUD, sub-agent creation, scoped tools
 │   ├── skills/
@@ -72,7 +72,7 @@ ChittyWorkspace/
 │   │   ├── mod.rs           # Database manager, connection, data directory
 │   │   └── schema.rs        # SQLite schema, migrations V1-V12
 │   ├── gpu.rs               # GPU detection for local models
-│   ├── huggingface.rs       # HuggingFace Python sidecar
+│   ├── huggingface.rs       # Local sidecar client (inference, media, training, STT)
 │   └── ui/
 │       └── mod.rs           # System tray + WebView2 chat UI
 ├── assets/
@@ -85,6 +85,12 @@ ChittyWorkspace/
 │       ├── slack/
 │       ├── social-media/
 │       └── web-tools/
+├── sidecar/
+│   ├── inference_server.py  # Python sidecar — GGUF inference, media gen, training, STT
+│   ├── media_engine.py      # Image/video/TTS via diffusers/transformers
+│   ├── training_engine.py   # LoRA/QLoRA fine-tuning engine
+│   ├── requirements.txt     # Base tier deps
+│   └── requirements-full.txt # Full tier deps (torch, diffusers, peft, etc.)
 ├── Cargo.toml
 └── .claude/CLAUDE.md         # This file
 ```
@@ -258,7 +264,10 @@ Auto-loaded at conversation start, injected into system prompt.
 ├── tools/
 │   ├── marketplace/         # Installed marketplace packages
 │   └── custom/              # User-created tools
-└── models/                  # GGUF model files (for HuggingFace sidecar)
+├── models/                  # GGUF model files (for local inference)
+├── datasets/                # Training datasets (JSONL, CSV)
+├── adapters/                # LoRA adapters from fine-tuning jobs
+└── media/                   # Generated images, videos, audio
 ```
 
 ## Code Style

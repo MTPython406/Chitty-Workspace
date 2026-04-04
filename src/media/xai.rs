@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 
 use super::{
     AudioResponse, GeneratedImage, ImageEditRequest, ImageRequest, ImageResponse,
-    MediaAdaptor, MediaCapabilities, TtsRequest, VideoRequest, VideoResponse,
+    MediaAdaptor, MediaCapabilities, SttRequest, SttResponse, TtsRequest, VideoRequest, VideoResponse,
 };
 
 pub struct XaiMediaAdaptor {
@@ -304,5 +304,9 @@ impl MediaAdaptor for XaiMediaAdaptor {
             duration_estimate: Some(duration_estimate),
             provider: "xai".to_string(),
         })
+    }
+
+    async fn speech_to_text(&self, _req: SttRequest) -> Result<SttResponse> {
+        anyhow::bail!("xAI does not support speech-to-text. Use a local Whisper model or OpenAI/Google.")
     }
 }
